@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}History · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Change and reveal log</p>
+    <h1>History</h1>
+  </div>
+</section>
+<section class="panel">
+  <div class="list">
+    {% for item in logs %}
+      <div class="list-row static">
+        <div><strong>{{ item.action }}</strong><span>{{ item.object_type }} #{{ item.object_id or "" }} · {{ item.created_at|dt }}</span></div>
+        <code>{{ item.details_json }}</code>
+      </div>
+    {% else %}
+      <p class="empty">No audit events yet.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
+

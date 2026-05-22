@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}{% if device %}Edit {{ device.name }}{% else %}Add Device{% endif %} · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">{% if device %}Editing enabled{% else %}New device{% endif %}</p>
+    <h1>{% if device %}Edit {{ device.name }}{% else %}Add Device{% endif %}</h1>
+  </div>
+  {% if device %}<a class="button secondary" href="/devices/{{ device.id }}">Cancel</a>{% endif %}
+</section>
+
+<form method="post" class="panel form-grid wide">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Name <span class="hint" title="Friendly name you recognize, like Moxxie or PortainServer.">?</span><input name="name" required value="{{ device.name if device else '' }}" spellcheck="true"></label>
+  <label>Type <span class="hint" title="Examples: Debian Docker host, Raspberry Pi, Windows PC, NAS, VM.">?</span><input name="type" value="{{ device.type if device else 'server' }}" spellcheck="true"></label>
+  <label>Hostname <span class="hint" title="The network hostname, if known. Example: moxxie.local.">?</span><input name="hostname" value="{{ device.hostname if device else '' }}"></label>
+  <label>Primary IP <span class="hint" title="Main LAN address. Example: 192.168.1.10.">?</span><input name="primary_ip" value="{{ device.primary_ip if device else '' }}"></label>
+  <label>OS name <span class="hint" title="Example: Debian GNU/Linux 12, Ubuntu 24.04, Windows 11.">?</span><input name="os_name" value="{{ device.os_name if device else '' }}" spellcheck="true"></label>
+  <label>OS version <input name="os_version" value="{{ device.os_version if device else '' }}"></label>
+  <label>Location <input name="location" value="{{ device.location if device else '' }}" spellcheck="true"></label>
+  <label>Manual state <span class="hint" title="This is your note, not live monitoring. Use it for reminders like needs attention or retired.">?</span>
+    <select name="status_manual">
+      {% for status in ["unknown", "documented", "needs-attention", "offline", "planned", "retired"] %}
+        <option value="{{ status }}" {% if device and device.status_manual == status %}selected{% endif %}>{{ status }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="span-2">Purpose <span class="hint" title="One sentence: what this machine does and why it matters.">?</span><textarea name="purpose" spellcheck="true">{{ device.purpose if device else '' }}</textarea></label>
+  <label>Model <input name="hw_model" value="{{ hardware.model if hardware else '' }}" spellcheck="true"></label>
+  <label>CPU <input name="hw_cpu" value="{{ hardware.cpu if hardware else '' }}" spellcheck="true"></label>
+  <label>RAM <input name="hw_ram" value="{{ hardware.ram if hardware else '' }}" spellcheck="true"></label>
+  <label>GPU <input name="hw_gpu" value="{{ hardware.gpu if hardware else '' }}" spellcheck="true"></label>
+  <label class="span-2">Storage <textarea name="hw_storage" spellcheck="true">{{ hardware.storage_summary if hardware else '' }}</textarea></label>
+  <label class="span-2">Notes <textarea name="notes" spellcheck="true">{{ device.notes if device else '' }}</textarea></label>
+  <label class="span-2">Tags <input name="tags" value="{{ tag_text }}" placeholder="docker, testing, critical" spellcheck="true"></label>
+  <div class="form-actions span-2">
+    <button type="submit">Save changes</button>
+    {% if device %}<a class="button secondary" href="/devices/{{ device.id }}">Cancel</a>{% endif %}
+  </div>
+</form>
+{% if device %}
+  <form method="post" action="/delete/device/{{ device.id }}" class="panel danger-panel" data-confirm-delete="Delete this device and its linked services, ports, URLs, notes, commands, and credentials?">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <strong>Delete device</strong>
+    <p class="muted">Use this for duplicates or early cleanup. This removes linked records too.</p>
+    <button class="ghost" type="submit">Delete {{ device.name }}</button>
+  </form>
+{% endif %}
+{% endblock %}

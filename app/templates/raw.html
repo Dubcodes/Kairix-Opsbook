@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Raw {{ object_type }} · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Copy-friendly raw view</p>
+    <h1>{{ object_type|title }} #{{ object_id }}</h1>
+  </div>
+</section>
+<section class="panel">
+  <div class="section-title">
+    <h2>Raw JSON</h2>
+    <button type="button" data-copy-target="next">Copy</button>
+  </div>
+  <pre><code>{{ raw_json }}</code></pre>
+</section>
+{% endblock %}
+

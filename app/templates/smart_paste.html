@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Smart Paste · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Review before apply</p>
+    <h1>Smart Paste</h1>
+  </div>
+</section>
+<section class="panel">
+  <div class="warning">Review detected changes before applying. Existing information will not be overwritten without approval.</div>
+  <form method="post" class="form-grid wide">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Source type
+      <select name="source_type">
+        <option value="raw_text">Raw notes or command output</option>
+        <option value="linux_inventory">Linux inventory command output</option>
+        <option value="docker_ps">Docker output</option>
+      </select>
+    </label>
+    <label class="span-2">Paste text <textarea name="raw_text" class="paste-box" required spellcheck="true"></textarea></label>
+    <button type="submit">Detect structure</button>
+  </form>
+</section>
+<section class="panel">
+  <div class="section-title">
+    <h2>Suggested SSH inventory command</h2>
+    <button type="button" data-copy-target="next">Copy</button>
+  </div>
+  <pre><code>{{ inventory_command }}</code></pre>
+</section>
+{% endblock %}
+

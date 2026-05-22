@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Suggestions · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Helpful, advisory, not bossy</p>
+    <h1>Suggestions</h1>
+  </div>
+</section>
+
+<details class="panel collapsible-panel" open>
+  <summary>
+    <span><strong>Active Warnings & Suggestions</strong><small>{{ suggestions|length }} item(s)</small></span>
+  </summary>
+  <section class="list suggestion-list">
+  {% for suggestion in suggestions %}
+    <article class="device-row static severity-{{ suggestion.severity }}">
+      <a href="{{ suggestion.target }}">
+        <strong>{{ suggestion.title }}</strong>
+        <span>{{ suggestion.body }}</span>
+      </a>
+      <form method="post" action="/suggestions/dismiss">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="suggestion_id" value="{{ suggestion.id }}">
+        <button class="ghost" type="submit">Dismiss</button>
+      </form>
+    </article>
+  {% else %}
+    <p class="empty">No suggestions yet. That usually means the opsbook is either clean or still freshly empty.</p>
+  {% endfor %}
+  </section>
+</details>
+
+<details class="panel collapsible-panel">
+  <summary>
+    <span><strong>Tag Suggestions</strong><small>Ideas for organizing devices, stacks, services, and cleanup work</small></span>
+  </summary>
+  <section class="tag-advice-grid">
+    {% for idea in tag_ideas %}
+      <article class="advice-card">
+        <h2>{{ idea.title }}</h2>
+        <p>{{ idea.body }}</p>
+      </article>
+    {% endfor %}
+  </section>
+</details>
+{% endblock %}

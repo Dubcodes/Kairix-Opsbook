@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Set Up · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <p class="eyebrow">First run</p>
+  <h1>Create the owner account</h1>
+  <p class="muted">This account can edit the opsbook, reveal credentials, and create emergency exports.</p>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Username <input name="username" required autocomplete="username"></label>
+    <label>Display name <input name="display_name" autocomplete="name"></label>
+    <label>Password <input name="password" type="password" required autocomplete="new-password" minlength="10"></label>
+    <label>Reveal password or PIN <input name="secondary_password" type="password" autocomplete="new-password"></label>
+    <p class="form-note">The reveal password is optional. If left blank, your account password can unlock Medium credentials.</p>
+    <button type="submit">Create owner</button>
+  </form>
+</section>
+{% endblock %}
+

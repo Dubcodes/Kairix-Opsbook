@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+{% block title %}{{ service.name }} · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Read-only view. Click Edit to make changes.</p>
+    <h1>{{ service.name }}</h1>
+    <p><a href="/devices/{{ service.device.id }}">{{ service.device.name }}</a> · {{ service.local_url or service.public_url or "No URL" }}</p>
+    <div class="tags">{% for tag in tag_list %}<span>{{ tag }}</span>{% endfor %}</div>
+  </div>
+  <div class="actions">
+    <a class="button" href="/services/{{ service.id }}/edit">Edit</a>
+    <a class="button secondary" href="/raw/service/{{ service.id }}">Raw</a>
+  </div>
+</section>
+
+{% set tabs = ["overview", "login", "docker", "commands", "files", "ports", "backups", "notes", "history"] %}
+<nav class="tabs">
+  {% for item in tabs %}
+    <a class="{% if tab == item %}active{% endif %}" href="/services/{{ service.id }}?tab={{ item }}">{{ "Ports & URLs" if item == "ports" else item|title }}</a>
+  {% endfor %}
+</nav>
+
+{% if tab == "overview" %}
+  <section class="panel">
+    <h2>Overview</h2>
+    <dl class="details">
+      <dt>Purpose</dt><dd>{{ service.purpose or "Not documented yet." }}</dd>
+      <dt>Manual state</dt><dd>{{ service.status_manual }}</dd>
+      <dt>Local URL</dt><dd>{% if service.local_url %}<a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a>{% else %}Not documented.{% endif %}</dd>
+      <dt>Public URL</dt><dd>{% if service.public_url %}<a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a>{% else %}Not documented.{% endif %}</dd>
+      <dt>Repo</dt><dd>{{ service.repo_url or "Not documented." }}</dd>
+    </dl>
+    {% if service.notes %}<pre class="note-block">{{ service.notes }}</pre>{% endif %}
+  </section>
+{% elif tab == "login" %}
+  <section class="section-title"><h2>Login</h2><a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}">Add Credential</a></section>
+  <section class="list">
+    {% for credential in service.credentials %}
+      <div class="list-row static clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
+        <a class="row-main" href="/credentials/{{ credential.id }}">
+          <strong>{{ credential.label }}</strong>
+          <span>{{ credential.username or "No username" }} · {{ credential.security_level|title }} security</span>
+        </a>
+        <div class="actions compact-actions">
+          <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
+          {% if credential.login_url %}
+            <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
+          {% endif %}
+          <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit">Edit</a>
+        </div>
+      </div>
+    {% else %}<p class="empty">No service credentials yet.</p>{% endfor %}
+  </section>
+{% elif tab == "docker" %}
+  <section class="panel">
+    <h2>Docker</h2>
+    <dl class="details">
+      <dt>Compose folder</dt><dd>{{ service.compose_path or "Not documented." }}</dd>
+      <dt>Compose project</dt><dd>{{ service.docker_project or "Not documented." }}</dd>
+      <dt>Container name</dt><dd>{{ service.container_name or "Not documented." }}</dd>
+      <dt>Image</dt><dd>{{ service.image or "Not documented." }}</dd>
+    </dl>
+    <div class="warning">Docker API integration is disabled by design in this MVP. Prefer Smart Paste or a future read-only Kairix Agent.</div>
+  </section>
+{% elif tab == "commands" %}
+  <section class="section-title"><h2>Commands</h2><a class="button" href="/commands/new?applies_to_type=service&applies_to_id={{ service.id }}">Add Command</a></section>
+  {% include "partials/command_cards.html" %}
+{% elif tab == "files" %}
+  <section class="panel">
+    <h2>Files</h2>
+    <dl class="details">
+      <dt>Project path</dt><dd>{{ service.compose_path or "Not documented." }}</dd>
+      <dt>Data path</dt><dd>{{ service.data_path or "Not documented." }}</dd>
+      <dt>Config path</dt><dd>{{ service.config_path or "Not documented." }}</dd>
+      <dt>Log path</dt><dd>{{ service.log_path or "Not documented." }}</dd>
+      <dt>Backup path</dt><dd>{{ service.backup_path or "Not documented." }}</dd>
+    </dl>
+  </section>
+{% elif tab == "ports" %}
+  <section class="panel">
+    <h2>Ports & URLs</h2>
+    <div class="list compact">{% for port in service.ports %}<div class="list-row static"><strong>{{ port.host_port }}/{{ port.protocol }}</strong><span>{{ port.purpose or port.notes }}</span></div>{% else %}<p class="empty">No ports documented.</p>{% endfor %}</div>
+    <div class="list compact">{% for url in service.urls %}<a class="list-row" href="{{ url.url }}" target="_blank"><strong>{{ url.label or url.url_type }}</strong><span>{{ url.url }}</span></a>{% else %}<p class="empty">No URLs documented.</p>{% endfor %}</div>
+  </section>
+{% elif tab == "backups" %}
+  <section class="panel">
+    <h2>Backups</h2>
+    <dl class="details">
+      <dt>Backup path</dt><dd>{{ service.backup_path or "Not documented." }}</dd>
+      <dt>Notes</dt><dd>{{ service.notes or "Add restore notes before this becomes important under pressure." }}</dd>
+    </dl>
+  </section>
+{% elif tab == "notes" %}
+  <section class="panel">
+    <h2>Notes</h2>
+    <form method="post" action="/notes/add" class="inline-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="object_type" value="service">
+      <input type="hidden" name="object_id" value="{{ service.id }}">
+      <input name="title" placeholder="Title" spellcheck="true">
+      <textarea name="body" placeholder="Add a note..." spellcheck="true" required></textarea>
+      <button type="submit">Add Note</button>
+    </form>
+    <div class="list">{% for note in notes %}<article class="note-block"><strong>{{ note.title or "Note" }}</strong><small>{{ note.source }} · {{ note.updated_at|dt }}</small><pre>{{ note.body }}</pre></article>{% else %}<p class="empty">No notes yet.</p>{% endfor %}</div>
+  </section>
+{% elif tab == "history" %}
+  <section class="panel">
+    <h2>History</h2>
+    <div class="list">{% for item in history %}<div class="list-row static"><strong>{{ item.action }}</strong><span>{{ item.created_at|dt }}</span></div>{% else %}<p class="empty">No history for this service yet.</p>{% endfor %}</div>
+  </section>
+{% endif %}
+{% endblock %}

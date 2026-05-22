@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Review Import · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Smart Paste review</p>
+    <h1>Detected structure</h1>
+  </div>
+  <a class="button secondary" href="/smart-paste">New paste</a>
+</section>
+<form method="post" action="/smart-paste/{{ record.id }}/apply" class="panel">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <div class="form-actions">
+    <button class="secondary" type="button" data-select-all="smart-paste" data-select-state="on">Select all useful</button>
+    <button class="secondary" type="button" data-select-all="smart-paste" data-select-state="off">Deselect all</button>
+  </div>
+  <label>Apply to device
+    <select name="target_device_id">
+      <option value="new">Create new: {{ parsed.device.name or "Imported Device" }}</option>
+      {% for device in devices %}
+        <option value="{{ device.id }}" {% if parsed.matched_device_id == device.id %}selected{% endif %}>{{ device.name }}{% if parsed.matched_device_id == device.id %} · matched{% endif %}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div class="suggestion-grid" data-select-scope="smart-paste">
+    <section>
+      <h2>Detected device</h2>
+      <label>Name <input name="device_name" value="{{ parsed.device.name or '' }}" spellcheck="true"></label>
+      <label>IP <input name="device_ip" value="{{ parsed.device.primary_ip or '' }}"></label>
+      <label>OS <input name="device_os" value="{{ parsed.device.os_name or '' }}" spellcheck="true"></label>
+      <p class="muted">Confidence: {{ parsed.device.confidence }}</p>
+      <label class="check-row"><input type="checkbox" name="apply_hardware" checked data-useful="true"> Apply hardware summaries if detected</label>
+    </section>
+    <section class="span-2">
+      <h2>Services</h2>
+      {% for item in parsed.services %}
+        {% set service_index = loop.index0 %}
+        <div class="review-item">
+          <label class="check-row">
+            <input type="checkbox" name="services" value="{{ service_index }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+            Apply service <small>{{ item.confidence }}</small>
+            {% if item.duplicate_id %}<small class="inline-note">Existing; fills gaps</small>{% endif %}
+          </label>
+          <label>Name <input name="service_name_{{ service_index }}" value="{{ item.name }}" spellcheck="true"></label>
+          <label>Stack/group <input name="service_group_{{ service_index }}" value="{{ item.stack_group or '' }}" placeholder="people-system, immich, cloudflare-tunnels" spellcheck="true"></label>
+          <label>Compose path <input name="service_compose_{{ service_index }}" value="{{ item.compose_path or '' }}"></label>
+          {% if item.urls %}
+            <div class="nested-review">
+              <strong>Access</strong>
+              {% for url in item.urls %}
+                {% set url_index = loop.index0 %}
+                <label class="check-row">
+                  <input type="checkbox" name="service_urls" value="{{ service_index }}:{{ url_index }}" {% if url.selected is not defined or url.selected %}checked data-useful="true"{% endif %}>
+                  URL <small>{{ url.confidence }}</small>
+                  {% if url.duplicate_id %}<small class="inline-note">Existing</small>{% endif %}
+                </label>
+                <div class="inline-mini">
+                  <input name="service_url_{{ service_index }}_{{ url_index }}" value="{{ url.url }}">
+                  <a class="button secondary small-button" href="{{ url.url }}" target="_blank">Open</a>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% if item.ports %}
+            <div class="nested-review">
+              <strong>Ports for this service</strong>
+              {% for port in item.ports %}
+                <label class="check-row">
+                  <input type="checkbox" name="service_port_{{ service_index }}" value="{{ service_index }}:{{ port.host_port }}:{{ port.protocol }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+                  {{ port.host_port }}/{{ port.protocol }}
+                </label>
+              {% endfor %}
+            </div>
+          {% endif %}
+          {% if item.credentials %}
+            <div class="nested-review">
+              <strong>Logins for this service</strong>
+              {% for credential in item.credentials %}
+                {% set credential_index = loop.index0 %}
+                <label class="check-row">
+                  <input type="checkbox" name="service_credentials" value="{{ service_index }}:{{ credential_index }}" {% if credential.selected is not defined or credential.selected %}checked data-useful="true"{% endif %}>
+                  Apply login <small>{{ credential.confidence }}</small>
+                  {% if credential.duplicate_id %}<small class="inline-note">Duplicate</small>{% endif %}
+                </label>
+                <label>Label <input name="service_credential_label_{{ service_index }}_{{ credential_index }}" value="{{ credential.label or item.name ~ ' login' }}" spellcheck="true"></label>
+                <label>Username <input name="service_credential_username_{{ service_index }}_{{ credential_index }}" value="{{ credential.username or '' }}"></label>
+                <label>Secret <input name="service_credential_secret_{{ service_index }}_{{ credential_index }}" type="password" value="{{ credential.secret or '' }}" autocomplete="new-password"></label>
+                <label>Login URL <input name="service_credential_login_url_{{ service_index }}_{{ credential_index }}" value="{{ credential.login_url or (item.urls[0].url if item.urls else '') }}"></label>
+              {% endfor %}
+            </div>
+          {% endif %}
+        </div>
+      {% else %}<p class="empty">No services detected.</p>{% endfor %}
+    </section>
+    <section>
+      <h2>Loose Ports</h2>
+      <p class="muted">These were detected as listening ports but were not matched to a Docker service.</p>
+      {% for item in parsed.ports %}
+        <div class="review-item">
+          <label class="check-row">
+            <input type="checkbox" name="ports" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+            Apply port <small>{{ item.confidence }}</small>
+            {% if item.duplicate_id %}<small class="inline-note">Existing</small>{% else %}<small class="inline-note">Loose; optional</small>{% endif %}
+          </label>
+          <label>Port <input name="port_host_{{ loop.index0 }}" value="{{ item.host_port }}" inputmode="numeric"></label>
+          <label>Protocol <input name="port_protocol_{{ loop.index0 }}" value="{{ item.protocol or 'tcp' }}"></label>
+          <label>Name/purpose <input name="port_purpose_{{ loop.index0 }}" value="{{ item.purpose or '' }}" placeholder="SSH, SMB, admin UI" spellcheck="true"></label>
+          <label>Tags <input name="port_tags_{{ loop.index0 }}" value="{{ item.tags or '' }}" placeholder="ssh, file-sharing" spellcheck="true"></label>
+        </div>
+      {% else %}<p class="empty">No ports detected.</p>{% endfor %}
+    </section>
+    <section>
+      <h2>URLs</h2>
+      {% for item in parsed.urls %}
+        <div class="review-item">
+          <label class="check-row">
+            <input type="checkbox" name="urls" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+            Apply URL <small>{{ item.confidence }}</small>
+            {% if item.duplicate_id %}<small class="inline-note">Existing</small>{% endif %}
+          </label>
+          <label>URL <input name="url_value_{{ loop.index0 }}" value="{{ item.url }}"></label>
+          <label>Type <input name="url_type_{{ loop.index0 }}" value="{{ item.url_type or 'local' }}" spellcheck="true"></label>
+        </div>
+      {% else %}<p class="empty">No URLs detected.</p>{% endfor %}
+    </section>
+    <section>
+      <h2>Commands</h2>
+      {% for item in parsed.commands %}
+        <div class="review-item">
+          <label class="check-row">
+            <input type="checkbox" name="commands" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+            Add to library <small>{{ item.confidence }}</small>
+            {% if item.duplicate_id %}<small class="inline-note">Existing; unchecked</small>{% endif %}
+          </label>
+          <label>Name <input name="command_name_{{ loop.index0 }}" value="{{ item.name }}" spellcheck="true"></label>
+          <label>Category <input name="command_category_{{ loop.index0 }}" value="Imported" spellcheck="true"></label>
+          <label>Applies to
+            <select name="command_applies_to_type_{{ loop.index0 }}">
+              <option value="device">This selected device</option>
+              <option value="generic">Generic Linux / reusable</option>
+              <option value="service">Service-specific, link later</option>
+              <option value="repo">Repo/project</option>
+            </select>
+          </label>
+          <label>Where to run <input name="command_where_{{ loop.index0 }}" value="Remote SSH host" spellcheck="true"></label>
+          <label>Risk
+            <select name="command_risk_{{ loop.index0 }}">
+              {% for risk in ["safe", "caution", "dangerous", "destructive"] %}
+                <option value="{{ risk }}">{{ risk }}</option>
+              {% endfor %}
+            </select>
+          </label>
+          <label>Short help <input name="command_help_low_{{ loop.index0 }}" value="Imported from pasted notes. Review before running." spellcheck="true"></label>
+          <label>Command <textarea name="command_text_{{ loop.index0 }}" spellcheck="false">{{ item.command_template }}</textarea></label>
+          <label class="span-2">Notes <textarea name="command_notes_{{ loop.index0 }}" spellcheck="true" placeholder="When to use this, what folder it expects, or what script it triggers."></textarea></label>
+        </div>
+      {% else %}<p class="empty">No commands detected.</p>{% endfor %}
+    </section>
+    <section>
+      <h2>Credentials</h2>
+      <p class="muted">Review carefully before applying. Secrets will be encrypted after import.</p>
+      {% for item in parsed.credentials %}
+        <div class="review-item">
+          <label class="check-row">
+            <input type="checkbox" name="credentials" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+            Apply credential <small>{{ item.confidence }}</small>
+            {% if item.duplicate_id %}<small class="inline-note">Duplicate; unchecked</small>{% endif %}
+          </label>
+          <label>Label <input name="credential_label_{{ loop.index0 }}" value="{{ item.label or 'Imported login' }}" spellcheck="true"></label>
+          <label>Username <input name="credential_username_{{ loop.index0 }}" value="{{ item.username or '' }}"></label>
+          <label>Secret <input name="credential_secret_{{ loop.index0 }}" type="password" value="{{ item.secret or '' }}" autocomplete="new-password"></label>
+          <label>Service <input name="credential_service_{{ loop.index0 }}" value="{{ item.service_name or '' }}" placeholder="Auto-match from label, or type service" spellcheck="true"></label>
+          <label>Login URL <input name="credential_login_url_{{ loop.index0 }}" value="{{ item.login_url or '' }}"></label>
+          <label>Security
+            <select name="credential_security_{{ loop.index0 }}">
+              {% for level in ["low", "medium", "high", "extreme"] %}
+                <option value="{{ level }}" {% if item.security_level == level %}selected{% endif %}>{{ level }}</option>
+              {% endfor %}
+            </select>
+          </label>
+        </div>
+      {% else %}<p class="empty">No credential hints detected.</p>{% endfor %}
+    </section>
+    <section>
+      <h2>Paths</h2>
+      {% for item in parsed.paths %}
+        <div class="mini-row">{{ item.path }} <small>{{ item.confidence }}</small></div>
+      {% else %}<p class="empty">No paths detected.</p>{% endfor %}
+    </section>
+  </div>
+  <div class="form-actions">
+    <button type="submit">Apply selected items</button>
+    <a class="button secondary" href="/smart-paste">Cancel</a>
+  </div>
+</form>
+<section class="panel">
+  <h2>Original paste</h2>
+  <pre>{{ record.raw_text }}</pre>
+</section>
+{% endblock %}

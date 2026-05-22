@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Command Library · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Copy-friendly command library</p>
+    <h1>Commands</h1>
+  </div>
+  <a class="button" href="/commands/new">Add Command</a>
+</section>
+<form class="filter-bar" method="get">
+  <input type="search" name="q" value="{{ q }}" placeholder="Try update server, restart app, free space, github update..." spellcheck="true">
+  <select name="category">
+    <option value="">All categories</option>
+    {% for item in categories %}
+      <option value="{{ item }}" {% if category == item %}selected{% endif %}>{{ item }}</option>
+    {% endfor %}
+  </select>
+  <select name="risk">
+    <option value="">All risks</option>
+    {% for item in ["safe", "caution", "dangerous", "destructive"] %}
+      <option value="{{ item }}" {% if risk == item %}selected{% endif %}>{{ item }}</option>
+    {% endfor %}
+  </select>
+  <button type="submit">Search</button>
+</form>
+{% include "partials/command_cards.html" %}
+{% endblock %}
+

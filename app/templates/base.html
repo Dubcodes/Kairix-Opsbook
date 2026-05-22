@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf }}">
+  <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/static/styles.css">
+  <link rel="stylesheet" href="/theme.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">
+      <span class="brand-mark">K</span>
+      <span>
+        <strong>Kairix Opsbook</strong>
+        <small>{{ instance_name }} · {{ instance_mode|upper }}</small>
+      </span>
+    </a>
+    {% if user %}
+      <form class="global-search" action="/search" method="get">
+        <input type="search" name="q" placeholder="Search devices, services, ports, commands..." value="{{ q|default('') }}" spellcheck="true">
+      </form>
+      <form method="post" action="/logout">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="ghost" type="submit">Log out</button>
+      </form>
+      <button class="ghost" type="button" data-open-quick-note>Quick Note</button>
+    {% endif %}
+    <button class="ghost icon-button" type="button" data-theme-toggle title="Toggle dark mode" aria-label="Toggle dark mode">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 14.5A8.5 8.5 0 0 1 9.5 3a7 7 0 1 0 11.5 11.5Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+    </button>
+  </header>
+
+  {% if user %}
+    <aside class="sidebar">
+      <nav>
+        <a href="/">Dashboard</a>
+        <a href="/devices">Devices</a>
+        <a href="/services">Services</a>
+        <a href="/credentials">Credentials</a>
+        <a href="/commands">Commands</a>
+        <a href="/ports">Ports & URLs</a>
+        <a href="/tags">Tags</a>
+        <a href="/notes">Notes</a>
+        <a href="/smart-paste">Smart Paste</a>
+        <a href="/suggestions">Suggestions</a>
+        <a href="/exports">Emergency Export</a>
+        <a href="/settings">Settings</a>
+        <a href="/history">History</a>
+      </nav>
+    </aside>
+  {% endif %}
+
+  <main class="{% if user %}shell{% else %}auth-shell{% endif %}">
+    {% if read_only and user %}
+      <div class="standby-banner">
+        <strong>STANDBY MODE</strong> — read-only copy from Primary. Promote manually by changing <code>INSTANCE_MODE=primary</code> and restarting.
+      </div>
+    {% endif %}
+
+    {% for item in flashes %}
+      <div class="flash {{ item.level }}">{{ item.message }}</div>
+    {% endfor %}
+
+    {% block content %}{% endblock %}
+  </main>
+  {% if user %}
+    <a class="coffee-link" href="https://buymeacoffee.com/dubcodes" target="_blank" rel="noopener" title="Buy me a coffee">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M5 8h12v6a5 5 0 0 1-5 5H10a5 5 0 0 1-5-5V8Z" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M17 10h1a3 3 0 0 1 0 6h-1" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M8 5c0-1 1-1 1-2M12 5c0-1 1-1 1-2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+    </a>
+    <div class="modal-backdrop" data-quick-note-modal hidden>
+      <form class="modal-panel" method="post" action="/quick-note">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="section-title">
+          <h2>Quick Note</h2>
+          <button class="ghost" type="button" data-close-quick-note>Close</button>
+        </div>
+        <p class="muted">Capture it now. Save as a note, or send it to Smart Paste when you want structured suggestions.</p>
+        <input name="title" placeholder="Optional title" spellcheck="true">
+        <input name="tags" placeholder="Tags: docker, moxxie, later" spellcheck="true">
+        <textarea name="raw_text" required spellcheck="true" placeholder="debian 12&#10;root&#10;example-root-password&#10;portainer&#10;admin&#10;example-admin-password&#10;9443"></textarea>
+        <div class="form-actions">
+          <button type="submit" name="action" value="save">Save</button>
+          <button type="submit" name="action" value="save_close">Save & Close</button>
+          <button class="secondary" type="submit" name="action" value="smart_paste">Bring to Smart Paste</button>
+        </div>
+      </form>
+    </div>
+  {% endif %}
+  <script src="/static/app.js"></script>
+</body>
+</html>

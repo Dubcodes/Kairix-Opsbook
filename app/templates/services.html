@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}Services · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Service-first browsing</p>
+    <h1>Services</h1>
+  </div>
+  <a class="button" href="/services/new">Add Service</a>
+</section>
+<form class="filter-bar" method="get">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search service, URL, repo, path..." spellcheck="true">
+  <button type="submit">Search</button>
+</form>
+<section class="list">
+  {% for service in services %}
+    <a class="device-row" href="/services/{{ service.id }}">
+      <div>
+        <strong>{{ service.name }}</strong>
+        <span>{{ service.device.name }} · {{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}</span>
+      </div>
+      <div class="tags">{% for tag in tags.get(service.id, []) %}<span>{{ tag }}</span>{% endfor %}</div>
+    </a>
+  {% else %}
+    <p class="empty">No services yet.</p>
+  {% endfor %}
+</section>
+{% endblock %}
+

@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Devices · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Device default view</p>
+    <h1>Devices</h1>
+  </div>
+  <a class="button" href="/devices/new">Add Device</a>
+</section>
+
+<form class="filter-bar" method="get">
+  <input type="search" name="q" value="{{ q }}" placeholder="Search name, IP, hostname, purpose..." spellcheck="true">
+  <button type="submit">Search</button>
+</form>
+
+<section class="list">
+  {% for device in devices %}
+    <a class="device-row" href="/devices/{{ device.id }}">
+      <div>
+        <strong>{{ device.name }}</strong>
+        <span>{{ device.primary_ip or "No IP" }} · {{ device.os_name or device.type }} · {{ service_counts.get(device.id, 0) }} services · {{ credential_counts.get(device.id, 0) }} credentials</span>
+      </div>
+      <div class="tags">
+        {% for tag in tags.get(device.id, []) %}<span>{{ tag }}</span>{% endfor %}
+      </div>
+    </a>
+  {% else %}
+    <p class="empty">No devices yet.</p>
+  {% endfor %}
+</section>
+{% endblock %}
+

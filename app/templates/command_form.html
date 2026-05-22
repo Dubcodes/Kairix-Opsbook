@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}{% if command %}Edit Command{% else %}Add Command{% endif %} · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">{% if command %}Editing enabled{% else %}Command template{% endif %}</p>
+    <h1>{% if command %}Edit {{ command.name }}{% else %}Add Command{% endif %}</h1>
+  </div>
+  <a class="button secondary" href="/commands">Cancel</a>
+</section>
+<form method="post" class="panel form-grid wide">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Name <input name="name" required value="{{ command.name if command else '' }}" spellcheck="true"></label>
+  <label>Category <input name="category" value="{{ command.category if command else 'Common' }}" spellcheck="true"></label>
+  <label>Applies to type
+    <select name="applies_to_type">
+      {% for item in ["generic", "device", "service", "repo", "docker-stack"] %}
+        <option value="{{ item }}" {% if applies_to_type == item %}selected{% endif %}>{{ item }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Specific device/service
+    <select name="applies_to_id">
+      <option value="">None / reusable</option>
+      <optgroup label="Devices">
+        {% for device in devices %}
+          <option value="{{ device.id }}" {% if applies_to_type == "device" and applies_to_id == device.id %}selected{% endif %}>{{ device.name }}</option>
+        {% endfor %}
+      </optgroup>
+      <optgroup label="Services">
+        {% for service in services %}
+          <option value="{{ service.id }}" {% if applies_to_type == "service" and applies_to_id == service.id %}selected{% endif %}>{{ service.name }} · {{ service.device.name }}</option>
+        {% endfor %}
+      </optgroup>
+    </select>
+    <small>Use with Applies to type. Leave blank for a general Linux/Docker command.</small>
+  </label>
+  <label>Where to run <input name="where_to_run" value="{{ command.where_to_run if command else 'Remote SSH host' }}" spellcheck="true"></label>
+  <label>Risk
+    <select name="risk_level">
+      {% for item in ["safe", "caution", "dangerous", "destructive"] %}
+        <option value="{{ item }}" {% if command and command.risk_level == item %}selected{% endif %}>{{ item }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label class="span-2">Short description <textarea name="short_description" spellcheck="true">{{ command.short_description if command else '' }}</textarea></label>
+  <label class="span-2">Command template <textarea name="command_template" class="code-input" required spellcheck="false">{{ command.command_template if command else '' }}</textarea></label>
+  <label class="span-2">Low-detail help <textarea name="help_low" spellcheck="true">{{ command.help_low if command else '' }}</textarea></label>
+  <label class="span-2">High-detail help <textarea name="help_high" spellcheck="true">{{ command.help_high if command else '' }}</textarea></label>
+  <label class="span-2">Long description <textarea name="long_description" spellcheck="true">{{ command.long_description if command else '' }}</textarea></label>
+  <label class="span-2">Notes <textarea name="notes" spellcheck="true">{{ command.notes if command else '' }}</textarea></label>
+  <label class="span-2">Tags <input name="tags" value="{{ tag_text }}" spellcheck="true"></label>
+  <div class="form-actions span-2">
+    <button type="submit">Save command</button>
+    <a class="button secondary" href="/commands">Cancel</a>
+  </div>
+</form>
+{% if command %}
+  <form method="post" action="/delete/command/{{ command.id }}" class="panel danger-panel" data-confirm-delete="Delete this command?">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <strong>Delete command</strong>
+    <p class="muted">This removes it from the command library and related views.</p>
+    <button class="ghost" type="submit">Delete {{ command.name }}</button>
+  </form>
+{% endif %}
+{% endblock %}

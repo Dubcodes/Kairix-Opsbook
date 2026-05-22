@@ -1,0 +1,12 @@
+.git
+.env
+data/
+backups/
+exports/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+*.sqlite3

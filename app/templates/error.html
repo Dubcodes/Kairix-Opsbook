@@ -1,0 +1,10 @@
+{% extends "base.html" %}
+{% block title %}Error · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="panel narrow">
+  <p class="eyebrow">Error {{ status_code }}</p>
+  <h1>{{ detail }}</h1>
+  <p><a class="button" href="/">Back to Opsbook</a></p>
+</section>
+{% endblock %}
+

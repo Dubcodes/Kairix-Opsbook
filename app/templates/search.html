@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Search · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Forgiving search</p>
+    <h1>Search</h1>
+  </div>
+</section>
+<form class="filter-bar" method="get">
+  <input type="search" name="q" value="{{ q }}" placeholder="IP, port, URL, command, service, username..." spellcheck="true">
+  <button type="submit">Search</button>
+</form>
+{% if q %}
+  <section class="search-groups">
+    {% for group, items in results.items() %}
+      <section class="panel">
+        <h2>{{ group|title }}</h2>
+        <div class="list">
+          {% for item in items %}
+            {% if group == "devices" %}
+              <a class="list-row" href="/devices/{{ item.id }}"><strong>{{ item.name }}</strong><span>{{ item.primary_ip }} · {{ item.purpose }}</span></a>
+            {% elif group == "services" %}
+              <a class="list-row" href="/services/{{ item.id }}"><strong>{{ item.name }}</strong><span>{{ item.device.name }} · {{ item.local_url or item.compose_path }}</span></a>
+            {% elif group == "credentials" %}
+              <a class="list-row" href="/credentials/{{ item.id }}"><strong>{{ item.label }}</strong><span>{{ item.username }} · secret hidden</span></a>
+            {% elif group == "commands" %}
+              <a class="list-row" href="/commands?q={{ q }}"><strong>{{ item.name }}</strong><span>{{ item.category }} · {{ item.short_description }}</span></a>
+            {% elif group == "urls" %}
+              <a class="list-row" href="{{ item.url }}" target="_blank"><strong>{{ item.label or item.url_type }}</strong><span>{{ item.url }}</span></a>
+            {% elif group == "ports" %}
+              <a class="list-row" href="/ports"><strong>{{ item.host_port }}/{{ item.protocol }}</strong><span>{{ item.device.name }}{% if item.service %} · {{ item.service.name }}{% endif %}</span></a>
+            {% elif group == "notes" %}
+              <div class="list-row static"><strong>{{ item.title or "Note" }}</strong><span>{{ item.body[:180] }}</span></div>
+            {% endif %}
+          {% else %}
+            <p class="empty">No matches.</p>
+          {% endfor %}
+        </div>
+      </section>
+    {% endfor %}
+  </section>
+{% endif %}
+{% endblock %}

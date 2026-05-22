@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Fast like notes. Structured like inventory. Safe like a vault.</p>
+    <h1>Opsbook Dashboard</h1>
+  </div>
+  <div class="actions">
+    <a class="button" href="/devices/new">Add Device</a>
+    <a class="button secondary" href="/smart-paste">Smart Paste</a>
+  </div>
+</section>
+
+<section class="stats-grid">
+  <a class="stat" href="/devices"><strong>{{ counts.devices }}</strong><span>Devices</span></a>
+  <a class="stat" href="/services"><strong>{{ counts.services }}</strong><span>Services</span></a>
+  <a class="stat" href="/credentials"><strong>{{ counts.credentials }}</strong><span>Credentials</span></a>
+  <a class="stat" href="/commands"><strong>{{ counts.commands }}</strong><span>Commands</span></a>
+</section>
+
+{% if suggestions %}
+  <details class="panel collapsible-panel">
+    <summary>
+      <span><strong>Warnings & Suggestions</strong><small>{{ suggestions|length }} active item(s)</small></span>
+      <a href="/suggestions">View all</a>
+    </summary>
+    <div class="list suggestion-list">
+      {% for suggestion in suggestions %}
+        <article class="list-row static severity-{{ suggestion.severity }}">
+          <a href="{{ suggestion.target }}">
+            <strong>{{ suggestion.title }}</strong>
+            <span>{{ suggestion.body }}</span>
+          </a>
+          <form method="post" action="/suggestions/dismiss">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="suggestion_id" value="{{ suggestion.id }}">
+            <button class="ghost" type="submit">Dismiss</button>
+          </form>
+        </article>
+      {% endfor %}
+    </div>
+  </details>
+{% endif %}
+
+<section class="two-col">
+  <div class="panel">
+    <div class="section-title">
+      <h2>Recent Devices</h2>
+      <a href="/devices">All devices</a>
+    </div>
+    <div class="list">
+      {% for device in devices %}
+        <a class="list-row" href="/devices/{{ device.id }}">
+          <strong>{{ device.name }}</strong>
+          <span>{{ device.primary_ip or "No IP yet" }} · {{ device.os_name or "OS unknown" }}</span>
+        </a>
+      {% else %}
+        <p class="empty">No devices yet. Add your first server, then let the ops memory grow from there.</p>
+      {% endfor %}
+    </div>
+  </div>
+  <div class="panel">
+    <div class="section-title">
+      <h2>Recent Services</h2>
+      <a href="/services">All services</a>
+    </div>
+    <div class="list">
+      {% for service in services %}
+        <a class="list-row" href="/services/{{ service.id }}">
+          <strong>{{ service.name }}</strong>
+          <span>{{ service.device.name }} · {{ service.local_url or service.public_url or "No URL yet" }}</span>
+        </a>
+      {% else %}
+        <p class="empty">No services yet.</p>
+      {% endfor %}
+    </div>
+  </div>
+</section>
+{% endblock %}

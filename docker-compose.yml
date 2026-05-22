@@ -1,0 +1,44 @@
+services:
+  app:
+    build:
+      context: ./app
+    container_name: kairix-opsbook-app
+    environment:
+      APP_NAME: ${APP_NAME:-Kairix Opsbook}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
+      INSTANCE_NAME: ${INSTANCE_NAME:-Opsbook}
+      INSTANCE_MODE: ${INSTANCE_MODE:-primary}
+      DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opsbook:change-me@db:5432/opsbook}
+      OPSBOOK_SECRET_KEY: ${OPSBOOK_SECRET_KEY:-change-this-secret-encryption-key}
+      EXPORT_SECRET_KEY: ${EXPORT_SECRET_KEY:-change-this-export-encryption-key}
+      SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-change-this-session-signing-key}
+      SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
+      SESSION_TIMEOUT_MINUTES: ${SESSION_TIMEOUT_MINUTES:-60}
+      MEDIUM_UNLOCK_MINUTES: ${MEDIUM_UNLOCK_MINUTES:-5}
+      EXPORT_DIR: ${EXPORT_DIR:-/app/exports}
+      BACKUP_DIR: ${BACKUP_DIR:-/app/backups}
+    ports:
+      - "${APP_PORT:-8095}:8000"
+    volumes:
+      - ./exports:/app/exports
+      - ./backups:/app/backups
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16-alpine
+    container_name: kairix-opsbook-db
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-opsbook}
+      POSTGRES_USER: ${POSTGRES_USER:-opsbook}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opsbook} -d ${POSTGRES_DB:-opsbook}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped

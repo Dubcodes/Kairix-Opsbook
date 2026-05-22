@@ -1,0 +1,2817 @@
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from sqlalchemy import func, or_
+from sqlalchemy.orm import Session
+from starlette.middleware.sessions import SessionMiddleware
+
+from . import models
+from .config import settings
+from .database import SessionLocal, get_db, init_db
+from .exporter import create_emergency_export, safe_export_path
+from .parser import INVENTORY_COMMAND, parse_smart_paste
+from .security import (
+    challenge_ok,
+    decrypt_text,
+    encrypt_text,
+    hash_password,
+    new_csrf_token,
+    now_utc,
+    unlock_expiry,
+    verify_password,
+)
+from .seeds import seed_initial_data
+from .suggestions import TAG_IDEAS, dismiss_suggestion, visible_suggestions
+from .utils import (
+    format_dt,
+    render_template_vars,
+    set_tags,
+    slugify,
+    tag_map,
+    tags_for,
+    unique_slug,
+)
+
+app = FastAPI(title=settings.app_name, version=settings.app_version)
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=settings.session_secret_key,
+    https_only=settings.session_cookie_secure,
+    same_site="lax",
+    max_age=settings.session_timeout_minutes * 60,
+)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+templates = Jinja2Templates(directory="templates")
+templates.env.filters["dt"] = format_dt
+templates.env.globals["render_vars"] = render_template_vars
+templates.env.globals["settings"] = settings
+
+THEME_DEFAULTS = {
+    "theme_mode": "auto",
+    "light_bg": "#f5f7f8",
+    "light_surface": "#ffffff",
+    "light_text": "#17212b",
+    "light_muted": "#687786",
+    "light_line": "#d8e0e5",
+    "light_accent": "#0f766e",
+    "light_accent_text": "#ffffff",
+    "dark_bg": "#0f1419",
+    "dark_surface": "#151c22",
+    "dark_text": "#e7edf2",
+    "dark_muted": "#a8b4bf",
+    "dark_line": "#33424f",
+    "dark_accent": "#5eead4",
+    "dark_accent_text": "#06201d",
+    "dashboard_recent_limit": "6",
+    "compact_forms": "on",
+}
+
+
+@app.on_event("startup")
+def startup() -> None:
+    init_db()
+    with SessionLocal() as db:
+        seed_initial_data(db)
+
+
+def redirect(url: str) -> RedirectResponse:
+    return RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+def flash(request: Request, message: str, level: str = "info") -> None:
+    messages = request.session.setdefault("_flash", [])
+    messages.append({"message": message, "level": level})
+    request.session["_flash"] = messages
+
+
+def pop_flashes(request: Request) -> list[dict[str, str]]:
+    messages = request.session.pop("_flash", [])
+    return list(messages)
+
+
+def csrf_token(request: Request) -> str:
+    token = request.session.get("csrf")
+    if not token:
+        token = new_csrf_token()
+        request.session["csrf"] = token
+    return token
+
+
+def check_csrf(request: Request, token: str) -> None:
+    if not token or token != request.session.get("csrf"):
+        raise HTTPException(status_code=400, detail="Invalid form token.")
+
+
+def ensure_writable() -> None:
+    if settings.read_only:
+        raise HTTPException(
+            status_code=403,
+            detail="This Opsbook instance is in standby mode and is read-only.",
+        )
+
+
+def user_count(db: Session) -> int:
+    return db.query(models.User).count()
+
+
+def get_app_settings(db: Session) -> dict[str, str]:
+    values = dict(THEME_DEFAULTS)
+    for row in db.query(models.AppSetting).all():
+        values[row.key] = row.value
+    return values
+
+
+def set_app_setting(db: Session, key: str, value: str) -> None:
+    row = db.query(models.AppSetting).filter_by(key=key).first()
+    if row:
+        row.value = value
+    else:
+        db.add(models.AppSetting(key=key, value=value))
+
+
+def css_color(value: str, fallback: str) -> str:
+    clean = (value or "").strip()
+    if clean.startswith("#") and len(clean) in {4, 7}:
+        return clean
+    return fallback
+
+
+def int_setting(db: Session, key: str, default: int, *, minimum: int = 1, maximum: int = 50) -> int:
+    raw = get_app_settings(db).get(key, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+IMPORT_MODELS = {
+    "devices": models.Device,
+    "device_hardware": models.DeviceHardware,
+    "services": models.Service,
+    "credentials": models.Credential,
+    "commands": models.Command,
+    "recipes": models.Recipe,
+    "recipe_steps": models.RecipeStep,
+    "urls": models.Url,
+    "ports": models.Port,
+    "tags": models.Tag,
+    "tag_links": models.TagLink,
+    "notes": models.Note,
+    "imports": models.ImportRecord,
+}
+
+
+def _coerce_import_row(model: type[Any], row: dict[str, Any]) -> dict[str, Any]:
+    coerced = dict(row)
+    for column in model.__table__.columns:
+        value = coerced.get(column.name)
+        if value is None:
+            continue
+        if "DateTime" in column.type.__class__.__name__ and isinstance(value, str):
+            try:
+                coerced[column.name] = datetime.fromisoformat(value)
+            except ValueError:
+                coerced.pop(column.name, None)
+    return coerced
+
+
+def _auto_tags_for_label(label: str) -> str:
+    words = [slugify(piece) for piece in label.replace("_", " ").replace("-", " ").split()]
+    useful = [word for word in words if len(word) > 2]
+    known = {
+        "portainer",
+        "docker",
+        "cloudflare",
+        "home-assistant",
+        "grafana",
+        "postgres",
+        "github",
+        "ssh",
+        "admin",
+    }
+    return ", ".join([word for word in useful if word in known])
+
+
+def _id_list(value: str) -> list[int]:
+    result: list[int] = []
+    for part in (value or "").split(","):
+        clean = part.strip()
+        if clean.isdigit():
+            result.append(int(clean))
+    return result
+
+
+def _normalize_text(value: str) -> str:
+    return "\n".join(line.rstrip() for line in (value or "").strip().splitlines()).lower()
+
+
+def _duplicate_command(db: Session, command_text: str) -> models.Command | None:
+    normalized = _normalize_text(command_text)
+    if not normalized:
+        return None
+    for command in db.query(models.Command).all():
+        if _normalize_text(command.command_template) == normalized:
+            return command
+    return None
+
+
+def _duplicate_credential(
+    db: Session,
+    *,
+    device_id: int | None,
+    service_id: int | None,
+    label: str,
+    username: str,
+) -> models.Credential | None:
+    label_norm = label.strip().lower()
+    username_norm = username.strip().lower()
+    query = db.query(models.Credential)
+    if service_id:
+        query = query.filter(models.Credential.service_id == service_id)
+    elif device_id:
+        query = query.filter(models.Credential.device_id == device_id)
+    for credential in query.all():
+        existing_label = credential.label.lower()
+        existing_username = credential.username.lower()
+        same_label = existing_label == label_norm or label_norm in existing_label or existing_label in label_norm
+        same_user = existing_username == username_norm
+        if same_user and (same_label or service_id or not label_norm):
+            return credential
+    return None
+
+
+def _match_device_for_import(db: Session, parsed_device: dict[str, Any]) -> models.Device | None:
+    ip = str(parsed_device.get("primary_ip", "")).strip()
+    name = str(parsed_device.get("name", "")).strip()
+    if ip:
+        match = db.query(models.Device).filter(models.Device.primary_ip == ip).first()
+        if match:
+            return match
+    if name:
+        slug = slugify(name)
+        for device in db.query(models.Device).all():
+            if device.name.lower() == name.lower() or device.slug == slug:
+                return device
+    return None
+
+
+def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[str, Any]:
+    parsed = dict(parsed)
+    matched_device = _match_device_for_import(db, parsed.get("device", {}))
+    parsed["matched_device_id"] = matched_device.id if matched_device else None
+    existing_device_id = matched_device.id if matched_device else None
+    for command in parsed.get("commands", []):
+        duplicate = _duplicate_command(db, command.get("command_template", ""))
+        command["duplicate_id"] = duplicate.id if duplicate else None
+        command["selected"] = duplicate is None and bool(command.get("command_template"))
+    for service in parsed.get("services", []):
+        has_context = bool(
+            service.get("ports")
+            or service.get("urls")
+            or service.get("credentials")
+            or service.get("compose_path")
+            or service.get("container_name")
+            or service.get("image")
+        )
+        duplicate = None
+        if existing_device_id and service.get("name"):
+            duplicate = (
+                db.query(models.Service)
+                .filter(models.Service.device_id == existing_device_id, models.Service.name.ilike(str(service["name"])))
+                .first()
+            )
+        service["duplicate_id"] = duplicate.id if duplicate else None
+        service["selected"] = has_context
+        for url in service.get("urls", []):
+            duplicate_url = db.query(models.Url).filter(models.Url.url == str(url.get("url", ""))).first()
+            url["duplicate_id"] = duplicate_url.id if duplicate_url else None
+            url["selected"] = duplicate_url is None
+        for credential in service.get("credentials", []):
+            label = str(credential.get("label", ""))
+            username = str(credential.get("username", ""))
+            duplicate_credential = None
+            if label and username:
+                duplicate_credential = _duplicate_credential(
+                    db,
+                    device_id=existing_device_id,
+                    service_id=duplicate.id if duplicate else None,
+                    label=label,
+                    username=username,
+                )
+            credential["duplicate_id"] = duplicate_credential.id if duplicate_credential else None
+            credential["selected"] = bool(credential.get("secret")) and duplicate_credential is None
+    for port in parsed.get("ports", []):
+        port["selected"] = False
+        if existing_device_id and port.get("host_port"):
+            duplicate = (
+                db.query(models.Port)
+                .filter(models.Port.device_id == existing_device_id, models.Port.host_port == int(port["host_port"]))
+                .first()
+            )
+            port["duplicate_id"] = duplicate.id if duplicate else None
+    for url in parsed.get("urls", []):
+        duplicate = db.query(models.Url).filter(models.Url.url == str(url.get("url", ""))).first()
+        url["duplicate_id"] = duplicate.id if duplicate else None
+        url["selected"] = duplicate is None
+    for credential in parsed.get("credentials", []):
+        duplicate = None
+        label = str(credential.get("label", ""))
+        username = str(credential.get("username", ""))
+        if label and username:
+            query = db.query(models.Credential).filter(
+                models.Credential.label.ilike(label),
+                models.Credential.username.ilike(username),
+            )
+            if existing_device_id:
+                query = query.filter(models.Credential.device_id == existing_device_id)
+            duplicate = query.first()
+        credential["duplicate_id"] = duplicate.id if duplicate else None
+        credential["selected"] = bool(credential.get("secret")) and duplicate is None
+    return parsed
+
+
+def _quick_credentials_for_device(db: Session, device: models.Device) -> list[models.Credential]:
+    order = _id_list(get_app_settings(db).get(f"quick_credential_order:{device.id}", ""))
+    hidden = set(_id_list(get_app_settings(db).get(f"quick_credential_hidden:{device.id}", "")))
+    credentials = [credential for credential in device.credentials if credential.id not in hidden]
+    by_id = {credential.id: credential for credential in credentials}
+    ordered = [by_id.pop(credential_id) for credential_id in order if credential_id in by_id]
+    ordered.extend(sorted(by_id.values(), key=lambda item: item.label.lower()))
+    return ordered
+
+
+def _delete_service_tree(db: Session, service: models.Service) -> None:
+    for credential in list(service.credentials):
+        db.query(models.TagLink).filter_by(object_type="credential", object_id=credential.id).delete()
+        db.delete(credential)
+    for port in list(service.ports):
+        db.query(models.TagLink).filter_by(object_type="port", object_id=port.id).delete()
+        db.delete(port)
+    for url in list(service.urls):
+        db.query(models.TagLink).filter_by(object_type="url", object_id=url.id).delete()
+        db.delete(url)
+    db.query(models.Note).filter_by(object_type="service", object_id=service.id).delete()
+    for command in db.query(models.Command).filter_by(applies_to_type="service", applies_to_id=service.id).all():
+        db.query(models.TagLink).filter_by(object_type="command", object_id=command.id).delete()
+        db.delete(command)
+    db.query(models.TagLink).filter_by(object_type="service", object_id=service.id).delete()
+    db.delete(service)
+
+
+def _cleanup_obvious_import_misses(db: Session) -> dict[str, int]:
+    cleaned = {"services": 0, "credentials": 0}
+    bad_service_slugs = {
+        "checkopenports",
+        "portainerfolder",
+        "dockercheck",
+        "mainfolders",
+        "folderrules",
+        "smbshares",
+        "smbbyip",
+        "restartsmb",
+        "startstopacomposestack",
+        "recommendedcomposepattern",
+    }
+    for service in list(db.query(models.Service).all()):
+        if slugify(service.name).replace("-", "") in bad_service_slugs:
+            _delete_service_tree(db, service)
+            cleaned["services"] += 1
+
+    for loose in list(db.query(models.Credential).filter(models.Credential.service_id.is_(None)).all()):
+        if not loose.device_id or not loose.username:
+            continue
+        loose_slug = slugify(loose.label)
+        linked = (
+            db.query(models.Credential)
+            .join(models.Service, models.Credential.service_id == models.Service.id)
+            .filter(
+                models.Credential.device_id == loose.device_id,
+                models.Credential.username.ilike(loose.username),
+                models.Credential.service_id.is_not(None),
+            )
+            .all()
+        )
+        for candidate in linked:
+            service_slug = slugify(candidate.service.name) if candidate.service else ""
+            candidate_slug = slugify(candidate.label)
+            if service_slug and (service_slug in loose_slug or service_slug in candidate_slug):
+                db.query(models.TagLink).filter_by(object_type="credential", object_id=loose.id).delete()
+                db.delete(loose)
+                cleaned["credentials"] += 1
+                break
+    return cleaned
+
+
+def _resolve_service_for_credential(
+    db: Session,
+    *,
+    device_id: int | None,
+    service_id: int | None,
+    service_name: str,
+    label: str,
+) -> tuple[int | None, int | None, str]:
+    if service_id:
+        service = db.get(models.Service, service_id)
+        if service:
+            return service.device_id, service.id, ""
+    cleaned_service_name = service_name.strip()
+    if cleaned_service_name:
+        query = db.query(models.Service)
+        if device_id:
+            query = query.filter(models.Service.device_id == device_id)
+        matches = [
+            service
+            for service in query.all()
+            if service.name.lower() == cleaned_service_name.lower()
+            or slugify(service.name) == slugify(cleaned_service_name)
+        ]
+        if len(matches) == 1:
+            return matches[0].device_id, matches[0].id, ""
+        if len(matches) > 1:
+            return device_id, None, "More than one service matched that name. Pick a device first."
+        if not device_id:
+            devices = db.query(models.Device).limit(2).all()
+            if len(devices) == 1:
+                only_device = devices[0]
+                device_id = only_device.id
+        if not device_id:
+            return device_id, None, "Pick a device before creating a service from the credential form."
+        service = models.Service(
+            device_id=device_id,
+            name=cleaned_service_name,
+            slug=slugify(cleaned_service_name),
+            notes="Created while entering a credential.",
+        )
+        db.add(service)
+        db.flush()
+        return device_id, service.id, ""
+    if label.strip():
+        label_slug = slugify(label)
+        query = db.query(models.Service)
+        if device_id:
+            query = query.filter(models.Service.device_id == device_id)
+        services = query.all()
+        matches: list[models.Service] = []
+        for service in services:
+            service_slug = slugify(service.name)
+            if service_slug and (service_slug in label_slug or label_slug in service_slug):
+                matches.append(service)
+        if len(matches) == 1:
+            return matches[0].device_id, matches[0].id, ""
+    return device_id, None, ""
+
+
+def require_user(request: Request, db: Session = Depends(get_db)) -> models.User:
+    user_id = request.session.get("user_id")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Login required.")
+    last_seen_raw = request.session.get("last_seen")
+    if last_seen_raw:
+        last_seen = datetime.fromisoformat(last_seen_raw)
+        if (now_utc() - last_seen).total_seconds() > settings.session_timeout_minutes * 60:
+            request.session.clear()
+            raise HTTPException(status_code=401, detail="Session expired.")
+    user = db.get(models.User, int(user_id))
+    if not user:
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="Login required.")
+    request.session["last_seen"] = now_utc().isoformat()
+    return user
+
+
+@app.exception_handler(HTTPException)
+async def http_error(request: Request, exc: HTTPException) -> Response:
+    if exc.status_code == 401:
+        flash(request, "Please log in to continue.", "warning")
+        return redirect("/login")
+    return templates.TemplateResponse(
+        request,
+        "error.html",
+        {
+            "status_code": exc.status_code,
+            "detail": exc.detail,
+            "csrf": csrf_token(request),
+            "flashes": pop_flashes(request),
+            "user": None,
+            "read_only": settings.read_only,
+            "instance_mode": settings.instance_mode,
+            "instance_name": settings.instance_name,
+        },
+        status_code=exc.status_code,
+    )
+
+
+def render(
+    request: Request,
+    template_name: str,
+    context: dict[str, Any] | None = None,
+    *,
+    user: models.User | None = None,
+) -> HTMLResponse:
+    payload = {
+        "csrf": csrf_token(request),
+        "flashes": pop_flashes(request),
+        "user": user,
+        "read_only": settings.read_only,
+        "instance_mode": settings.instance_mode,
+        "instance_name": settings.instance_name,
+    }
+    payload.update(context or {})
+    return templates.TemplateResponse(request, template_name, payload)
+
+
+@app.get("/theme.css")
+def theme_css(db: Session = Depends(get_db)) -> PlainTextResponse:
+    values = get_app_settings(db)
+    css = f"""
+:root:not([data-theme]) {{
+  --bg: {css_color(values.get("light_bg", ""), THEME_DEFAULTS["light_bg"])};
+  --surface: {css_color(values.get("light_surface", ""), THEME_DEFAULTS["light_surface"])};
+  --surface-soft: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  --ink: {css_color(values.get("light_text", ""), THEME_DEFAULTS["light_text"])};
+  --muted: {css_color(values.get("light_muted", ""), THEME_DEFAULTS["light_muted"])};
+  --line: {css_color(values.get("light_line", ""), THEME_DEFAULTS["light_line"])};
+  --accent: {css_color(values.get("light_accent", ""), THEME_DEFAULTS["light_accent"])};
+  --accent-ink: {css_color(values.get("light_accent_text", ""), THEME_DEFAULTS["light_accent_text"])};
+}}
+@media (prefers-color-scheme: dark) {{
+  :root:not([data-theme]) {{
+    --bg: {css_color(values.get("dark_bg", ""), THEME_DEFAULTS["dark_bg"])};
+    --surface: {css_color(values.get("dark_surface", ""), THEME_DEFAULTS["dark_surface"])};
+    --surface-soft: color-mix(in srgb, var(--surface) 78%, #000000);
+    --ink: {css_color(values.get("dark_text", ""), THEME_DEFAULTS["dark_text"])};
+    --muted: {css_color(values.get("dark_muted", ""), THEME_DEFAULTS["dark_muted"])};
+    --line: {css_color(values.get("dark_line", ""), THEME_DEFAULTS["dark_line"])};
+    --accent: {css_color(values.get("dark_accent", ""), THEME_DEFAULTS["dark_accent"])};
+    --accent-ink: {css_color(values.get("dark_accent_text", ""), THEME_DEFAULTS["dark_accent_text"])};
+  }}
+}}
+:root[data-theme="light"] {{
+  --bg: {css_color(values.get("light_bg", ""), THEME_DEFAULTS["light_bg"])};
+  --surface: {css_color(values.get("light_surface", ""), THEME_DEFAULTS["light_surface"])};
+  --surface-soft: color-mix(in srgb, var(--surface) 92%, var(--bg));
+  --ink: {css_color(values.get("light_text", ""), THEME_DEFAULTS["light_text"])};
+  --muted: {css_color(values.get("light_muted", ""), THEME_DEFAULTS["light_muted"])};
+  --line: {css_color(values.get("light_line", ""), THEME_DEFAULTS["light_line"])};
+  --accent: {css_color(values.get("light_accent", ""), THEME_DEFAULTS["light_accent"])};
+  --accent-ink: {css_color(values.get("light_accent_text", ""), THEME_DEFAULTS["light_accent_text"])};
+}}
+:root[data-theme="dark"] {{
+  --bg: {css_color(values.get("dark_bg", ""), THEME_DEFAULTS["dark_bg"])};
+  --surface: {css_color(values.get("dark_surface", ""), THEME_DEFAULTS["dark_surface"])};
+  --surface-soft: color-mix(in srgb, var(--surface) 78%, #000000);
+  --ink: {css_color(values.get("dark_text", ""), THEME_DEFAULTS["dark_text"])};
+  --muted: {css_color(values.get("dark_muted", ""), THEME_DEFAULTS["dark_muted"])};
+  --line: {css_color(values.get("dark_line", ""), THEME_DEFAULTS["dark_line"])};
+  --accent: {css_color(values.get("dark_accent", ""), THEME_DEFAULTS["dark_accent"])};
+  --accent-ink: {css_color(values.get("dark_accent_text", ""), THEME_DEFAULTS["dark_accent_text"])};
+}}
+"""
+    if values.get("compact_forms", "on") != "off":
+        css += """
+.panel { padding: 16px; }
+.form-grid { gap: 10px 12px; }
+label { gap: 4px; }
+textarea { min-height: 76px; }
+textarea.paste-box { min-height: 240px; }
+.page-head { margin-bottom: 14px; }
+"""
+    return PlainTextResponse(css, media_type="text/css")
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok", "app": settings.app_name, "version": settings.app_version}
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    if user_count(db) > 0:
+        return redirect("/login")
+    return render(request, "setup.html")
+
+
+@app.post("/setup")
+def setup_owner(
+    request: Request,
+    csrf: str = Form(...),
+    username: str = Form(...),
+    display_name: str = Form(""),
+    password: str = Form(...),
+    secondary_password: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if user_count(db) > 0:
+        return redirect("/login")
+    if len(password) < 10:
+        flash(request, "Use at least 10 characters for the owner password.", "warning")
+        return redirect("/setup")
+    user = models.User(
+        username=username.strip().lower(),
+        display_name=display_name.strip() or username.strip(),
+        password_hash=hash_password(password),
+        secondary_password_hash=hash_password(secondary_password)
+        if secondary_password.strip()
+        else None,
+        role="owner",
+    )
+    db.add(user)
+    db.commit()
+    flash(request, "Owner account created. You can log in now.", "success")
+    return redirect("/login")
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    if user_count(db) == 0:
+        return redirect("/setup")
+    return render(request, "login.html")
+
+
+@app.post("/login")
+def login(
+    request: Request,
+    csrf: str = Form(...),
+    username: str = Form(...),
+    password: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    user = db.query(models.User).filter_by(username=username.strip().lower()).first()
+    if not user or not verify_password(password, user.password_hash):
+        flash(request, "Login failed. Check the username and password.", "danger")
+        return redirect("/login")
+    request.session.clear()
+    request.session["user_id"] = user.id
+    request.session["last_seen"] = now_utc().isoformat()
+    csrf_token(request)
+    flash(request, f"Welcome back, {user.display_name or user.username}.", "success")
+    return redirect("/")
+
+
+@app.post("/logout")
+def logout(request: Request, csrf: str = Form(...)) -> RedirectResponse:
+    check_csrf(request, csrf)
+    request.session.clear()
+    return redirect("/login")
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    recent_limit = int_setting(db, "dashboard_recent_limit", 6, minimum=3, maximum=20)
+    devices = db.query(models.Device).order_by(models.Device.updated_at.desc()).limit(recent_limit).all()
+    services = db.query(models.Service).order_by(models.Service.updated_at.desc()).limit(recent_limit).all()
+    recent_logs = db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(8).all()
+    suggestions = visible_suggestions(db)[:6]
+    return render(
+        request,
+        "dashboard.html",
+        {
+            "devices": devices,
+            "services": services,
+            "recent_logs": recent_logs,
+            "suggestions": suggestions,
+            "counts": {
+                "devices": db.query(models.Device).count(),
+                "services": db.query(models.Service).count(),
+                "credentials": db.query(models.Credential).count(),
+                "commands": db.query(models.Command).count(),
+            },
+        },
+        user=user,
+    )
+
+
+@app.get("/devices", response_class=HTMLResponse)
+def devices_page(
+    request: Request,
+    q: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    query = db.query(models.Device)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                models.Device.name.ilike(like),
+                models.Device.primary_ip.ilike(like),
+                models.Device.hostname.ilike(like),
+                models.Device.purpose.ilike(like),
+                models.Device.notes.ilike(like),
+            )
+        )
+    devices = query.order_by(models.Device.name).all()
+    service_counts = {
+        device_id: count
+        for device_id, count in db.query(
+            models.Service.device_id, func.count(models.Service.id)
+        )
+        .group_by(models.Service.device_id)
+        .all()
+    }
+    credential_counts = {
+        device_id: count
+        for device_id, count in db.query(
+            models.Credential.device_id, func.count(models.Credential.id)
+        )
+        .group_by(models.Credential.device_id)
+        .all()
+    }
+    command_counts = {
+        device_id: count
+        for device_id, count in db.query(
+            models.Command.applies_to_id, func.count(models.Command.id)
+        )
+        .filter(models.Command.applies_to_type == "device")
+        .group_by(models.Command.applies_to_id)
+        .all()
+    }
+    return render(
+        request,
+        "devices.html",
+        {
+            "devices": devices,
+            "q": q,
+            "tags": tag_map(db, "device"),
+            "service_counts": service_counts,
+            "credential_counts": credential_counts,
+            "command_counts": command_counts,
+        },
+        user=user,
+    )
+
+
+@app.get("/devices/new", response_class=HTMLResponse)
+def device_new_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return render(request, "device_form.html", {"device": None, "hardware": None, "tag_text": ""}, user=user)
+
+
+@app.post("/devices/new")
+def device_create(
+    request: Request,
+    csrf: str = Form(...),
+    name: str = Form(...),
+    type: str = Form("server"),
+    purpose: str = Form(""),
+    hostname: str = Form(""),
+    primary_ip: str = Form(""),
+    os_name: str = Form(""),
+    os_version: str = Form(""),
+    location: str = Form(""),
+    status_manual: str = Form("unknown"),
+    notes: str = Form(""),
+    hw_model: str = Form(""),
+    hw_cpu: str = Form(""),
+    hw_ram: str = Form(""),
+    hw_gpu: str = Form(""),
+    hw_storage: str = Form(""),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    device = models.Device(
+        name=name.strip(),
+        slug=unique_slug(db, models.Device, name),
+        type=type.strip() or "server",
+        purpose=purpose,
+        hostname=hostname,
+        primary_ip=primary_ip,
+        os_name=os_name,
+        os_version=os_version,
+        location=location,
+        status_manual=status_manual,
+        notes=notes,
+    )
+    db.add(device)
+    db.flush()
+    db.add(
+        models.DeviceHardware(
+            device_id=device.id,
+            model=hw_model,
+            cpu=hw_cpu,
+            ram=hw_ram,
+            gpu=hw_gpu,
+            storage_summary=hw_storage,
+        )
+    )
+    set_tags(db, "device", device.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="device_created", object_type="device", object_id=device.id))
+    db.commit()
+    flash(request, f"Device {device.name} created.", "success")
+    return redirect(f"/devices/{device.id}")
+
+
+@app.get("/devices/{device_id}", response_class=HTMLResponse)
+def device_detail(
+    request: Request,
+    device_id: int,
+    tab: str = "overview",
+    favorites: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    device = db.get(models.Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found.")
+    commands = (
+        db.query(models.Command)
+        .filter(
+            or_(
+                (models.Command.applies_to_type == "device")
+                & (models.Command.applies_to_id == device.id),
+                models.Command.applies_to_type == "generic",
+            )
+        )
+        .order_by(models.Command.category, models.Command.name)
+        .all()
+    )
+    history = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.object_type == "device", models.AuditLog.object_id == device.id)
+        .order_by(models.AuditLog.created_at.desc())
+        .limit(25)
+        .all()
+    )
+    notes = (
+        db.query(models.Note)
+        .filter(models.Note.object_type == "device", models.Note.object_id == device.id)
+        .order_by(models.Note.updated_at.desc())
+        .all()
+    )
+    grouped_services: dict[str, list[models.Service]] = {}
+    for service in sorted(device.services, key=lambda item: (item.docker_project or "Ungrouped", item.name.lower())):
+        grouped_services.setdefault(service.docker_project or "Ungrouped", []).append(service)
+    service_groups = [
+        {"name": name, "services": services}
+        for name, services in grouped_services.items()
+    ]
+    return render(
+        request,
+        "device_detail.html",
+        {
+            "device": device,
+            "tab": tab,
+            "commands": commands,
+            "history": history,
+            "notes": notes,
+            "tag_list": tags_for(db, "device", device.id),
+            "service_groups": service_groups,
+            "quick_credentials": _quick_credentials_for_device(db, device),
+            "favorite_edit": favorites == "edit",
+        },
+        user=user,
+    )
+
+
+@app.post("/devices/{device_id}/quick-credentials")
+def device_quick_credentials_update(
+    request: Request,
+    device_id: int,
+    csrf: str = Form(...),
+    credential_id: int = Form(...),
+    action: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    device = db.get(models.Device, device_id)
+    credential = db.get(models.Credential, credential_id)
+    if not device or not credential or credential.device_id != device.id:
+        raise HTTPException(404, "Credential not found on this device.")
+    order_key = f"quick_credential_order:{device.id}"
+    hidden_key = f"quick_credential_hidden:{device.id}"
+    current = _id_list(get_app_settings(db).get(order_key, ""))
+    all_ids = [item.id for item in _quick_credentials_for_device(db, device)]
+    for existing_id in all_ids:
+        if existing_id not in current:
+            current.append(existing_id)
+    if credential.id not in current:
+        current.append(credential.id)
+    index = current.index(credential.id)
+    if action == "up" and index > 0:
+        current[index - 1], current[index] = current[index], current[index - 1]
+    elif action == "down" and index < len(current) - 1:
+        current[index + 1], current[index] = current[index], current[index + 1]
+    elif action == "hide":
+        hidden = set(_id_list(get_app_settings(db).get(hidden_key, "")))
+        hidden.add(credential.id)
+        set_app_setting(db, hidden_key, ",".join(str(item) for item in sorted(hidden)))
+    elif action == "show":
+        hidden = set(_id_list(get_app_settings(db).get(hidden_key, "")))
+        hidden.discard(credential.id)
+        set_app_setting(db, hidden_key, ",".join(str(item) for item in sorted(hidden)))
+    set_app_setting(db, order_key, ",".join(str(item) for item in current))
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="quick_credentials_updated",
+            object_type="device",
+            object_id=device.id,
+            details_json={"credential_id": credential.id, "action": action},
+        )
+    )
+    db.commit()
+    return redirect(f"/devices/{device.id}")
+
+
+@app.get("/devices/{device_id}/edit", response_class=HTMLResponse)
+def device_edit_page(
+    request: Request,
+    device_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    device = db.get(models.Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found.")
+    return render(
+        request,
+        "device_form.html",
+        {"device": device, "hardware": device.hardware, "tag_text": ", ".join(tags_for(db, "device", device.id))},
+        user=user,
+    )
+
+
+@app.post("/devices/{device_id}/edit")
+def device_update(
+    request: Request,
+    device_id: int,
+    csrf: str = Form(...),
+    name: str = Form(...),
+    type: str = Form("server"),
+    purpose: str = Form(""),
+    hostname: str = Form(""),
+    primary_ip: str = Form(""),
+    os_name: str = Form(""),
+    os_version: str = Form(""),
+    location: str = Form(""),
+    status_manual: str = Form("unknown"),
+    notes: str = Form(""),
+    hw_model: str = Form(""),
+    hw_cpu: str = Form(""),
+    hw_ram: str = Form(""),
+    hw_gpu: str = Form(""),
+    hw_storage: str = Form(""),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    device = db.get(models.Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found.")
+    device.name = name.strip()
+    device.slug = unique_slug(db, models.Device, name, existing_id=device.id)
+    device.type = type
+    device.purpose = purpose
+    device.hostname = hostname
+    device.primary_ip = primary_ip
+    device.os_name = os_name
+    device.os_version = os_version
+    device.location = location
+    device.status_manual = status_manual
+    device.notes = notes
+    if not device.hardware:
+        device.hardware = models.DeviceHardware(device_id=device.id)
+    device.hardware.model = hw_model
+    device.hardware.cpu = hw_cpu
+    device.hardware.ram = hw_ram
+    device.hardware.gpu = hw_gpu
+    device.hardware.storage_summary = hw_storage
+    set_tags(db, "device", device.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="device_edited", object_type="device", object_id=device.id))
+    db.commit()
+    flash(request, f"Device {device.name} saved.", "success")
+    return redirect(f"/devices/{device.id}")
+
+
+@app.get("/services", response_class=HTMLResponse)
+def services_page(
+    request: Request,
+    q: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    query = db.query(models.Service)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                models.Service.name.ilike(like),
+                models.Service.purpose.ilike(like),
+                models.Service.local_url.ilike(like),
+                models.Service.public_url.ilike(like),
+                models.Service.repo_url.ilike(like),
+                models.Service.compose_path.ilike(like),
+                models.Service.notes.ilike(like),
+            )
+        )
+    services = query.order_by(models.Service.name).all()
+    return render(
+        request,
+        "services.html",
+        {"services": services, "q": q, "tags": tag_map(db, "service")},
+        user=user,
+    )
+
+
+@app.get("/services/new", response_class=HTMLResponse)
+def service_new_page(
+    request: Request,
+    device_id: int | None = None,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    devices = db.query(models.Device).order_by(models.Device.name).all()
+    return render(
+        request,
+        "service_form.html",
+        {"service": None, "devices": devices, "device_id": device_id, "tag_text": ""},
+        user=user,
+    )
+
+
+@app.post("/services/new")
+def service_create(
+    request: Request,
+    csrf: str = Form(...),
+    device_id: int = Form(...),
+    name: str = Form(...),
+    type: str = Form(""),
+    purpose: str = Form(""),
+    status_manual: str = Form("unknown"),
+    local_url: str = Form(""),
+    public_url: str = Form(""),
+    repo_url: str = Form(""),
+    compose_path: str = Form(""),
+    data_path: str = Form(""),
+    config_path: str = Form(""),
+    log_path: str = Form(""),
+    backup_path: str = Form(""),
+    docker_project: str = Form(""),
+    container_name: str = Form(""),
+    image: str = Form(""),
+    notes: str = Form(""),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    device = db.get(models.Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found.")
+    service = models.Service(
+        device_id=device_id,
+        name=name.strip(),
+        slug=slugify(name),
+        type=type,
+        purpose=purpose,
+        status_manual=status_manual,
+        local_url=local_url,
+        public_url=public_url,
+        repo_url=repo_url,
+        compose_path=compose_path,
+        data_path=data_path,
+        config_path=config_path,
+        log_path=log_path,
+        backup_path=backup_path,
+        docker_project=docker_project,
+        container_name=container_name,
+        image=image,
+        notes=notes,
+    )
+    db.add(service)
+    db.flush()
+    set_tags(db, "service", service.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="service_created", object_type="service", object_id=service.id))
+    db.commit()
+    flash(request, f"Service {service.name} created.", "success")
+    return redirect(f"/services/{service.id}")
+
+
+@app.get("/services/{service_id}", response_class=HTMLResponse)
+def service_detail(
+    request: Request,
+    service_id: int,
+    tab: str = "overview",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    service = db.get(models.Service, service_id)
+    if not service:
+        raise HTTPException(404, "Service not found.")
+    commands = (
+        db.query(models.Command)
+        .filter(
+            or_(
+                (models.Command.applies_to_type == "service")
+                & (models.Command.applies_to_id == service.id),
+                models.Command.applies_to_type == "generic",
+            )
+        )
+        .order_by(models.Command.category, models.Command.name)
+        .all()
+    )
+    history = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.object_type == "service", models.AuditLog.object_id == service.id)
+        .order_by(models.AuditLog.created_at.desc())
+        .limit(25)
+        .all()
+    )
+    notes = (
+        db.query(models.Note)
+        .filter(models.Note.object_type == "service", models.Note.object_id == service.id)
+        .order_by(models.Note.updated_at.desc())
+        .all()
+    )
+    return render(
+        request,
+        "service_detail.html",
+        {
+            "service": service,
+            "tab": tab,
+            "commands": commands,
+            "history": history,
+            "notes": notes,
+            "tag_list": tags_for(db, "service", service.id),
+        },
+        user=user,
+    )
+
+
+@app.get("/services/{service_id}/edit", response_class=HTMLResponse)
+def service_edit_page(
+    request: Request,
+    service_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    service = db.get(models.Service, service_id)
+    if not service:
+        raise HTTPException(404, "Service not found.")
+    devices = db.query(models.Device).order_by(models.Device.name).all()
+    return render(
+        request,
+        "service_form.html",
+        {
+            "service": service,
+            "devices": devices,
+            "device_id": service.device_id,
+            "tag_text": ", ".join(tags_for(db, "service", service.id)),
+        },
+        user=user,
+    )
+
+
+@app.post("/services/{service_id}/edit")
+def service_update(
+    request: Request,
+    service_id: int,
+    csrf: str = Form(...),
+    device_id: int = Form(...),
+    name: str = Form(...),
+    type: str = Form(""),
+    purpose: str = Form(""),
+    status_manual: str = Form("unknown"),
+    local_url: str = Form(""),
+    public_url: str = Form(""),
+    repo_url: str = Form(""),
+    compose_path: str = Form(""),
+    data_path: str = Form(""),
+    config_path: str = Form(""),
+    log_path: str = Form(""),
+    backup_path: str = Form(""),
+    docker_project: str = Form(""),
+    container_name: str = Form(""),
+    image: str = Form(""),
+    notes: str = Form(""),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    service = db.get(models.Service, service_id)
+    if not service:
+        raise HTTPException(404, "Service not found.")
+    service.device_id = device_id
+    service.name = name.strip()
+    service.slug = slugify(name)
+    service.type = type
+    service.purpose = purpose
+    service.status_manual = status_manual
+    service.local_url = local_url
+    service.public_url = public_url
+    service.repo_url = repo_url
+    service.compose_path = compose_path
+    service.data_path = data_path
+    service.config_path = config_path
+    service.log_path = log_path
+    service.backup_path = backup_path
+    service.docker_project = docker_project
+    service.container_name = container_name
+    service.image = image
+    service.notes = notes
+    set_tags(db, "service", service.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="service_edited", object_type="service", object_id=service.id))
+    db.commit()
+    flash(request, f"Service {service.name} saved.", "success")
+    return redirect(f"/services/{service.id}")
+
+
+@app.get("/credentials", response_class=HTMLResponse)
+def credentials_page(
+    request: Request,
+    q: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    query = db.query(models.Credential)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                models.Credential.label.ilike(like),
+                models.Credential.username.ilike(like),
+                models.Credential.login_url.ilike(like),
+                models.Credential.notes.ilike(like),
+            )
+        )
+    credentials = query.order_by(models.Credential.label).all()
+    return render(
+        request,
+        "credentials.html",
+        {"credentials": credentials, "q": q, "tags": tag_map(db, "credential")},
+        user=user,
+    )
+
+
+@app.get("/credentials/new", response_class=HTMLResponse)
+def credential_new_page(
+    request: Request,
+    device_id: int | None = None,
+    service_id: int | None = None,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return render(
+        request,
+        "credential_form.html",
+        {
+            "credential": None,
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "device_id": device_id,
+            "service_id": service_id,
+            "tag_text": "",
+        },
+        user=user,
+    )
+
+
+@app.get("/credentials/{credential_id}", response_class=HTMLResponse)
+def credential_detail_page(
+    request: Request,
+    credential_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    credential = db.get(models.Credential, credential_id)
+    if not credential:
+        raise HTTPException(404, "Credential not found.")
+    return render(
+        request,
+        "credential_detail.html",
+        {
+            "credential": credential,
+            "tag_list": tags_for(db, "credential", credential.id),
+        },
+        user=user,
+    )
+
+
+@app.post("/credentials/new")
+def credential_create(
+    request: Request,
+    csrf: str = Form(...),
+    label: str = Form(...),
+    username: str = Form(""),
+    secret: str = Form(...),
+    secret_type: str = Form("password"),
+    security_level: str = Form("low"),
+    device_id: str = Form(""),
+    service_id: str = Form(""),
+    service_name: str = Form(""),
+    login_url: str = Form(""),
+    notes: str = Form(""),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    resolved_device_id, resolved_service_id, error = _resolve_service_for_credential(
+        db,
+        device_id=int(device_id) if device_id else None,
+        service_id=int(service_id) if service_id else None,
+        service_name=service_name,
+        label=label,
+    )
+    if error:
+        flash(request, error, "warning")
+        return redirect("/credentials/new")
+    if _duplicate_credential(
+        db,
+        device_id=resolved_device_id,
+        service_id=resolved_service_id,
+        label=label,
+        username=username,
+    ):
+        flash(request, "That credential already appears to exist. Edit the existing one if it needs changes.", "warning")
+        return redirect("/credentials")
+    credential = models.Credential(
+        label=label.strip(),
+        username=username.strip(),
+        secret_encrypted=encrypt_text(secret),
+        secret_type=secret_type,
+        security_level=security_level,
+        device_id=resolved_device_id,
+        service_id=resolved_service_id,
+        login_url=login_url,
+        notes=notes,
+        last_changed_at=now_utc(),
+    )
+    db.add(credential)
+    db.flush()
+    tag_text = ", ".join(filter(None, [tags, _auto_tags_for_label(label)]))
+    set_tags(db, "credential", credential.id, tag_text)
+    db.add(models.AuditLog(user_id=user.id, action="credential_created", object_type="credential", object_id=credential.id))
+    db.commit()
+    flash(request, "Credential stored encrypted at rest.", "success")
+    return redirect("/credentials")
+
+
+@app.get("/credentials/{credential_id}/edit", response_class=HTMLResponse)
+def credential_edit_page(
+    request: Request,
+    credential_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    credential = db.get(models.Credential, credential_id)
+    if not credential:
+        raise HTTPException(404, "Credential not found.")
+    return render(
+        request,
+        "credential_form.html",
+        {
+            "credential": credential,
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "device_id": credential.device_id,
+            "service_id": credential.service_id,
+            "tag_text": ", ".join(tags_for(db, "credential", credential.id)),
+        },
+        user=user,
+    )
+
+
+@app.post("/credentials/{credential_id}/edit")
+def credential_update(
+    request: Request,
+    credential_id: int,
+    csrf: str = Form(...),
+    label: str = Form(...),
+    username: str = Form(""),
+    secret: str = Form(""),
+    secret_type: str = Form("password"),
+    security_level: str = Form("low"),
+    device_id: str = Form(""),
+    service_id: str = Form(""),
+    service_name: str = Form(""),
+    login_url: str = Form(""),
+    notes: str = Form(""),
+    active: str = Form("on"),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    credential = db.get(models.Credential, credential_id)
+    if not credential:
+        raise HTTPException(404, "Credential not found.")
+    resolved_device_id, resolved_service_id, error = _resolve_service_for_credential(
+        db,
+        device_id=int(device_id) if device_id else None,
+        service_id=int(service_id) if service_id else None,
+        service_name=service_name,
+        label=label,
+    )
+    if error:
+        flash(request, error, "warning")
+        return redirect(f"/credentials/{credential.id}/edit")
+    duplicate = _duplicate_credential(
+        db,
+        device_id=resolved_device_id,
+        service_id=resolved_service_id,
+        label=label,
+        username=username,
+    )
+    if duplicate and duplicate.id != credential.id:
+        flash(request, "Another credential already uses that label and username in this scope.", "warning")
+        return redirect(f"/credentials/{credential.id}/edit")
+    credential.label = label.strip()
+    credential.username = username.strip()
+    if secret:
+        credential.secret_encrypted = encrypt_text(secret)
+        credential.last_changed_at = now_utc()
+    credential.secret_type = secret_type
+    credential.security_level = security_level
+    credential.device_id = resolved_device_id
+    credential.service_id = resolved_service_id
+    credential.login_url = login_url
+    credential.notes = notes
+    credential.active = active == "on"
+    tag_text = ", ".join(filter(None, [tags, _auto_tags_for_label(label)]))
+    set_tags(db, "credential", credential.id, tag_text)
+    db.add(models.AuditLog(user_id=user.id, action="credential_edited", object_type="credential", object_id=credential.id))
+    db.commit()
+    flash(request, "Credential saved.", "success")
+    return redirect("/credentials")
+
+
+@app.post("/delete/{object_type}/{object_id}")
+def delete_object(
+    request: Request,
+    object_type: str,
+    object_id: int,
+    csrf: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    model_map = {
+        "device": models.Device,
+        "service": models.Service,
+        "credential": models.Credential,
+        "command": models.Command,
+        "port": models.Port,
+        "url": models.Url,
+        "note": models.Note,
+    }
+    model = model_map.get(object_type)
+    if not model:
+        raise HTTPException(404, "Delete is not enabled for that object yet.")
+    obj = db.get(model, object_id)
+    if not obj:
+        raise HTTPException(404, "Object not found.")
+    if object_type == "device" and isinstance(obj, models.Device):
+        service_ids = [service.id for service in obj.services]
+        credential_filter = models.Credential.device_id == obj.id
+        if service_ids:
+            credential_filter = or_(credential_filter, models.Credential.service_id.in_(service_ids))
+        related_credentials = db.query(models.Credential).filter(credential_filter).all()
+        for credential in related_credentials:
+            db.query(models.TagLink).filter_by(object_type="credential", object_id=credential.id).delete()
+            db.delete(credential)
+        for service_id in service_ids:
+            db.query(models.TagLink).filter_by(object_type="service", object_id=service_id).delete()
+            db.query(models.Note).filter_by(object_type="service", object_id=service_id).delete()
+            for command in db.query(models.Command).filter_by(applies_to_type="service", applies_to_id=service_id).all():
+                db.query(models.TagLink).filter_by(object_type="command", object_id=command.id).delete()
+                db.delete(command)
+        for port in list(obj.ports):
+            db.query(models.TagLink).filter_by(object_type="port", object_id=port.id).delete()
+            db.delete(port)
+        for url in list(obj.urls):
+            db.query(models.TagLink).filter_by(object_type="url", object_id=url.id).delete()
+            db.delete(url)
+        db.query(models.Note).filter_by(object_type="device", object_id=obj.id).delete()
+        for command in db.query(models.Command).filter_by(applies_to_type="device", applies_to_id=obj.id).all():
+            db.query(models.TagLink).filter_by(object_type="command", object_id=command.id).delete()
+            db.delete(command)
+    elif object_type == "service" and isinstance(obj, models.Service):
+        _delete_service_tree(db, obj)
+        db.add(models.AuditLog(user_id=user.id, action=f"{object_type}_deleted", object_type=object_type, object_id=object_id))
+        db.commit()
+        flash(request, f"{object_type.title()} deleted.", "success")
+        return redirect(request.headers.get("referer") or "/")
+    tag_object_types = [object_type]
+    if object_type == "note" and isinstance(obj, models.Note):
+        tag_object_types.append(obj.object_type)
+    db.query(models.TagLink).filter(
+        models.TagLink.object_type.in_(tag_object_types),
+        models.TagLink.object_id == object_id,
+    ).delete()
+    db.delete(obj)
+    db.add(models.AuditLog(user_id=user.id, action=f"{object_type}_deleted", object_type=object_type, object_id=object_id))
+    db.commit()
+    flash(request, f"{object_type.title()} deleted.", "success")
+    return redirect(request.headers.get("referer") or "/")
+
+
+def medium_unlocked(request: Request) -> bool:
+    raw = request.session.get("credential_unlock_until")
+    if not raw:
+        return False
+    try:
+        return datetime.fromisoformat(raw) > now_utc()
+    except ValueError:
+        return False
+
+
+@app.get("/credentials/{credential_id}/reveal", response_class=HTMLResponse)
+def credential_reveal_page(
+    request: Request,
+    credential_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    credential = db.get(models.Credential, credential_id)
+    if not credential:
+        raise HTTPException(404, "Credential not found.")
+    can_reveal_without_challenge = credential.security_level == "low" or (
+        credential.security_level == "medium" and medium_unlocked(request)
+    )
+    return render(
+        request,
+        "credential_reveal.html",
+        {
+            "credential": credential,
+            "revealed_secret": None,
+            "can_reveal_without_challenge": can_reveal_without_challenge,
+        },
+        user=user,
+    )
+
+
+@app.post("/credentials/{credential_id}/reveal", response_class=HTMLResponse)
+def credential_reveal_post(
+    request: Request,
+    credential_id: int,
+    csrf: str = Form(...),
+    challenge: str = Form(""),
+    reason: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    check_csrf(request, csrf)
+    credential = db.get(models.Credential, credential_id)
+    if not credential:
+        raise HTTPException(404, "Credential not found.")
+    needs_challenge = credential.security_level in {"high", "extreme"} or (
+        credential.security_level == "medium" and not medium_unlocked(request)
+    )
+    if needs_challenge and not challenge_ok(
+        challenge, user.password_hash, user.secondary_password_hash
+    ):
+        flash(request, "Reveal challenge failed.", "danger")
+        return redirect(f"/credentials/{credential.id}/reveal")
+    if credential.security_level == "medium" and needs_challenge:
+        request.session["credential_unlock_until"] = unlock_expiry().isoformat()
+    return reveal_credential(request, credential, user, db, reason=reason)
+
+
+def reveal_credential(
+    request: Request,
+    credential: models.Credential,
+    user: models.User,
+    db: Session,
+    *,
+    reason: str = "",
+) -> HTMLResponse:
+    credential.last_revealed_at = now_utc()
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="credential_revealed",
+            object_type="credential",
+            object_id=credential.id,
+            details_json={"level": credential.security_level, "reason": reason},
+        )
+    )
+    db.commit()
+    return render(
+        request,
+        "credential_reveal.html",
+        {"credential": credential, "revealed_secret": decrypt_text(credential.secret_encrypted)},
+        user=user,
+    )
+
+
+@app.post("/credentials/{credential_id}/reveal-json")
+async def credential_reveal_json(
+    request: Request,
+    credential_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    check_csrf(request, request.headers.get("x-csrf-token", ""))
+    payload = await request.json()
+    credential = db.get(models.Credential, credential_id)
+    if not credential:
+        return JSONResponse({"detail": "Credential not found."}, status_code=404)
+    needs_challenge = credential.security_level in {"high", "extreme"} or (
+        credential.security_level == "medium" and not medium_unlocked(request)
+    )
+    if needs_challenge and not challenge_ok(
+        str(payload.get("challenge", "")), user.password_hash, user.secondary_password_hash
+    ):
+        return JSONResponse(
+            {
+                "detail": "Reveal challenge required.",
+                "requires_challenge": True,
+                "requires_reason": credential.security_level in {"high", "extreme"},
+                "message": "Password or reveal PIN",
+            },
+            status_code=403,
+        )
+    if credential.security_level == "medium" and needs_challenge:
+        request.session["credential_unlock_until"] = unlock_expiry().isoformat()
+    credential.last_revealed_at = now_utc()
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="credential_revealed",
+            object_type="credential",
+            object_id=credential.id,
+            details_json={
+                "level": credential.security_level,
+                "reason": str(payload.get("reason", "")),
+                "surface": "inline",
+            },
+        )
+    )
+    db.commit()
+    return JSONResponse(
+        {
+            "id": credential.id,
+            "username": credential.username,
+            "secret": decrypt_text(credential.secret_encrypted),
+            "login_url": credential.login_url,
+            "last_revealed_at": format_dt(credential.last_revealed_at),
+        }
+    )
+
+
+@app.get("/commands", response_class=HTMLResponse)
+def commands_page(
+    request: Request,
+    q: str = "",
+    category: str = "",
+    risk: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    query = db.query(models.Command)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(
+            or_(
+                models.Command.name.ilike(like),
+                models.Command.category.ilike(like),
+                models.Command.short_description.ilike(like),
+                models.Command.long_description.ilike(like),
+                models.Command.command_template.ilike(like),
+                models.Command.notes.ilike(like),
+            )
+        )
+    if category:
+        query = query.filter(models.Command.category == category)
+    if risk:
+        query = query.filter(models.Command.risk_level == risk)
+    commands = query.order_by(models.Command.category, models.Command.name).all()
+    categories = [row[0] for row in db.query(models.Command.category).distinct().order_by(models.Command.category).all()]
+    return render(
+        request,
+        "commands.html",
+        {
+            "commands": commands,
+            "q": q,
+            "category": category,
+            "risk": risk,
+            "categories": categories,
+            "tags": tag_map(db, "command"),
+        },
+        user=user,
+    )
+
+
+@app.get("/commands/new", response_class=HTMLResponse)
+def command_new_page(
+    request: Request,
+    applies_to_type: str = "generic",
+    applies_to_id: int | None = None,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return render(
+        request,
+        "command_form.html",
+        {
+            "command": None,
+            "applies_to_type": applies_to_type,
+            "applies_to_id": applies_to_id,
+            "tag_text": "",
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "services": db.query(models.Service).order_by(models.Service.name).all(),
+        },
+        user=user,
+    )
+
+
+@app.post("/commands/new")
+def command_create(
+    request: Request,
+    csrf: str = Form(...),
+    name: str = Form(...),
+    category: str = Form("Common"),
+    applies_to_type: str = Form("generic"),
+    applies_to_id: str = Form(""),
+    command_template: str = Form(...),
+    short_description: str = Form(""),
+    long_description: str = Form(""),
+    where_to_run: str = Form("Remote SSH host"),
+    risk_level: str = Form("safe"),
+    help_low: str = Form(""),
+    help_high: str = Form(""),
+    notes: str = Form(""),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if _duplicate_command(db, command_template):
+        flash(request, "That command already exists in the library.", "warning")
+        return redirect("/commands")
+    command = models.Command(
+        name=name,
+        category=category,
+        applies_to_type=applies_to_type,
+        applies_to_id=int(applies_to_id) if applies_to_id else None,
+        command_template=command_template,
+        short_description=short_description,
+        long_description=long_description,
+        where_to_run=where_to_run,
+        risk_level=risk_level,
+        help_low=help_low,
+        help_high=help_high,
+        notes=notes,
+    )
+    db.add(command)
+    db.flush()
+    set_tags(db, "command", command.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="command_created", object_type="command", object_id=command.id))
+    db.commit()
+    flash(request, "Command saved.", "success")
+    return redirect("/commands")
+
+
+@app.get("/commands/{command_id}/edit", response_class=HTMLResponse)
+def command_edit_page(
+    request: Request,
+    command_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    command = db.get(models.Command, command_id)
+    if not command:
+        raise HTTPException(404, "Command not found.")
+    return render(
+        request,
+        "command_form.html",
+        {
+            "command": command,
+            "applies_to_type": command.applies_to_type,
+            "applies_to_id": command.applies_to_id,
+            "tag_text": ", ".join(tags_for(db, "command", command.id)),
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "services": db.query(models.Service).order_by(models.Service.name).all(),
+        },
+        user=user,
+    )
+
+
+@app.post("/commands/{command_id}/edit")
+def command_update(
+    request: Request,
+    command_id: int,
+    csrf: str = Form(...),
+    name: str = Form(...),
+    category: str = Form("Common"),
+    applies_to_type: str = Form("generic"),
+    applies_to_id: str = Form(""),
+    command_template: str = Form(...),
+    short_description: str = Form(""),
+    long_description: str = Form(""),
+    where_to_run: str = Form("Remote SSH host"),
+    risk_level: str = Form("safe"),
+    help_low: str = Form(""),
+    help_high: str = Form(""),
+    notes: str = Form(""),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    command = db.get(models.Command, command_id)
+    if not command:
+        raise HTTPException(404, "Command not found.")
+    duplicate = _duplicate_command(db, command_template)
+    if duplicate and duplicate.id != command.id:
+        flash(request, "Another command already uses that exact command text.", "warning")
+        return redirect(f"/commands/{command.id}/edit")
+    command.name = name
+    command.category = category
+    command.applies_to_type = applies_to_type
+    command.applies_to_id = int(applies_to_id) if applies_to_id else None
+    command.command_template = command_template
+    command.short_description = short_description
+    command.long_description = long_description
+    command.where_to_run = where_to_run
+    command.risk_level = risk_level
+    command.help_low = help_low
+    command.help_high = help_high
+    command.notes = notes
+    set_tags(db, "command", command.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="command_edited", object_type="command", object_id=command.id))
+    db.commit()
+    flash(request, "Command saved.", "success")
+    return redirect("/commands")
+
+
+@app.get("/ports", response_class=HTMLResponse)
+def ports_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return render(
+        request,
+        "ports.html",
+        {
+            "ports": db.query(models.Port).order_by(models.Port.host_port).all(),
+            "urls": db.query(models.Url).order_by(models.Url.url).all(),
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "services": db.query(models.Service).order_by(models.Service.name).all(),
+        },
+        user=user,
+    )
+
+
+@app.get("/tags", response_class=HTMLResponse)
+def tags_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    links = db.query(models.TagLink).all()
+    used_tag_ids = {link.tag_id for link in links}
+    tags = (
+        db.query(models.Tag)
+        .filter(models.Tag.id.in_(used_tag_ids))
+        .order_by(models.Tag.name)
+        .all()
+        if used_tag_ids
+        else []
+    )
+    grouped: dict[int, list[models.TagLink]] = {}
+    for link in links:
+        grouped.setdefault(link.tag_id, []).append(link)
+    return render(request, "tags.html", {"tags": tags, "grouped": grouped}, user=user)
+
+
+@app.post("/ports/add")
+def add_port(
+    request: Request,
+    csrf: str = Form(...),
+    device_id: int = Form(...),
+    service_id: str = Form(""),
+    host_port: int = Form(...),
+    internal_port: str = Form(""),
+    protocol: str = Form("tcp"),
+    purpose: str = Form(""),
+    tags: str = Form(""),
+    notes: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    duplicate = (
+        db.query(models.Port)
+        .filter(
+            models.Port.device_id == device_id,
+            models.Port.host_port == host_port,
+            models.Port.protocol == protocol,
+        )
+        .first()
+    )
+    if duplicate:
+        flash(request, "That port is already documented for this device.", "warning")
+        return redirect("/ports")
+    port = models.Port(
+        device_id=device_id,
+        service_id=int(service_id) if service_id else None,
+        host_port=host_port,
+        internal_port=int(internal_port) if internal_port else None,
+        protocol=protocol,
+        purpose=purpose,
+        notes=notes,
+    )
+    db.add(port)
+    db.flush()
+    set_tags(db, "port", port.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="port_added", object_type="port", object_id=port.id))
+    db.commit()
+    flash(request, "Port added.", "success")
+    return redirect("/ports")
+
+
+@app.post("/urls/add")
+def add_url(
+    request: Request,
+    csrf: str = Form(...),
+    device_id: str = Form(""),
+    service_id: str = Form(""),
+    label: str = Form(""),
+    url: str = Form(...),
+    url_type: str = Form("local"),
+    notes: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    db.add(
+        models.Url(
+            device_id=int(device_id) if device_id else None,
+            service_id=int(service_id) if service_id else None,
+            label=label,
+            url=url,
+            url_type=url_type,
+            notes=notes,
+        )
+    )
+    db.add(models.AuditLog(user_id=user.id, action="url_added", object_type="url"))
+    db.commit()
+    flash(request, "URL added.", "success")
+    return redirect("/ports")
+
+
+@app.post("/notes/add")
+def add_note(
+    request: Request,
+    csrf: str = Form(...),
+    object_type: str = Form(...),
+    object_id: int = Form(...),
+    title: str = Form(""),
+    body: str = Form(...),
+    source: str = Form("manual"),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    db.add(models.Note(object_type=object_type, object_id=object_id, title=title, body=body, source=source))
+    db.add(models.AuditLog(user_id=user.id, action="note_added", object_type=object_type, object_id=object_id))
+    db.commit()
+    flash(request, "Note added.", "success")
+    return redirect(f"/{object_type}s/{object_id}")
+
+
+@app.get("/notes", response_class=HTMLResponse)
+def notes_page(
+    request: Request,
+    q: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    query = db.query(models.Note)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(models.Note.title.ilike(like), models.Note.body.ilike(like), models.Note.source.ilike(like)))
+    notes = query.order_by(models.Note.updated_at.desc()).limit(200).all()
+    return render(request, "notes.html", {"notes": notes, "q": q, "tags": tag_map(db, "quick_note")}, user=user)
+
+
+@app.post("/notes/{note_id}/tags")
+def note_tags_update(
+    request: Request,
+    note_id: int,
+    csrf: str = Form(...),
+    tags: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    note = db.get(models.Note, note_id)
+    if not note:
+        raise HTTPException(404, "Note not found.")
+    set_tags(db, note.object_type, note.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="note_tags_updated", object_type=note.object_type, object_id=note.id))
+    db.commit()
+    flash(request, "Note tags saved.", "success")
+    return redirect("/notes")
+
+
+@app.get("/smart-paste", response_class=HTMLResponse)
+def smart_paste_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return render(
+        request,
+        "smart_paste.html",
+        {
+            "inventory_command": INVENTORY_COMMAND,
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+        },
+        user=user,
+    )
+
+
+@app.post("/smart-paste", response_class=HTMLResponse)
+def smart_paste_parse(
+    request: Request,
+    csrf: str = Form(...),
+    raw_text: str = Form(...),
+    source_type: str = Form("raw_text"),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    check_csrf(request, csrf)
+    parsed = _annotate_import_suggestions(db, parse_smart_paste(raw_text))
+    record = models.ImportRecord(source_type=source_type, raw_text=raw_text, parsed_json=parsed, status="review")
+    db.add(record)
+    db.flush()
+    db.add(models.AuditLog(user_id=user.id, action="smart_paste_parsed", object_type="import", object_id=record.id))
+    db.commit()
+    return redirect(f"/smart-paste/{record.id}")
+
+
+@app.post("/quick-note")
+def quick_note_parse(
+    request: Request,
+    csrf: str = Form(...),
+    raw_text: str = Form(...),
+    title: str = Form(""),
+    tags: str = Form(""),
+    action: str = Form("save"),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    note = models.Note(
+        object_type="quick_note",
+        object_id=0,
+        title=title.strip() or "Quick note",
+        body=raw_text,
+        source="quick_note",
+    )
+    db.add(note)
+    db.flush()
+    set_tags(db, "quick_note", note.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="quick_note_saved", object_type="quick_note", object_id=note.id))
+    if action != "smart_paste":
+        db.commit()
+        flash(request, "Quick note saved.", "success")
+        return redirect(request.headers.get("referer") or "/notes")
+    parsed = _annotate_import_suggestions(db, parse_smart_paste(raw_text))
+    record = models.ImportRecord(
+        source_type="quick_note",
+        raw_text=raw_text,
+        parsed_json=parsed,
+        status="review",
+    )
+    db.add(record)
+    db.flush()
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="quick_note_parsed",
+            object_type="import",
+            object_id=record.id,
+        )
+    )
+    db.commit()
+    return redirect(f"/smart-paste/{record.id}")
+
+
+@app.get("/smart-paste/{import_id}", response_class=HTMLResponse)
+def smart_paste_review(
+    request: Request,
+    import_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    record = db.get(models.ImportRecord, import_id)
+    if not record:
+        raise HTTPException(404, "Import not found.")
+    return render(
+        request,
+        "smart_paste_review.html",
+        {
+            "record": record,
+            "parsed": _annotate_import_suggestions(db, record.parsed_json),
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+        },
+        user=user,
+    )
+
+
+@app.post("/smart-paste/{import_id}/apply")
+async def smart_paste_apply(
+    request: Request,
+    import_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    form = await request.form()
+    check_csrf(request, str(form.get("csrf", "")))
+    ensure_writable()
+    record = db.get(models.ImportRecord, import_id)
+    if not record:
+        raise HTTPException(404, "Import not found.")
+    parsed = record.parsed_json
+    has_selected_items = any(
+        form.getlist(name)
+        for name in ["services", "ports", "urls", "commands", "credentials"]
+    ) or bool(form.get("apply_hardware"))
+    if not has_selected_items:
+        record.status = "reviewed"
+        db.add(models.AuditLog(user_id=user.id, action="smart_paste_reviewed_no_changes", object_type="import", object_id=record.id))
+        db.commit()
+        flash(request, "Smart Paste review saved with no changes applied.", "success")
+        return redirect("/smart-paste")
+    target_raw = str(form.get("target_device_id", "new"))
+    device: models.Device | None = None
+    if target_raw and target_raw != "new":
+        device = db.get(models.Device, int(target_raw))
+    if device is None:
+        detected = parsed.get("device", {})
+        name = str(form.get("device_name") or detected.get("name") or "Imported Device").strip()
+        device = models.Device(
+            name=name,
+            slug=unique_slug(db, models.Device, name),
+            type="server",
+            primary_ip=str(form.get("device_ip") or detected.get("primary_ip", "")),
+            os_name=str(form.get("device_os") or detected.get("os_name", "")),
+            notes="Created from Smart Paste review.",
+        )
+        db.add(device)
+        db.flush()
+        db.add(models.DeviceHardware(device_id=device.id))
+    else:
+        if form.get("device_name"):
+            device.name = str(form.get("device_name")).strip()
+            device.slug = unique_slug(db, models.Device, device.name, existing_id=device.id)
+        if form.get("device_ip"):
+            device.primary_ip = str(form.get("device_ip")).strip()
+        if form.get("device_os"):
+            device.os_name = str(form.get("device_os")).strip()
+    note_body = record.raw_text
+    secrets_redacted = False
+    for credential_hint in parsed.get("credentials", []):
+        secret_value = str(credential_hint.get("secret", "")).strip()
+        if len(secret_value) >= 3 and secret_value in note_body:
+            note_body = note_body.replace(secret_value, "[redacted imported secret]")
+            secrets_redacted = True
+    for service_hint in parsed.get("services", []):
+        for credential_hint in service_hint.get("credentials", []):
+            secret_value = str(credential_hint.get("secret", "")).strip()
+            if len(secret_value) >= 3 and secret_value in note_body:
+                note_body = note_body.replace(secret_value, "[redacted imported secret]")
+                secrets_redacted = True
+    db.add(
+        models.Note(
+            object_type="device",
+            object_id=device.id,
+            title="Original Smart Paste import" + (" (secrets redacted)" if secrets_redacted else ""),
+            body=note_body,
+            source=f"smart_paste:{record.id}",
+        )
+    )
+    extras = parsed.get("extras", {})
+    if device.hardware:
+        if form.get("apply_hardware"):
+            device.hardware.cpu = extras.get("cpu_summary", device.hardware.cpu)
+            device.hardware.ram = extras.get("memory_summary", device.hardware.ram)
+            device.hardware.storage_summary = extras.get("disk_summary", device.hardware.storage_summary)
+    for index_raw in form.getlist("services"):
+        item = parsed.get("services", [])[int(index_raw)]
+        service_name = str(form.get(f"service_name_{index_raw}") or item["name"]).strip()
+        if not service_name:
+            continue
+        exists = (
+            db.query(models.Service)
+            .filter(models.Service.device_id == device.id, models.Service.name.ilike(service_name))
+            .first()
+        )
+        if not exists:
+            exists = models.Service(
+                device_id=device.id,
+                name=service_name,
+                slug=slugify(service_name),
+                docker_project=str(form.get(f"service_group_{index_raw}") or item.get("stack_group", "")),
+                compose_path=str(form.get(f"service_compose_{index_raw}") or item.get("compose_path", "")),
+                container_name=item.get("container_name", ""),
+                image=item.get("image", ""),
+                notes=f"Imported from Smart Paste {record.id}.",
+            )
+            db.add(exists)
+            db.flush()
+        else:
+            group_value = str(form.get(f"service_group_{index_raw}") or item.get("stack_group", "")).strip()
+            compose_value = str(form.get(f"service_compose_{index_raw}") or item.get("compose_path", "")).strip()
+            exists.docker_project = group_value or exists.docker_project
+            exists.compose_path = compose_value or exists.compose_path
+            exists.container_name = item.get("container_name", "") or exists.container_name
+            exists.image = item.get("image", "") or exists.image
+        for url_value_raw in form.getlist("service_urls"):
+            try:
+                service_index_value, url_index_raw = str(url_value_raw).split(":", 1)
+            except ValueError:
+                continue
+            if service_index_value != str(index_raw):
+                continue
+            try:
+                url_item = item.get("urls", [])[int(url_index_raw)]
+            except (IndexError, ValueError):
+                continue
+            url_value = str(form.get(f"service_url_{index_raw}_{url_index_raw}") or url_item.get("url", "")).strip()
+            if not url_value:
+                continue
+            if str(url_item.get("url_type", "local")) == "public":
+                exists.public_url = url_value or exists.public_url
+            else:
+                exists.local_url = url_value or exists.local_url
+            duplicate_url = db.query(models.Url).filter(models.Url.url == url_value).first()
+            if not duplicate_url:
+                db.add(
+                    models.Url(
+                        device_id=device.id,
+                        service_id=exists.id,
+                        label=service_name,
+                        url=url_value,
+                        url_type=str(url_item.get("url_type", "local")),
+                        notes=f"Imported from Smart Paste {record.id}.",
+                    )
+                )
+        for port_value in form.getlist(f"service_port_{index_raw}"):
+            try:
+                _, host_port, protocol = str(port_value).split(":", 2)
+            except ValueError:
+                continue
+            if not host_port.isdigit():
+                continue
+            duplicate = (
+                db.query(models.Port)
+                .filter(
+                    models.Port.device_id == device.id,
+                    models.Port.service_id == exists.id,
+                    models.Port.host_port == int(host_port),
+                    models.Port.protocol == protocol,
+                )
+                .first()
+            )
+            if not duplicate:
+                db.add(
+                    models.Port(
+                        device_id=device.id,
+                        service_id=exists.id,
+                        host_port=int(host_port),
+                        protocol=protocol,
+                        purpose=service_name,
+                        notes=f"Imported from Smart Paste {record.id}.",
+                    )
+                )
+        for credential_value in form.getlist("service_credentials"):
+            try:
+                service_index_value, credential_index_raw = str(credential_value).split(":", 1)
+            except ValueError:
+                continue
+            if service_index_value != str(index_raw):
+                continue
+            try:
+                credential_item = item.get("credentials", [])[int(credential_index_raw)]
+            except (IndexError, ValueError):
+                continue
+            label = str(form.get(f"service_credential_label_{index_raw}_{credential_index_raw}") or credential_item.get("label") or f"{service_name} login").strip()
+            username = str(form.get(f"service_credential_username_{index_raw}_{credential_index_raw}") or credential_item.get("username", "")).strip()
+            secret = str(form.get(f"service_credential_secret_{index_raw}_{credential_index_raw}") or credential_item.get("secret", "")).strip()
+            login_url = str(form.get(f"service_credential_login_url_{index_raw}_{credential_index_raw}") or credential_item.get("login_url", "") or exists.local_url or exists.public_url).strip()
+            if not label or not secret:
+                continue
+            if _duplicate_credential(db, device_id=device.id, service_id=exists.id, label=label, username=username):
+                continue
+            credential = models.Credential(
+                device_id=device.id,
+                service_id=exists.id,
+                label=label,
+                username=username,
+                secret_encrypted=encrypt_text(secret),
+                secret_type="password",
+                security_level=str(credential_item.get("security_level", "medium")),
+                login_url=login_url,
+                notes=f"Imported from Smart Paste {record.id}.",
+                last_changed_at=now_utc(),
+                active=True,
+            )
+            db.add(credential)
+            db.flush()
+            auto_tags = _auto_tags_for_label(f"{label} {service_name}")
+            if auto_tags:
+                set_tags(db, "credential", credential.id, auto_tags)
+            db.add(
+                models.AuditLog(
+                    user_id=user.id,
+                    action="credential_created",
+                    object_type="credential",
+                    object_id=credential.id,
+                    details_json={"source": f"smart_paste:{record.id}"},
+                )
+            )
+    for index_raw in form.getlist("ports"):
+        item = parsed.get("ports", [])[int(index_raw)]
+        host_port = str(form.get(f"port_host_{index_raw}") or item["host_port"]).strip()
+        if not host_port.isdigit():
+            continue
+        protocol = str(form.get(f"port_protocol_{index_raw}") or item.get("protocol", "tcp"))
+        duplicate = (
+            db.query(models.Port)
+            .filter(
+                models.Port.device_id == device.id,
+                models.Port.host_port == int(host_port),
+                models.Port.protocol == protocol,
+            )
+            .first()
+        )
+        if not duplicate:
+            port = models.Port(
+                device_id=device.id,
+                host_port=int(host_port),
+                protocol=protocol,
+                purpose=str(form.get(f"port_purpose_{index_raw}") or item.get("purpose", "")),
+                notes=f"Imported from Smart Paste {record.id}.",
+            )
+            db.add(port)
+            db.flush()
+            port_tags = str(form.get(f"port_tags_{index_raw}") or item.get("tags", ""))
+            if port_tags:
+                set_tags(db, "port", port.id, port_tags)
+    for index_raw in form.getlist("urls"):
+        item = parsed.get("urls", [])[int(index_raw)]
+        url_value = str(form.get(f"url_value_{index_raw}") or item["url"]).strip()
+        if not url_value:
+            continue
+        duplicate = db.query(models.Url).filter(models.Url.url == url_value).first()
+        if not duplicate:
+            db.add(
+                models.Url(
+                    device_id=device.id,
+                    url=url_value,
+                    url_type=str(form.get(f"url_type_{index_raw}") or item.get("url_type", "local")),
+                    notes=f"Imported from Smart Paste {record.id}.",
+                )
+            )
+    for index_raw in form.getlist("commands"):
+        item = parsed.get("commands", [])[int(index_raw)]
+        command_text = str(form.get(f"command_text_{index_raw}") or item["command_template"]).strip()
+        if not command_text:
+            continue
+        if _duplicate_command(db, command_text):
+            continue
+        applies_to_type = str(form.get(f"command_applies_to_type_{index_raw}") or "device")
+        applies_to_id = device.id if applies_to_type == "device" else None
+        db.add(
+            models.Command(
+                name=str(form.get(f"command_name_{index_raw}") or item["name"]),
+                category=str(form.get(f"command_category_{index_raw}") or "Imported"),
+                applies_to_type=applies_to_type,
+                applies_to_id=applies_to_id,
+                command_template=command_text,
+                where_to_run=str(form.get(f"command_where_{index_raw}") or "Remote SSH host"),
+                risk_level=str(form.get(f"command_risk_{index_raw}") or "safe"),
+                help_low=str(form.get(f"command_help_low_{index_raw}") or "Imported from pasted notes. Review before running."),
+                help_high="This command was detected by Smart Paste. Confirm the folder, host, and intent before copying.",
+                notes=str(form.get(f"command_notes_{index_raw}") or f"Imported from Smart Paste {record.id}."),
+            )
+        )
+    for index_raw in form.getlist("credentials"):
+        item = parsed.get("credentials", [])[int(index_raw)]
+        label = str(form.get(f"credential_label_{index_raw}") or item.get("label") or "Imported login").strip()
+        username = str(form.get(f"credential_username_{index_raw}") or item.get("username", "")).strip()
+        secret = str(form.get(f"credential_secret_{index_raw}") or item.get("secret", "")).strip()
+        service_name = str(form.get(f"credential_service_{index_raw}") or item.get("service_name", "")).strip()
+        login_url = str(form.get(f"credential_login_url_{index_raw}") or item.get("login_url", "")).strip()
+        security_level = str(form.get(f"credential_security_{index_raw}") or item.get("security_level", "medium")).strip()
+        if not label or not secret:
+            continue
+        resolved_device_id, resolved_service_id, error = _resolve_service_for_credential(
+            db,
+            device_id=device.id,
+            service_id=None,
+            service_name=service_name,
+            label=label,
+        )
+        if error:
+            resolved_device_id, resolved_service_id = device.id, None
+        if _duplicate_credential(
+            db,
+            device_id=resolved_device_id or device.id,
+            service_id=resolved_service_id,
+            label=label,
+            username=username,
+        ):
+            continue
+        credential = models.Credential(
+            device_id=resolved_device_id or device.id,
+            service_id=resolved_service_id,
+            label=label,
+            username=username,
+            secret_encrypted=encrypt_text(secret),
+            secret_type="password",
+            security_level=security_level if security_level in {"low", "medium", "high", "extreme"} else "medium",
+            login_url=login_url,
+            notes=f"Imported from Smart Paste {record.id}.",
+            last_changed_at=now_utc(),
+            active=True,
+        )
+        db.add(credential)
+        db.flush()
+        auto_tags = _auto_tags_for_label(f"{label} {service_name}")
+        if auto_tags:
+            set_tags(db, "credential", credential.id, auto_tags)
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="credential_created",
+                object_type="credential",
+                object_id=credential.id,
+                details_json={"source": f"smart_paste:{record.id}"},
+            )
+        )
+    record.status = "applied"
+    db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id))
+    db.commit()
+    flash(request, f"Smart Paste applied to {device.name}. Original text was preserved as a note.", "success")
+    return redirect(f"/devices/{device.id}")
+
+
+@app.get("/suggestions", response_class=HTMLResponse)
+def suggestions_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return render(
+        request,
+        "suggestions.html",
+        {"suggestions": visible_suggestions(db), "tag_ideas": TAG_IDEAS},
+        user=user,
+    )
+
+
+@app.post("/suggestions/dismiss")
+def suggestions_dismiss(
+    request: Request,
+    csrf: str = Form(...),
+    suggestion_id: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    dismiss_suggestion(db, suggestion_id)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="suggestion_dismissed",
+            object_type="suggestion",
+            details_json={"id": suggestion_id},
+        )
+    )
+    db.commit()
+    flash(request, "Suggestion dismissed.", "success")
+    referer = request.headers.get("referer") or "/suggestions"
+    return redirect(referer)
+
+
+@app.get("/settings", response_class=HTMLResponse)
+def settings_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    return render(request, "settings.html", {"app_settings": get_app_settings(db)}, user=user)
+
+
+@app.post("/settings")
+async def settings_save(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    form = await request.form()
+    check_csrf(request, str(form.get("csrf", "")))
+    ensure_writable()
+    for key in THEME_DEFAULTS:
+        if key == "theme_mode":
+            continue
+        value = str(form.get(key, THEME_DEFAULTS[key])).strip()
+        if key == "compact_forms":
+            value = "on" if form.get(key) == "on" else "off"
+        if key == "dashboard_recent_limit":
+            try:
+                value = str(max(3, min(20, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
+        set_app_setting(db, key, value)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="settings_updated",
+            object_type="app_settings",
+            details_json={"section": "theme"},
+        )
+    )
+    db.commit()
+    flash(request, "Settings saved.", "success")
+    return redirect("/settings")
+
+
+@app.post("/maintenance/cleanup-smart-paste")
+def maintenance_cleanup_smart_paste(
+    request: Request,
+    csrf: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    cleaned = _cleanup_obvious_import_misses(db)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="smart_paste_cleanup",
+            object_type="maintenance",
+            details_json=cleaned,
+        )
+    )
+    db.commit()
+    flash(
+        request,
+        f"Cleaned {cleaned['services']} obvious service miss(es) and {cleaned['credentials']} duplicate credential(s).",
+        "success",
+    )
+    return redirect("/settings")
+
+
+@app.get("/search", response_class=HTMLResponse)
+def search_page(
+    request: Request,
+    q: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    like = f"%{q}%"
+    results: dict[str, list[Any]] = {"devices": [], "services": [], "credentials": [], "commands": [], "urls": [], "ports": [], "notes": []}
+    if q:
+        results["devices"] = (
+            db.query(models.Device)
+            .filter(
+                or_(
+                    models.Device.name.ilike(like),
+                    models.Device.primary_ip.ilike(like),
+                    models.Device.hostname.ilike(like),
+                    models.Device.purpose.ilike(like),
+                    models.Device.notes.ilike(like),
+                )
+            )
+            .limit(20)
+            .all()
+        )
+        results["services"] = (
+            db.query(models.Service)
+            .filter(
+                or_(
+                    models.Service.name.ilike(like),
+                    models.Service.purpose.ilike(like),
+                    models.Service.local_url.ilike(like),
+                    models.Service.public_url.ilike(like),
+                    models.Service.repo_url.ilike(like),
+                    models.Service.compose_path.ilike(like),
+                    models.Service.notes.ilike(like),
+                )
+            )
+            .limit(20)
+            .all()
+        )
+        results["credentials"] = (
+            db.query(models.Credential)
+            .filter(
+                or_(
+                    models.Credential.label.ilike(like),
+                    models.Credential.username.ilike(like),
+                    models.Credential.login_url.ilike(like),
+                    models.Credential.notes.ilike(like),
+                )
+            )
+            .limit(20)
+            .all()
+        )
+        results["commands"] = (
+            db.query(models.Command)
+            .filter(
+                or_(
+                    models.Command.name.ilike(like),
+                    models.Command.category.ilike(like),
+                    models.Command.command_template.ilike(like),
+                    models.Command.short_description.ilike(like),
+                    models.Command.help_low.ilike(like),
+                    models.Command.help_high.ilike(like),
+                )
+            )
+            .limit(20)
+            .all()
+        )
+        results["urls"] = db.query(models.Url).filter(models.Url.url.ilike(like)).limit(20).all()
+        if q.isdigit():
+            results["ports"] = db.query(models.Port).filter(models.Port.host_port == int(q)).limit(20).all()
+        results["notes"] = (
+            db.query(models.Note)
+            .filter(or_(models.Note.title.ilike(like), models.Note.body.ilike(like)))
+            .limit(20)
+            .all()
+        )
+    return render(request, "search.html", {"q": q, "results": results}, user=user)
+
+
+@app.get("/exports", response_class=HTMLResponse)
+def exports_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    exports = db.query(models.BackupExport).order_by(models.BackupExport.created_at.desc()).all()
+    return render(request, "exports.html", {"exports": exports}, user=user)
+
+
+@app.post("/exports")
+def exports_create(
+    request: Request,
+    csrf: str = Form(...),
+    include_credentials: str = Form(""),
+    challenge: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    include_secrets = include_credentials == "on"
+    if include_secrets and not challenge_ok(challenge, user.password_hash, user.secondary_password_hash):
+        flash(request, "Credential export requires your account password or reveal password.", "danger")
+        return redirect("/exports")
+    created = create_emergency_export(db, include_credentials=include_secrets)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="emergency_export_created",
+            object_type="backup_export",
+            details_json={"files": [item.filename for item in created], "included_credentials": include_secrets},
+        )
+    )
+    db.commit()
+    flash(request, f"Emergency export created with {len(created)} file(s).", "success")
+    return redirect("/exports")
+
+
+@app.post("/exports/import")
+async def exports_import(
+    request: Request,
+    csrf: str = Form(...),
+    backup_file: UploadFile = File(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    data = await backup_file.read()
+    try:
+        payload = json.loads(decrypt_text(data.decode("utf-8"), export=True))
+    except Exception:
+        flash(request, "Import failed. Check that this is a Kairix encrypted backup and the export key matches.", "danger")
+        return redirect("/exports")
+    tables = payload.get("tables", {})
+    imported = 0
+    for table_name, model in IMPORT_MODELS.items():
+        for row in tables.get(table_name, []):
+            db.merge(model(**_coerce_import_row(model, row)))
+            imported += 1
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="emergency_export_imported",
+            object_type="backup_export",
+            details_json={
+                "filename": backup_file.filename,
+                "rows": imported,
+                "source": payload.get("metadata", {}).get("source_instance"),
+            },
+        )
+    )
+    db.commit()
+    flash(request, f"Imported {imported} rows from encrypted backup.", "success")
+    return redirect("/exports")
+
+
+@app.get("/exports/download/{filename}")
+def export_download(
+    filename: str,
+    user: models.User = Depends(require_user),
+) -> FileResponse:
+    path = safe_export_path(filename)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(404, "Export file not found.")
+    return FileResponse(path, filename=Path(filename).name)
+
+
+@app.get("/history", response_class=HTMLResponse)
+def history_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    logs = db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(200).all()
+    return render(request, "history.html", {"logs": logs}, user=user)
+
+
+@app.get("/raw/{object_type}/{object_id}", response_class=HTMLResponse)
+def raw_object_page(
+    request: Request,
+    object_type: str,
+    object_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    model_map = {
+        "device": models.Device,
+        "service": models.Service,
+        "credential": models.Credential,
+        "command": models.Command,
+    }
+    model = model_map.get(object_type)
+    if not model:
+        raise HTTPException(404, "Unsupported raw object type.")
+    obj = db.get(model, object_id)
+    if not obj:
+        raise HTTPException(404, "Object not found.")
+    data = {}
+    for column in model.__table__.columns:
+        value = getattr(obj, column.name)
+        if object_type == "credential" and column.name == "secret_encrypted":
+            value = "[encrypted]"
+        elif isinstance(value, datetime):
+            value = value.isoformat()
+        data[column.name] = value
+    return render(
+        request,
+        "raw.html",
+        {"object_type": object_type, "object_id": object_id, "raw_json": json.dumps(data, indent=2, default=str)},
+        user=user,
+    )

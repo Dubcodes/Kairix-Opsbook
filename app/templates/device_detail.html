@@ -1,0 +1,225 @@
+{% extends "base.html" %}
+{% block title %}{{ device.name }} · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Read-only view. Click Edit to make changes.</p>
+    <h1>{{ device.name }}</h1>
+    <p>{{ device.primary_ip or "No IP" }} · {{ device.hostname or "No hostname" }} · {{ device.os_name or "OS unknown" }}</p>
+    <div class="tags">{% for tag in tag_list %}<span>{{ tag }}</span>{% endfor %}</div>
+  </div>
+  <div class="actions">
+    <a class="button" href="/devices/{{ device.id }}/edit">Edit</a>
+    <a class="button secondary" href="/raw/device/{{ device.id }}">Raw</a>
+  </div>
+</section>
+
+{% set tabs = ["overview", "services", "credentials", "commands", "hardware", "network", "backups", "notes", "history"] %}
+<nav class="tabs">
+  {% for item in tabs %}
+    <a class="{% if tab == item %}active{% endif %}" href="/devices/{{ device.id }}?tab={{ item }}">{{ item|title }}</a>
+  {% endfor %}
+</nav>
+
+{% if tab == "overview" %}
+  <section class="panel">
+    <h2>Overview</h2>
+    <dl class="details">
+      <dt>Purpose</dt><dd>{{ device.purpose or "Not documented yet." }}</dd>
+      <dt>Manual state</dt><dd>{{ device.status_manual }}</dd>
+      <dt>Location</dt><dd>{{ device.location or "Not documented." }}</dd>
+      <dt>Update note</dt><dd>{{ device.update_status or "Not checked." }}</dd>
+    </dl>
+    {% if device.notes %}<pre class="note-block">{{ device.notes }}</pre>{% endif %}
+  </section>
+  <section class="quick-grid">
+    <div class="panel">
+      <div class="section-title">
+        <h2>Favorite Credentials</h2>
+        <div class="actions compact-actions">
+          <a href="/credentials/new?device_id={{ device.id }}">Add</a>
+          {% if favorite_edit %}
+            <a href="/devices/{{ device.id }}">Done</a>
+          {% else %}
+            <a href="/devices/{{ device.id }}?favorites=edit">Edit</a>
+          {% endif %}
+        </div>
+      </div>
+      <div class="list compact">
+        {% for credential in quick_credentials %}
+          <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
+            <a class="row-main" href="/credentials/{{ credential.id }}">
+              <strong>{{ credential.label }}</strong>
+              <span>{{ credential.username or "No username" }}{% if credential.service %} · {{ credential.service.name }}{% endif %}</span>
+            </a>
+            <div class="actions compact-actions">
+              <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
+              {% if favorite_edit %}
+              <form method="post" action="/devices/{{ device.id }}/quick-credentials">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                <button class="ghost small-button" name="action" value="up" type="submit" title="Move up">Up</button>
+                <button class="ghost small-button" name="action" value="down" type="submit" title="Move down">Down</button>
+                <button class="ghost small-button" name="action" value="hide" type="submit" title="Remove from favorites">Remove</button>
+              </form>
+              {% endif %}
+            </div>
+          </div>
+        {% else %}
+          <p class="empty">No credentials yet.</p>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="panel">
+      <div class="section-title">
+        <h2>Quick URLs & Ports</h2>
+        <a href="/ports">Add</a>
+      </div>
+      <div class="list compact">
+        {% for service in device.services %}
+          {% if service.local_url or service.public_url %}
+            <a class="quick-row link-row" href="{{ service.local_url or service.public_url }}" target="_blank">
+              <div><strong>{{ service.name }}</strong><span>{{ service.local_url or service.public_url }}</span></div>
+            </a>
+          {% endif %}
+          {% for port in service.ports %}
+            <div class="quick-row"><div><strong>{{ service.name }}</strong><span>{{ port.host_port }}/{{ port.protocol }} · {{ port.purpose or "service port" }}</span></div></div>
+          {% endfor %}
+        {% endfor %}
+        {% for port in device.ports %}
+          {% if not port.service %}
+            <div class="quick-row"><div><strong>{{ port.host_port }}/{{ port.protocol }}</strong><span>{{ port.purpose or port.notes }}</span></div></div>
+          {% endif %}
+        {% endfor %}
+      </div>
+    </div>
+  </section>
+  <section class="panel">
+    <div class="section-title">
+      <h2>Services On {{ device.name }}</h2>
+      <a class="button" href="/services/new?device_id={{ device.id }}">Add Service</a>
+    </div>
+    <div class="service-accordion">
+      {% for group in service_groups %}
+        {% if service_groups|length > 1 %}
+          <h3>{{ group.name }}</h3>
+        {% endif %}
+        {% for service in group.services %}
+        <details class="service-summary" {% if loop.first %}open{% endif %}>
+          <summary>
+            <span><strong>{{ service.name }}</strong><small>{{ service.local_url or service.public_url or service.compose_path or "No URL/path yet" }}</small></span>
+            <a href="/services/{{ service.id }}">Open</a>
+          </summary>
+          <div class="summary-grid">
+            <dl class="details">
+              <dt>Purpose</dt><dd>{{ service.purpose or "Not documented." }}</dd>
+              <dt>Compose</dt><dd>{{ service.compose_path or "Not documented." }}</dd>
+              <dt>Data</dt><dd>{{ service.data_path or "Not documented." }}</dd>
+              <dt>Backup</dt><dd>{{ service.backup_path or "Not documented." }}</dd>
+            </dl>
+            <div>
+              <h3>Credentials</h3>
+              <div class="list compact">
+                {% for credential in service.credentials %}
+                  <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
+                    <a class="row-main" href="/credentials/{{ credential.id }}">
+                      <strong>{{ credential.label }}</strong>
+                      <span>{{ credential.username or "No username" }} · {{ credential.security_level|title }}</span>
+                    </a>
+                    <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
+                    {% if credential.login_url %}
+                      <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
+                    {% endif %}
+                  </div>
+                {% else %}
+                  <p class="empty">No credentials linked.</p>
+                {% endfor %}
+              </div>
+            </div>
+          </div>
+        </details>
+        {% endfor %}
+      {% else %}
+        <p class="empty">No services documented on this device yet.</p>
+      {% endfor %}
+    </div>
+  </section>
+{% elif tab == "services" %}
+  <section class="section-title"><h2>Services</h2><a class="button" href="/services/new?device_id={{ device.id }}">Add Service</a></section>
+  <section class="list">
+    {% for service in device.services %}
+      <a class="list-row" href="/services/{{ service.id }}"><strong>{{ service.name }}</strong><span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}</span></a>
+    {% else %}<p class="empty">No services documented on this device yet.</p>{% endfor %}
+  </section>
+{% elif tab == "credentials" %}
+  <section class="section-title"><h2>Credentials</h2><a class="button" href="/credentials/new?device_id={{ device.id }}">Add Credential</a></section>
+  <section class="list">
+    {% for credential in device.credentials %}
+      <div class="list-row static clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
+        <a class="row-main" href="/credentials/{{ credential.id }}">
+          <strong>{{ credential.label }}</strong>
+          <span>{{ credential.username or "No username" }} · {{ credential.security_level|title }} security</span>
+        </a>
+        <div class="actions compact-actions">
+          <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
+          {% if credential.login_url %}
+            <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
+          {% endif %}
+          <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit">Edit</a>
+        </div>
+      </div>
+    {% else %}<p class="empty">No device credentials yet.</p>{% endfor %}
+  </section>
+{% elif tab == "commands" %}
+  <section class="section-title"><h2>Commands</h2><a class="button" href="/commands/new?applies_to_type=device&applies_to_id={{ device.id }}">Add Command</a></section>
+  {% include "partials/command_cards.html" %}
+{% elif tab == "hardware" %}
+  <section class="panel">
+    <h2>Hardware</h2>
+    {% if device.hardware %}
+      <dl class="details">
+        <dt>Model</dt><dd>{{ device.hardware.model or "Not documented." }}</dd>
+        <dt>CPU</dt><dd>{{ device.hardware.cpu or "Not documented." }}</dd>
+        <dt>RAM</dt><dd>{{ device.hardware.ram or "Not documented." }}</dd>
+        <dt>GPU</dt><dd>{{ device.hardware.gpu or "Not documented." }}</dd>
+        <dt>Storage</dt><dd>{{ device.hardware.storage_summary or "Not documented." }}</dd>
+      </dl>
+    {% endif %}
+  </section>
+{% elif tab == "network" %}
+  <section class="panel">
+    <h2>Network</h2>
+    <dl class="details">
+      <dt>IP address</dt><dd>{{ device.primary_ip or "Not documented." }}</dd>
+      <dt>Hostname</dt><dd>{{ device.hostname or "Not documented." }}</dd>
+    </dl>
+    <h3>Ports</h3>
+    <div class="list compact">{% for port in device.ports %}<div class="list-row static"><strong>{{ port.host_port }}/{{ port.protocol }}</strong><span>{{ port.purpose or port.notes }}</span></div>{% else %}<p class="empty">No ports documented.</p>{% endfor %}</div>
+    <h3>URLs</h3>
+    <div class="list compact">{% for url in device.urls %}<a class="list-row" href="{{ url.url }}" target="_blank"><strong>{{ url.label or url.url_type }}</strong><span>{{ url.url }}</span></a>{% else %}<p class="empty">No URLs documented.</p>{% endfor %}</div>
+  </section>
+{% elif tab == "backups" %}
+  <section class="panel">
+    <h2>Backups</h2>
+    <p class="empty">Use service backup fields and notes to document what data matters, where backups are stored, and how to restore them.</p>
+  </section>
+{% elif tab == "notes" %}
+  <section class="panel">
+    <h2>Notes</h2>
+    <form method="post" action="/notes/add" class="inline-form">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="object_type" value="device">
+      <input type="hidden" name="object_id" value="{{ device.id }}">
+      <input name="title" placeholder="Title" spellcheck="true">
+      <textarea name="body" placeholder="Add a note..." spellcheck="true" required></textarea>
+      <button type="submit">Add Note</button>
+    </form>
+    <div class="list">{% for note in notes %}<article class="note-block"><strong>{{ note.title or "Note" }}</strong><small>{{ note.source }} · {{ note.updated_at|dt }}</small><pre>{{ note.body }}</pre></article>{% else %}<p class="empty">No notes yet.</p>{% endfor %}</div>
+  </section>
+{% elif tab == "history" %}
+  <section class="panel">
+    <h2>History</h2>
+    <div class="list">{% for item in history %}<div class="list-row static"><strong>{{ item.action }}</strong><span>{{ item.created_at|dt }}</span></div>{% else %}<p class="empty">No history for this device yet.</p>{% endfor %}</div>
+  </section>
+{% endif %}
+{% endblock %}

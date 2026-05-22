@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Emergency Export · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Emergency export system</p>
+    <h1>Emergency Export</h1>
+  </div>
+</section>
+<section class="panel">
+  <h2>Import Encrypted Backup</h2>
+  <p class="muted">Imports a Kairix encrypted database backup into this instance. Use this for standby restore or recovery. Secrets require the same Opsbook secret key to decrypt after import.</p>
+  <form method="post" action="/exports/import" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="span-2">Encrypted backup file <input type="file" name="backup_file" accept=".enc" required></label>
+    <button type="submit">Import Backup</button>
+  </form>
+</section>
+<section class="panel">
+  <p>Exports include a full encrypted database backup and a human-readable HTML runbook. Credential exports are encrypted separately and require a password challenge.</p>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="check-row span-2"><input type="checkbox" name="include_credentials"> Include separate encrypted credentials export</label>
+    <label class="span-2">Password or reveal PIN <input name="challenge" type="password" autocomplete="current-password"></label>
+    <button type="submit">Create Emergency Export</button>
+  </form>
+</section>
+<section class="panel">
+  <h2>Export files</h2>
+  <div class="list">
+    {% for export in exports %}
+      <div class="list-row static">
+        <div><strong>{{ export.filename }}</strong><span>{{ export.export_type }} · {{ "encrypted" if export.encrypted else "plain HTML" }} · {{ export.created_at|dt }}</span></div>
+        <a class="button secondary" href="/exports/download/{{ export.filename }}">Download</a>
+      </div>
+    {% else %}
+      <p class="empty">No exports created yet.</p>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}Settings · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Theme and display</p>
+    <h1>Settings</h1>
+  </div>
+</section>
+
+<form method="post" class="panel form-grid wide">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <h2 class="span-2">Color Options</h2>
+  <p class="muted span-2">These colors feed the app theme. The top-bar icon still lets each browser choose Auto, Dark, or Light locally.</p>
+
+  <h3 class="span-2">Display</h3>
+  <label>Dashboard recent items
+    <input name="dashboard_recent_limit" type="number" min="3" max="20" value="{{ app_settings.dashboard_recent_limit or '6' }}">
+    <small>How many recent devices and services to show on the dashboard.</small>
+  </label>
+  <label class="check-row">
+    <input type="checkbox" name="compact_forms" {% if app_settings.compact_forms != "off" %}checked{% endif %}>
+    Compact data-entry forms
+  </label>
+
+  <h3 class="span-2">Light Mode</h3>
+  <label>Background <input type="color" name="light_bg" value="{{ app_settings.light_bg }}"></label>
+  <label>Surface <input type="color" name="light_surface" value="{{ app_settings.light_surface }}"></label>
+  <label>Text <input type="color" name="light_text" value="{{ app_settings.light_text }}"></label>
+  <label>Muted text <input type="color" name="light_muted" value="{{ app_settings.light_muted }}"></label>
+  <label>Lines <input type="color" name="light_line" value="{{ app_settings.light_line }}"></label>
+  <label>Button/accent <input type="color" name="light_accent" value="{{ app_settings.light_accent }}"></label>
+  <label>Button text <input type="color" name="light_accent_text" value="{{ app_settings.light_accent_text }}"></label>
+
+  <h3 class="span-2">Dark Mode</h3>
+  <label>Background <input type="color" name="dark_bg" value="{{ app_settings.dark_bg }}"></label>
+  <label>Surface <input type="color" name="dark_surface" value="{{ app_settings.dark_surface }}"></label>
+  <label>Text <input type="color" name="dark_text" value="{{ app_settings.dark_text }}"></label>
+  <label>Muted text <input type="color" name="dark_muted" value="{{ app_settings.dark_muted }}"></label>
+  <label>Lines <input type="color" name="dark_line" value="{{ app_settings.dark_line }}"></label>
+  <label>Button/accent <input type="color" name="dark_accent" value="{{ app_settings.dark_accent }}"></label>
+  <label>Button text <input type="color" name="dark_accent_text" value="{{ app_settings.dark_accent_text }}"></label>
+
+  <div class="form-actions span-2">
+    <button type="submit">Save Settings</button>
+  </div>
+</form>
+
+<section class="panel">
+  <h2>Maintenance</h2>
+  <p class="muted">Use this after early Smart Paste tests to remove obvious parser misses like “Check open ports” services and duplicate loose credentials that are now linked to a service.</p>
+  <form method="post" action="/maintenance/cleanup-smart-paste" data-confirm-delete="Clean obvious Smart Paste misses? This deletes only known bad service headings and duplicate loose credentials.">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <button class="secondary" type="submit">Clean Smart Paste Misses</button>
+  </form>
+</section>
+{% endblock %}
