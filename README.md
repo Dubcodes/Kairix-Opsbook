@@ -93,6 +93,7 @@ The same page can import an encrypted Kairix backup into a clean or standby inst
 - Change `OPSBOOK_SECRET_KEY`, `EXPORT_SECRET_KEY`, and `SESSION_SECRET_KEY` before entering real secrets.
 - Keep `.env`, `data/`, `backups/`, and `exports/` out of Git.
 - Passwords are hidden from normal list views and reveal events are logged.
+- Optional TOTP 2FA can be enabled from Settings after confirming your password.
 - Docker API control is intentionally not part of this MVP.
 
 ## Development
@@ -105,3 +106,63 @@ docker compose --env-file .env.example config --quiet
 ```
 
 This project does not include remote command execution. Commands are documented and copyable by design.
+
+## Portainer Install
+
+Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
+
+1. In Portainer, open **Stacks** and choose **Add stack**.
+2. Use **Git Repository**.
+3. Repository URL: `https://github.com/Dubcodes/Kairix-Opsbook.git`
+4. Branch/reference: `main`
+5. Compose path: `portainer-stack.yml`
+6. Add environment variables before deploying:
+
+```text
+APP_PORT=8095
+POSTGRES_DB=opsbook
+POSTGRES_USER=opsbook
+POSTGRES_PASSWORD=make-a-long-random-password
+OPSBOOK_SECRET_KEY=make-a-long-random-secret
+EXPORT_SECRET_KEY=make-another-long-random-secret
+SESSION_SECRET_KEY=make-one-more-long-random-secret
+SESSION_COOKIE_SECURE=false
+```
+
+The Portainer stack stores data in named Docker volumes:
+
+```text
+kairix-opsbook-postgres
+kairix-opsbook-exports
+kairix-opsbook-backups
+```
+
+Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe the app.
+
+## Updating A Portainer Install
+
+The GitHub Actions workflow publishes `ghcr.io/dubcodes/kairix-opsbook:latest` on pushes to `main`.
+
+To update:
+
+1. Push or merge changes to `main`.
+2. Wait for the **Build and publish Docker image** action to pass.
+3. In Portainer, pull/redeploy the stack so it downloads the newest `latest` image.
+
+If Portainer cannot pull the image, check that the GitHub Container Registry package is public or configure registry authentication in Portainer.
+
+## Primary And Standby
+
+Use `INSTANCE_MODE=primary` for the normal writable instance.
+
+Use `INSTANCE_MODE=standby` for a secondary read-only instance. The standby instance should use the same `OPSBOOK_SECRET_KEY` and `EXPORT_SECRET_KEY` as the primary so encrypted credentials and encrypted exports can be decrypted after import.
+
+A simple standby flow is:
+
+1. Create an Emergency Export on the primary.
+2. Copy the encrypted backup file to the standby.
+3. Import it from the standby Emergency Export page.
+4. Keep the standby read-only until the primary is unavailable.
+5. To promote standby, set `INSTANCE_MODE=primary` and restart the stack.
+
+Avoid writing to both instances at once. Multi-master sync is intentionally not part of the MVP.

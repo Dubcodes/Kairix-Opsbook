@@ -71,7 +71,14 @@ def tags_for(db: Session, object_type: str, object_id: int) -> list[str]:
         .order_by(models.Tag.name)
         .all()
     )
-    return [row[0] for row in rows]
+    seen: set[str] = set()
+    tags: list[str] = []
+    for row in rows:
+        name = row[0]
+        if name not in seen:
+            seen.add(name)
+            tags.append(name)
+    return tags
 
 
 def tag_map(db: Session, object_type: str) -> dict[int, list[str]]:
@@ -83,7 +90,11 @@ def tag_map(db: Session, object_type: str) -> dict[int, list[str]]:
         .all()
     )
     mapped: dict[int, list[str]] = defaultdict(list)
+    seen: set[tuple[int, str]] = set()
     for object_id, name in rows:
+        if (object_id, name) in seen:
+            continue
+        seen.add((object_id, name))
         mapped[object_id].append(name)
     return mapped
 

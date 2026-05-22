@@ -64,6 +64,43 @@
 </form>
 
 <section class="panel">
+  <h2>Two-Factor Authentication</h2>
+  {% if user.totp_enabled %}
+    <p class="muted">2FA is enabled for your login. Disabling it requires your password and a current authenticator code.</p>
+    <form method="post" action="/settings/2fa/disable" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+      <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+      <div class="form-actions span-2"><button class="secondary" type="submit">Disable 2FA</button></div>
+    </form>
+  {% elif pending_totp_secret %}
+    <p class="muted">Add this manual key to Google Authenticator, Authy, 1Password, Bitwarden, or another TOTP app, then enter the 6-digit code.</p>
+    <pre>{{ pending_totp_secret }}</pre>
+    <details class="collapsible-panel">
+      <summary><span><strong>Advanced setup URI</strong><small>Use this if your authenticator can import an otpauth URI.</small></span></summary>
+      <pre>{{ pending_totp_uri }}</pre>
+    </details>
+    <form method="post" action="/settings/2fa/verify" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+      <div class="form-actions"><button type="submit">Enable 2FA</button></div>
+    </form>
+    <form method="post" action="/settings/2fa/disable" class="inline-mini" data-confirm-delete="Cancel this pending 2FA setup?">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
+      <button class="ghost" type="submit">Cancel setup</button>
+    </form>
+  {% else %}
+    <p class="muted">2FA is optional. Enable it when you want login protection beyond your account password.</p>
+    <form method="post" action="/settings/2fa/start" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Confirm password <input name="password" type="password" required autocomplete="current-password"></label>
+      <div class="form-actions"><button type="submit">Start 2FA setup</button></div>
+    </form>
+  {% endif %}
+</section>
+
+<section class="panel">
   <h2>Maintenance</h2>
   <p class="muted">Use this after early Smart Paste tests to remove obvious parser misses like “Check open ports” services and duplicate loose credentials that are now linked to a service.</p>
   <form method="post" action="/maintenance/cleanup-smart-paste" data-confirm-delete="Clean obvious Smart Paste misses? This deletes only known bad service headings and duplicate loose credentials.">

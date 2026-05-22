@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
+import pyotp
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -217,6 +218,18 @@ def _infer_tags_for_service(service: models.Service) -> str:
         tags.append("postgres")
     if "smb" in text or "samba" in text:
         tags.append("smb")
+    if "ssh" in text:
+        tags.append("ssh")
+    if "qbittorrent" in text or "torrent" in text:
+        tags.extend(["torrent", "media"])
+    if "sonarr" in text or "radarr" in text or "plex" in text or "immich" in text:
+        tags.append("media")
+    if "gluetun" in text or "vpn" in text:
+        tags.append("vpn")
+    if "windows" in text:
+        tags.append("windows")
+    if "raspberry" in text or "raspbian" in text or "pi " in f" {text} ":
+        tags.append("raspberry-pi")
     return ", ".join(dict.fromkeys(tags))
 
 
@@ -256,6 +269,18 @@ def _latest_audit(db: Session, object_type: str, object_id: int, action: str) ->
     )
 
 
+def _ensure_device_hardware(db: Session, device: models.Device) -> models.DeviceHardware:
+    hardware = db.query(models.DeviceHardware).filter_by(device_id=device.id).first()
+    if hardware:
+        device.hardware = hardware
+        return hardware
+    hardware = models.DeviceHardware(device_id=device.id)
+    db.add(hardware)
+    db.flush()
+    device.hardware = hardware
+    return hardware
+
+
 def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
     latest = _latest_audit(db, "device", device.id, "device_ping")
     interval = int_setting(db, "ping_interval_minutes", 60, minimum=5, maximum=999)
@@ -273,6 +298,25 @@ def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
         state = "down"
         label = f"No reply ({int(details.get('failures') or 1)} failed check(s))"
     return {"state": state, "label": label, "latency_ms": details.get("latency_ms"), "next_at": format_dt(next_at)}
+
+
+def _dashboard_ping_overview(db: Session) -> list[dict[str, str]]:
+    cutoff = now_utc() - timedelta(hours=12)
+    items: list[dict[str, str]] = []
+    for device in db.query(models.Device).order_by(models.Device.name).all():
+        latest = _latest_audit(db, "device", device.id, "device_ping")
+        if not latest:
+            items.append({"name": device.name, "state": "unknown", "label": "no ping"})
+            continue
+        details = latest.details_json or {}
+        if details.get("ok") and latest.created_at >= cutoff:
+            status = _device_ping_status(db, device)
+            items.append({"name": device.name, "state": status["state"], "label": latest.created_at.strftime("%H:%M")})
+        elif details.get("ok"):
+            items.append({"name": device.name, "state": "unknown", "label": "older than 12h"})
+        else:
+            items.append({"name": device.name, "state": "down", "label": "no reply"})
+    return items
 
 
 def _ping_device(db: Session, device: models.Device) -> dict[str, Any]:
@@ -368,8 +412,38 @@ def _auto_tags_for_label(label: str) -> str:
         "github",
         "ssh",
         "admin",
+        "smb",
+        "samba",
+        "qbittorrent",
+        "torrent",
+        "sonarr",
+        "radarr",
+        "plex",
+        "media",
+        "gluetun",
+        "vpn",
+        "windows",
+        "raspberry-pi",
+        "opsbook",
     }
-    return ", ".join([word for word in useful if word in known])
+    aliases = {
+        "qbittorrent": ["qbittorrent", "torrent", "media"],
+        "sonarr": ["sonarr", "media"],
+        "radarr": ["radarr", "media"],
+        "plex": ["plex", "media"],
+        "gluetun": ["gluetun", "vpn"],
+        "samba": ["smb", "file-sharing"],
+        "smb": ["smb", "file-sharing"],
+        "portainer": ["portainer", "docker"],
+        "opsbook": ["opsbook", "docker"],
+    }
+    tags: list[str] = []
+    for word in useful:
+        if word in aliases:
+            tags.extend(aliases[word])
+        elif word in known:
+            tags.append(word)
+    return ", ".join(dict.fromkeys(tags))
 
 
 def _id_list(value: str) -> list[int]:
@@ -435,6 +509,43 @@ def _match_device_for_import(db: Session, parsed_device: dict[str, Any]) -> mode
     return None
 
 
+def _service_alias(value: str) -> str:
+    clean = slugify(value).replace("-git", "").replace("-app", "").replace("-service", "")
+    clean = clean.replace("kairix-graphics-builder", "graphics-project")
+    clean = clean.replace("kairix-opsbook", "opsbook")
+    return clean.strip("-")
+
+
+def _match_service_for_import(db: Session, device_id: int, service_hint: dict[str, Any]) -> models.Service | None:
+    name = str(service_hint.get("name", "")).strip()
+    aliases = {_service_alias(name), slugify(name)}
+    for url in service_hint.get("urls", []):
+        value = str(url.get("url", ""))
+        existing_url = db.query(models.Url).filter(models.Url.url == value).first()
+        if existing_url and existing_url.service and existing_url.service.device_id == device_id:
+            return existing_url.service
+        existing_service = (
+            db.query(models.Service)
+            .filter(
+                models.Service.device_id == device_id,
+                or_(models.Service.local_url == value, models.Service.public_url == value),
+            )
+            .first()
+        )
+        if existing_service:
+            return existing_service
+    for alias in aliases:
+        if not alias:
+            continue
+        for service in db.query(models.Service).filter(models.Service.device_id == device_id).all():
+            service_aliases = {_service_alias(service.name), slugify(service.name)}
+            if alias in service_aliases:
+                return service
+            if alias and any(alias in existing or existing in alias for existing in service_aliases if len(existing) > 4):
+                return service
+    return None
+
+
 def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[str, Any]:
     parsed = dict(parsed)
     matched_device = _match_device_for_import(db, parsed.get("device", {}))
@@ -455,11 +566,7 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
         )
         duplicate = None
         if existing_device_id and service.get("name"):
-            duplicate = (
-                db.query(models.Service)
-                .filter(models.Service.device_id == existing_device_id, models.Service.name.ilike(str(service["name"])))
-                .first()
-            )
+            duplicate = _match_service_for_import(db, existing_device_id, service)
         service["duplicate_id"] = duplicate.id if duplicate else None
         service["selected"] = has_context
         for url in service.get("urls", []):
@@ -539,7 +646,7 @@ def _delete_service_tree(db: Session, service: models.Service) -> None:
 
 
 def _cleanup_obvious_import_misses(db: Session) -> dict[str, int]:
-    cleaned = {"services": 0, "credentials": 0, "hardware": 0}
+    cleaned = {"services": 0, "credentials": 0, "hardware": 0, "tag_links": 0}
     bad_service_slugs = {
         "checkopenports",
         "portainerfolder",
@@ -555,6 +662,32 @@ def _cleanup_obvious_import_misses(db: Session) -> dict[str, int]:
     for service in list(db.query(models.Service).all()):
         if slugify(service.name).replace("-", "") in bad_service_slugs:
             _delete_service_tree(db, service)
+            cleaned["services"] += 1
+
+    service_groups: dict[tuple[int, str], list[models.Service]] = {}
+    for service in db.query(models.Service).all():
+        alias = _service_alias(service.name)
+        if alias:
+            service_groups.setdefault((service.device_id, alias), []).append(service)
+    for services in service_groups.values():
+        if len(services) < 2:
+            continue
+        ranked = sorted(
+            services,
+            key=lambda item: (
+                bool(item.local_url or item.public_url),
+                bool(item.compose_path or item.data_path or item.backup_path),
+                len(item.credentials) + len(item.ports) + len(item.urls),
+            ),
+            reverse=True,
+        )
+        keeper = ranked[0]
+        for duplicate in ranked[1:]:
+            if duplicate.credentials or duplicate.ports or duplicate.urls:
+                continue
+            if duplicate.local_url or duplicate.public_url or duplicate.compose_path:
+                continue
+            _delete_service_tree(db, duplicate)
             cleaned["services"] += 1
 
     for loose in list(db.query(models.Credential).filter(models.Credential.service_id.is_(None)).all()):
@@ -600,6 +733,14 @@ def _cleanup_obvious_import_misses(db: Session) -> dict[str, int]:
                 break
         if changed:
             cleaned["hardware"] += 1
+    seen_links: set[tuple[int, str, int]] = set()
+    for link in list(db.query(models.TagLink).order_by(models.TagLink.id).all()):
+        key = (link.tag_id, link.object_type, link.object_id)
+        if key in seen_links:
+            db.delete(link)
+            cleaned["tag_links"] += 1
+        else:
+            seen_links.add(key)
     return cleaned
 
 
@@ -873,6 +1014,51 @@ def login(
         flash(request, "Login failed. Check the username and password.", "danger")
         return redirect("/login")
     request.session.clear()
+    if user.totp_enabled:
+        request.session["pending_2fa_user_id"] = user.id
+        request.session["last_seen"] = now_utc().isoformat()
+        csrf_token(request)
+        return redirect("/login/2fa")
+    request.session["user_id"] = user.id
+    request.session["last_seen"] = now_utc().isoformat()
+    request.session["session_timeout_minutes"] = int_setting(db, "session_timeout_minutes", 20, minimum=1, maximum=999)
+    csrf_token(request)
+    flash(request, f"Welcome back, {user.display_name or user.username}.", "success")
+    return redirect("/")
+
+
+@app.get("/login/2fa", response_class=HTMLResponse)
+def login_2fa_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    pending_id = request.session.get("pending_2fa_user_id")
+    if not pending_id:
+        return redirect("/login")
+    user = db.get(models.User, int(pending_id))
+    if not user:
+        request.session.clear()
+        return redirect("/login")
+    return render(request, "login_2fa.html", {"pending_username": user.username})
+
+
+@app.post("/login/2fa")
+def login_2fa(
+    request: Request,
+    csrf: str = Form(...),
+    code: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    pending_id = request.session.get("pending_2fa_user_id")
+    if not pending_id:
+        return redirect("/login")
+    user = db.get(models.User, int(pending_id))
+    if not user or not user.totp_secret_encrypted:
+        request.session.clear()
+        return redirect("/login")
+    secret = decrypt_text(user.totp_secret_encrypted)
+    if not pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1):
+        flash(request, "Incorrect 2FA code.", "danger")
+        return redirect("/login/2fa")
+    request.session.clear()
     request.session["user_id"] = user.id
     request.session["last_seen"] = now_utc().isoformat()
     request.session["session_timeout_minutes"] = int_setting(db, "session_timeout_minutes", 20, minimum=1, maximum=999)
@@ -923,6 +1109,7 @@ def dashboard(
             "services": services,
             "recent_logs": recent_logs,
             "suggestions": suggestions,
+            "ping_overview": _dashboard_ping_overview(db),
             "counts": {
                 "devices": db.query(models.Device).count(),
                 "services": db.query(models.Service).count(),
@@ -1043,16 +1230,12 @@ def device_create(
     )
     db.add(device)
     db.flush()
-    db.add(
-        models.DeviceHardware(
-            device_id=device.id,
-            model=hw_model,
-            cpu=hw_cpu,
-            ram=hw_ram,
-            gpu=hw_gpu,
-            storage_summary=hw_storage,
-        )
-    )
+    hardware = _ensure_device_hardware(db, device)
+    hardware.model = hw_model
+    hardware.cpu = hw_cpu
+    hardware.ram = hw_ram
+    hardware.gpu = hw_gpu
+    hardware.storage_summary = hw_storage
     set_tags(db, "device", device.id, tags)
     merge_tags(db, "device", device.id, _infer_tags_for_device(device))
     db.add(models.AuditLog(user_id=user.id, action="device_created", object_type="device", object_id=device.id))
@@ -1254,13 +1437,12 @@ def device_update(
     old_status = device.status_manual or ""
     device.status_manual = status_manual
     device.notes = notes
-    if not device.hardware:
-        device.hardware = models.DeviceHardware(device_id=device.id)
-    device.hardware.model = hw_model
-    device.hardware.cpu = hw_cpu
-    device.hardware.ram = hw_ram
-    device.hardware.gpu = hw_gpu
-    device.hardware.storage_summary = hw_storage
+    hardware = _ensure_device_hardware(db, device)
+    hardware.model = hw_model
+    hardware.cpu = hw_cpu
+    hardware.ram = hw_ram
+    hardware.gpu = hw_gpu
+    hardware.storage_summary = hw_storage
     set_tags(db, "device", device.id, tags)
     merge_tags(db, "device", device.id, _infer_tags_for_device(device))
     if old_status != (status_manual or ""):
@@ -1313,6 +1495,9 @@ def services_page(
 def service_new_page(
     request: Request,
     device_id: int | None = None,
+    name: str = "",
+    local_url: str = "",
+    purpose: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -1320,7 +1505,15 @@ def service_new_page(
     return render(
         request,
         "service_form.html",
-        {"service": None, "devices": devices, "device_id": device_id, "tag_text": ""},
+        {
+            "service": None,
+            "devices": devices,
+            "device_id": device_id,
+            "tag_text": "",
+            "prefill_name": name,
+            "prefill_local_url": local_url,
+            "prefill_purpose": purpose,
+        },
         user=user,
     )
 
@@ -1348,6 +1541,7 @@ def service_create(
     notes: str = Form(""),
     credentials_not_needed: str = Form(""),
     tags: str = Form(""),
+    next_action: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -1384,6 +1578,8 @@ def service_create(
     db.add(models.AuditLog(user_id=user.id, action="service_created", object_type="service", object_id=service.id))
     db.commit()
     flash(request, f"Service {service.name} created.", "success")
+    if next_action == "add_credential":
+        return redirect(f"/credentials/new?device_id={service.device_id}&service_id={service.id}")
     return redirect(f"/services/{service.id}")
 
 
@@ -1487,6 +1683,7 @@ def service_update(
     notes: str = Form(""),
     credentials_not_needed: str = Form(""),
     tags: str = Form(""),
+    next_action: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -1531,6 +1728,8 @@ def service_update(
     db.add(models.AuditLog(user_id=user.id, action="service_edited", object_type="service", object_id=service.id))
     db.commit()
     flash(request, f"Service {service.name} saved.", "success")
+    if next_action == "add_credential":
+        return redirect(f"/credentials/new?device_id={service.device_id}&service_id={service.id}")
     return redirect(f"/services/{service.id}")
 
 
@@ -1553,10 +1752,20 @@ def credentials_page(
             )
         )
     credentials = query.order_by(models.Credential.label).all()
+    groups: dict[str, list[models.Credential]] = {}
+    for credential in credentials:
+        device_name = (
+            credential.service.device.name
+            if credential.service and credential.service.device
+            else credential.device.name
+            if credential.device
+            else "Unlinked"
+        )
+        groups.setdefault(device_name, []).append(credential)
     return render(
         request,
         "credentials.html",
-        {"credentials": credentials, "q": q, "tags": tag_map(db, "credential")},
+        {"credentials": credentials, "credential_groups": groups, "q": q, "tags": tag_map(db, "credential")},
         user=user,
     )
 
@@ -1569,6 +1778,7 @@ def credential_new_page(
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    selected_service = db.get(models.Service, service_id) if service_id else None
     return render(
         request,
         "credential_form.html",
@@ -1578,6 +1788,7 @@ def credential_new_page(
             "services": db.query(models.Service).order_by(models.Service.name).all(),
             "device_id": device_id,
             "service_id": service_id,
+            "service_name_prefill": selected_service.name if selected_service else "",
             "tag_text": "",
         },
         user=user,
@@ -1685,6 +1896,7 @@ def credential_edit_page(
             "services": db.query(models.Service).order_by(models.Service.name).all(),
             "device_id": credential.device_id,
             "service_id": credential.service_id,
+            "service_name_prefill": credential.service.name if credential.service else "",
             "tag_text": ", ".join(tags_for(db, "credential", credential.id)),
         },
         user=user,
@@ -2671,7 +2883,7 @@ async def smart_paste_apply(
         )
         db.add(device)
         db.flush()
-        db.add(models.DeviceHardware(device_id=device.id))
+        _ensure_device_hardware(db, device)
     else:
         if form.get("device_name"):
             device.name = str(form.get("device_name")).strip()
@@ -2704,22 +2916,17 @@ async def smart_paste_apply(
     )
     extras = parsed.get("extras", {})
     if form.get("apply_hardware"):
-        if not device.hardware:
-            device.hardware = models.DeviceHardware(device_id=device.id)
-        device.hardware.model = extras.get("model_summary") or device.hardware.model
-        device.hardware.cpu = extras.get("cpu_summary") or device.hardware.cpu
-        device.hardware.ram = extras.get("memory_summary") or device.hardware.ram
-        device.hardware.storage_summary = extras.get("disk_summary") or device.hardware.storage_summary
+        hardware = _ensure_device_hardware(db, device)
+        hardware.model = extras.get("model_summary") or hardware.model
+        hardware.cpu = extras.get("cpu_summary") or hardware.cpu
+        hardware.ram = extras.get("memory_summary") or hardware.ram
+        hardware.storage_summary = extras.get("disk_summary") or hardware.storage_summary
     for index_raw in form.getlist("services"):
         item = parsed.get("services", [])[int(index_raw)]
         service_name = str(form.get(f"service_name_{index_raw}") or item["name"]).strip()
         if not service_name:
             continue
-        exists = (
-            db.query(models.Service)
-            .filter(models.Service.device_id == device.id, models.Service.name.ilike(service_name))
-            .first()
-        )
+        exists = _match_service_for_import(db, device.id, {**item, "name": service_name})
         if not exists:
             exists = models.Service(
                 device_id=device.id,
@@ -3019,7 +3226,24 @@ def settings_page(
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    return render(request, "settings.html", {"app_settings": get_app_settings(db)}, user=user)
+    pending_totp_secret = ""
+    pending_totp_uri = ""
+    if user.totp_secret_encrypted and not user.totp_enabled:
+        pending_totp_secret = decrypt_text(user.totp_secret_encrypted)
+        pending_totp_uri = pyotp.TOTP(pending_totp_secret).provisioning_uri(
+            name=user.username,
+            issuer_name=settings.app_name,
+        )
+    return render(
+        request,
+        "settings.html",
+        {
+            "app_settings": get_app_settings(db),
+            "pending_totp_secret": pending_totp_secret,
+            "pending_totp_uri": pending_totp_uri,
+        },
+        user=user,
+    )
 
 
 @app.post("/settings")
@@ -3072,6 +3296,78 @@ async def settings_save(
     return redirect("/settings")
 
 
+@app.post("/settings/2fa/start")
+def settings_2fa_start(
+    request: Request,
+    csrf: str = Form(...),
+    password: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if not verify_password(password, user.password_hash):
+        flash(request, "Incorrect password. 2FA setup was not started.", "danger")
+        return redirect("/settings")
+    user.totp_enabled = False
+    user.totp_secret_encrypted = encrypt_text(pyotp.random_base32())
+    db.add(models.AuditLog(user_id=user.id, action="totp_setup_started", object_type="user", object_id=user.id))
+    db.commit()
+    flash(request, "2FA setup started. Add the manual key to your authenticator app, then verify a code.", "success")
+    return redirect("/settings")
+
+
+@app.post("/settings/2fa/verify")
+def settings_2fa_verify(
+    request: Request,
+    csrf: str = Form(...),
+    code: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if not user.totp_secret_encrypted:
+        flash(request, "Start 2FA setup first.", "warning")
+        return redirect("/settings")
+    secret = decrypt_text(user.totp_secret_encrypted)
+    if not pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1):
+        flash(request, "Incorrect 2FA code.", "danger")
+        return redirect("/settings")
+    user.totp_enabled = True
+    db.add(models.AuditLog(user_id=user.id, action="totp_enabled", object_type="user", object_id=user.id))
+    db.commit()
+    flash(request, "2FA is now enabled for login.", "success")
+    return redirect("/settings")
+
+
+@app.post("/settings/2fa/disable")
+def settings_2fa_disable(
+    request: Request,
+    csrf: str = Form(...),
+    password: str = Form(...),
+    code: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if not verify_password(password, user.password_hash):
+        flash(request, "Incorrect password. 2FA was not changed.", "danger")
+        return redirect("/settings")
+    if user.totp_enabled and user.totp_secret_encrypted:
+        secret = decrypt_text(user.totp_secret_encrypted)
+        if not pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1):
+            flash(request, "Incorrect 2FA code. 2FA was not disabled.", "danger")
+            return redirect("/settings")
+    user.totp_enabled = False
+    user.totp_secret_encrypted = None
+    db.add(models.AuditLog(user_id=user.id, action="totp_disabled", object_type="user", object_id=user.id))
+    db.commit()
+    flash(request, "2FA disabled.", "success")
+    return redirect("/settings")
+
+
 @app.post("/maintenance/cleanup-smart-paste")
 def maintenance_cleanup_smart_paste(
     request: Request,
@@ -3093,7 +3389,7 @@ def maintenance_cleanup_smart_paste(
     db.commit()
     flash(
         request,
-        f"Cleaned {cleaned['services']} service miss(es), {cleaned['credentials']} duplicate credential(s), and {cleaned['hardware']} hardware summary field(s).",
+        f"Cleaned {cleaned['services']} service miss(es), {cleaned['credentials']} duplicate credential(s), {cleaned['hardware']} hardware summary field(s), and {cleaned['tag_links']} duplicate tag link(s).",
         "success",
     )
     return redirect("/settings")

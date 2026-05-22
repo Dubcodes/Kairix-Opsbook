@@ -17,11 +17,11 @@
       {% endfor %}
     </select>
   </label>
-  <label>Name <span class="hint" title="The app/service name you search for, like Portainer, Vaultwarden, or Immich.">?</span><input name="name" required value="{{ service.name if service else '' }}" spellcheck="true"></label>
+  <label>Name <span class="hint" title="The app/service name you search for, like Portainer, Vaultwarden, or Immich.">?</span><input name="name" required value="{{ service.name if service else prefill_name|default('') }}" spellcheck="true"></label>
   <label>Type <span class="hint" title="Examples: Docker app, database, tunnel, dashboard, media service.">?</span><input name="type" value="{{ service.type if service else '' }}" spellcheck="true"></label>
   <label>Manual state <span class="hint" title="This is your note, not live monitoring. Example: stable, running, needs-attention, retired. Leave blank when not needed.">?</span><input name="status_manual" value="{{ service.status_manual if service else '' }}" spellcheck="true"></label>
-  <label class="span-2">Purpose <span class="hint" title="One short explanation of what the service is for.">?</span><textarea name="purpose" spellcheck="true">{{ service.purpose if service else '' }}</textarea></label>
-  <label>Local URL <span class="hint" title="LAN URL you open at home. Example: http://192.168.1.10:9443.">?</span><input name="local_url" value="{{ service.local_url if service else '' }}"></label>
+  <label class="span-2">Purpose <span class="hint" title="One short explanation of what the service is for.">?</span><textarea name="purpose" spellcheck="true">{{ service.purpose if service else prefill_purpose|default('') }}</textarea></label>
+  <label>Local URL <span class="hint" title="LAN URL you open at home. Example: http://192.168.1.10:9443.">?</span><input name="local_url" value="{{ service.local_url if service else prefill_local_url|default('') }}"></label>
   <label>Public URL <input name="public_url" value="{{ service.public_url if service else '' }}"></label>
   <label>Repo URL <input name="repo_url" value="{{ service.repo_url if service else '' }}"></label>
   <label>Compose path <span class="hint" title="Folder or compose file path. Example: /srv/docker/compose/portainer/compose.yaml.">?</span><input name="compose_path" value="{{ service.compose_path if service else '' }}"></label>
@@ -37,6 +37,8 @@
   <label class="span-2">Tags <input name="tags" value="{{ tag_text }}" placeholder="docker, public-url, needs-backup" spellcheck="true"></label>
   <div class="form-actions span-2">
     <button type="submit">Save changes</button>
+    <button class="secondary" type="submit" name="next_action" value="add_credential">Save & add credential</button>
+    {% if service %}<a class="button secondary" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}">Add credential now</a>{% endif %}
     {% if service %}<a class="button secondary" href="/services/{{ service.id }}">Cancel</a>{% endif %}
   </div>
 </form>

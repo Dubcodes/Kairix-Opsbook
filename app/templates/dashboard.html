@@ -20,7 +20,7 @@
 </section>
 
 {% if suggestions %}
-  <details class="panel collapsible-panel">
+  <details class="panel collapsible-panel" open>
     <summary>
       <span><strong>Warnings & Suggestions</strong><small>{{ suggestions|length }} active item(s)</small></span>
       <a href="/suggestions">View all</a>
@@ -41,6 +41,19 @@
       {% endfor %}
     </div>
   </details>
+{% endif %}
+
+{% if ping_overview %}
+  <section class="ping-strip panel">
+    <strong>Device pings</strong>
+    <div>
+      {% for item in ping_overview %}
+        <a href="/devices?q={{ item.name }}" class="ping-pill ping-pill-{{ item.state }}">
+          <span class="ping-dot ping-{{ item.state }}"></span>{{ item.name }} <small>{{ item.label }}</small>
+        </a>
+      {% endfor %}
+    </div>
+  </section>
 {% endif %}
 
 <section class="two-col">

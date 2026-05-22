@@ -22,7 +22,10 @@ IP_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|
 URL_RE = re.compile(r"https?://[^\s)'\"<>]+", re.IGNORECASE)
 PATH_RE = re.compile(r"(?<![\w.-])/(?:[\w .@+-]+/)*[\w .@+-]+")
 PORT_RE = re.compile(r"\bport\s*(?:is|:)?\s*(\d{2,5})\b", re.IGNORECASE)
-COMMAND_RE = re.compile(r"^\s*(sudo |docker |git |ssh |cd |cloudflared |systemctl |ss |df |free |uptime|apt )", re.IGNORECASE)
+COMMAND_RE = re.compile(
+    r"^\s*(sudo |docker |git |ssh |cd |cloudflared |systemctl |ss |df |free |uptime|apt |tail |ls |nano |vim |cat |mkdir |cp |mv )",
+    re.IGNORECASE,
+)
 USERNAME_RE = re.compile(r"\b(?:user(?:name)?|login|account)\s*(?:is|:)?\s*([a-z_][a-z0-9_-]{1,31})\b", re.IGNORECASE)
 PASSWORD_STYLE_USER_RE = re.compile(r"\b([a-z_][a-z0-9_-]{1,31})\s+password\b", re.IGNORECASE)
 
@@ -91,16 +94,19 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     ports = _unique(ports)
 
     command_lines = [] if is_inventory else lines
-    commands: list[str] = []
+    commands: list[dict[str, str]] = []
+    previous_label = ""
     for line in command_lines:
         stripped = line.strip()
         if COMMAND_RE.search(stripped) and not stripped.endswith(":"):
-            commands.append(stripped)
+            commands.append({"command": stripped, "name": _command_name(stripped, previous_label)})
         if "command:" in stripped.lower():
             maybe = stripped.split(":", 1)[1].strip()
             if maybe:
-                commands.append(maybe)
-    commands = _unique(commands)
+                commands.append({"command": maybe, "name": _command_name(maybe, previous_label)})
+        if stripped and not COMMAND_RE.search(stripped) and not URL_RE.search(stripped) and len(stripped) < 80:
+            previous_label = stripped.strip(":")
+    commands = _unique_commands(commands)
 
     usernames = _unique(_safe_usernames(raw_text))
 
@@ -165,6 +171,14 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
             if clean and not IP_RE.search(clean) and len(clean) < 80:
                 device_name = clean
                 break
+    primary_ip = _primary_ip(ips)
+    if not is_inventory and primary_ip:
+        last_octet = primary_ip.rsplit(".", 1)[-1]
+        for line in lines[:20]:
+            match = re.match(rf"^([A-Za-z][\w .-]{{1,50}})\s+{re.escape(last_octet)}$", line.strip())
+            if match:
+                device_name = match.group(1).strip()
+                break
 
     os_name = ""
     if os_section:
@@ -173,14 +187,14 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     if not os_name:
         for line in lines[:12]:
             clean = line.strip()
-            if re.search(r"\b(debian|ubuntu|windows|macos|raspbian)\b", clean, re.IGNORECASE):
+            if re.search(r"\b(debian|ubuntu|windows|macos|raspbian|raspberry|pi os)\b", clean, re.IGNORECASE):
                 os_name = clean
                 break
 
     final_device_name = "" if device_name == os_name else device_name
     likely_device = {
         "name": final_device_name,
-        "primary_ip": _primary_ip(ips),
+        "primary_ip": primary_ip,
         "os_name": os_name,
         "confidence": "medium" if final_device_name or ips else "low",
     }
@@ -205,7 +219,10 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         if url not in grouped_urls
     ]
     suggested_services = service_items
-    suggested_commands = [{"name": _command_name(command), "command_template": command, "confidence": "medium"} for command in commands]
+    suggested_commands = [
+        {"name": command["name"], "command_template": command["command"], "confidence": "medium"}
+        for command in commands
+    ]
     suggested_credentials = [
         credential
         for credential in _note_credentials(raw_text)
@@ -404,7 +421,21 @@ def _disk_summary(text: str) -> str:
     return ""
 
 
-def _command_name(command: str) -> str:
+def _unique_commands(items: list[dict[str, str]]) -> list[dict[str, str]]:
+    seen: set[str] = set()
+    result: list[dict[str, str]] = []
+    for item in items:
+        key = item["command"].strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            result.append(item)
+    return result
+
+
+def _command_name(command: str, label: str = "") -> str:
+    clean_label = label.strip().strip(":")
+    if clean_label and not COMMAND_RE.search(clean_label) and not URL_RE.search(clean_label):
+        return clean_label[:60]
     lowered = command.lower()
     if "docker compose logs" in lowered:
         return "Docker Compose logs"
@@ -437,6 +468,27 @@ def _safe_usernames(text: str) -> list[str]:
 def _note_credentials(text: str) -> list[dict[str, Any]]:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     credentials: list[dict[str, Any]] = []
+    for block in re.split(r"\n\s*\n+", text):
+        block_lines = [line.strip() for line in block.splitlines() if line.strip()]
+        if len(block_lines) < 3:
+            continue
+        first = block_lines[0].strip(":")
+        marker = re.match(r"^([A-Za-z][\w .-]{1,50})\s+(\d{1,3})$", first)
+        if marker and int(marker.group(2)) <= 255:
+            username = block_lines[1]
+            secret = block_lines[2]
+            if _looks_like_username(username) and _looks_like_secret(secret):
+                credentials.append(
+                    {
+                        "label": f"{first} login",
+                        "username": username,
+                        "secret": secret,
+                        "service_name": "",
+                        "security_level": "medium",
+                        "secret_detected": True,
+                        "confidence": "medium",
+                    }
+                )
     for index, line in enumerate(lines):
         lower = line.lower().strip(":")
         if lower in {"root", "admin", "serveruser"} or "password" in lower:
@@ -528,17 +580,26 @@ def _note_services(text: str) -> list[dict[str, Any]]:
         lines = [line.strip() for line in block.splitlines() if line.strip()]
         if not lines:
             continue
-        name = lines[0].strip(":")
+        first_line = lines[0].strip(":")
+        inline_urls = URL_RE.findall(first_line)
+        name = URL_RE.sub("", first_line).strip(" :-")
+        inline_ports: list[int] = []
+        name_port = re.match(r"^(.+?)\s+(\d{4,5})$", name)
+        if name_port and 0 < int(name_port.group(2)) <= 65535:
+            name = name_port.group(1).strip(" :-")
+            inline_ports.append(int(name_port.group(2)))
         if not _looks_like_note_service_name(name):
             continue
-        urls = _unique(URL_RE.findall(block))
+        urls = _unique(inline_urls + URL_RE.findall(block))
+        device_login_marker = re.match(r"^.+\s+(\d{1,3})$", first_line)
+        if device_login_marker and int(device_login_marker.group(1)) <= 255 and not urls:
+            continue
         standalone_ports = [
             int(line)
             for line in lines
             if re.fullmatch(r"\d{2,5}", line) and 0 < int(line) <= 65535
         ]
-        if not urls and not standalone_ports:
-            continue
+        standalone_ports.extend(inline_ports)
         service_urls = [
             {"url": url, "url_type": "public" if not _is_private_url(url) else "local", "confidence": "high"}
             for url in urls
@@ -552,6 +613,8 @@ def _note_services(text: str) -> list[dict[str, Any]]:
             if all(existing["host_port"] != port for existing in service_ports):
                 service_ports.append({"host_port": port, "protocol": "tcp", "confidence": "medium"})
         credentials = _credentials_from_service_block(name, lines, service_urls[0]["url"] if service_urls else "")
+        if not urls and not standalone_ports and not credentials:
+            continue
         services.append(
             {
                 "name": name,
@@ -597,6 +660,21 @@ def _looks_like_secret(value: str) -> bool:
 def _credentials_from_service_block(service_name: str, lines: list[str], login_url: str) -> list[dict[str, Any]]:
     credentials: list[dict[str, Any]] = []
     service_display = service_name.strip(":")
+    labeled_username = _labeled_line_value(lines, {"user", "username", "login", "account"})
+    labeled_secret = _labeled_line_value(lines, {"password", "pass", "secret", "token", "pin"})
+    if labeled_username and labeled_secret:
+        credentials.append(
+            {
+                "label": f"{service_display} login",
+                "username": labeled_username,
+                "secret": labeled_secret,
+                "service_name": service_display,
+                "login_url": login_url,
+                "security_level": "medium" if labeled_username.lower() in {"root", "admin"} else "low",
+                "secret_detected": True,
+                "confidence": "high",
+            }
+        )
     for index, line in enumerate(lines):
         if URL_RE.search(line):
             username = lines[index + 1].strip() if index + 1 < len(lines) else ""
@@ -614,7 +692,7 @@ def _credentials_from_service_block(service_name: str, lines: list[str], login_u
                         "confidence": "medium",
                     }
                 )
-    if not credentials and len(lines) >= 4:
+    if not credentials and len(lines) >= 3:
         username = lines[1]
         secret = lines[2]
         if _looks_like_username(username) and _looks_like_secret(secret):
@@ -631,6 +709,20 @@ def _credentials_from_service_block(service_name: str, lines: list[str], login_u
                 }
             )
     return credentials
+
+
+def _labeled_line_value(lines: list[str], labels: set[str]) -> str:
+    label_pattern = "|".join(re.escape(label) for label in sorted(labels, key=len, reverse=True))
+    for index, line in enumerate(lines):
+        match = re.match(rf"^\s*(?:{label_pattern})\s*(?::|=|-)\s*(.+?)\s*$", line, re.IGNORECASE)
+        if match:
+            value = match.group(1).strip()
+            if value:
+                return value
+        label_only = re.match(rf"^\s*(?:{label_pattern})\s*:?\s*$", line, re.IGNORECASE)
+        if label_only and index + 1 < len(lines):
+            return lines[index + 1].strip()
+    return ""
 
 
 def _unique_services(items: list[dict[str, Any]]) -> list[dict[str, Any]]:

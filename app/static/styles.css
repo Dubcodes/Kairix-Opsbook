@@ -261,6 +261,13 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
 
 .list { display: grid; gap: 6px; }
 .list.compact { gap: 5px; }
+.list-heading {
+  margin: 12px 0 2px;
+  color: var(--muted);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0;
+}
 .list-row, .device-row {
   display: flex;
   justify-content: space-between;
@@ -403,6 +410,31 @@ label small { color: var(--muted); font-weight: 500; }
 .ping-slow { background: var(--amber); }
 .ping-bad, .ping-down { background: var(--red); }
 .ping-unknown { background: var(--muted); }
+.ping-strip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 16px;
+}
+.ping-strip > div {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ping-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--ink);
+  background: var(--surface-soft);
+  font-size: 13px;
+}
+.ping-pill:hover { text-decoration: none; border-color: var(--accent); }
+.ping-pill small { color: var(--muted); }
 
 pre {
   margin: 10px 0;
