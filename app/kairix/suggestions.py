@@ -243,7 +243,7 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                 "id": "advice:docker-folder-layout",
                 "severity": "info",
                 "title": "Suggested Docker folder layout",
-                "body": "/home/mainuser/docker/service-name with docker-compose.yml, data, and backups folders is easy to scan.",
+                "body": "/home/example/docker/service-name with docker-compose.yml, data, and backups folders is easy to scan.",
                 "target": "/commands",
             },
             {

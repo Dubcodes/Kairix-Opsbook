@@ -222,7 +222,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         {
             "label": f"{username} login",
             "username": username,
-            "security_level": "medium" if username in {"root", "admin", "mainuser"} else "low",
+            "security_level": "medium" if username in {"root", "admin", "serveruser"} else "low",
             "secret_detected": False,
             "confidence": "low",
         }
@@ -439,11 +439,11 @@ def _note_credentials(text: str) -> list[dict[str, Any]]:
     credentials: list[dict[str, Any]] = []
     for index, line in enumerate(lines):
         lower = line.lower().strip(":")
-        if lower in {"root", "admin", "mainuser"} or "password" in lower:
+        if lower in {"root", "admin", "serveruser"} or "password" in lower:
             next_one = lines[index + 1].strip() if index + 1 < len(lines) else ""
             next_two = lines[index + 2].strip() if index + 2 < len(lines) else ""
             if (
-                lower in {"root", "admin", "mainuser"}
+                lower in {"root", "admin", "serveruser"}
                 and next_one
                 and not URL_RE.search(next_one)
                 and not (index > 0 and URL_RE.search(lines[index - 1]))
@@ -455,7 +455,7 @@ def _note_credentials(text: str) -> list[dict[str, Any]]:
                         "username": lower,
                         "secret": next_one,
                         "service_name": "",
-                        "security_level": "medium" if lower in {"root", "admin", "mainuser"} else "low",
+                        "security_level": "medium" if lower in {"root", "admin", "serveruser"} else "low",
                         "secret_detected": True,
                         "confidence": "medium",
                     }
@@ -570,7 +570,7 @@ def _looks_like_note_service_name(value: str) -> bool:
     if (
         not clean
         or len(clean) > 60
-        or lower in {"root", "user", "main ip", "ssh", "hostname", "os", "admin", "mainuser"}
+        or lower in {"root", "user", "main ip", "ssh", "hostname", "os", "admin", "serveruser"}
         or any(word in lower for word in ["folder", "folders", "rules", "shares", "by ip", "check ", "restart ", "start/stop", "recommended", "update system"])
         or COMMAND_RE.search(clean)
         or IP_RE.search(clean)
