@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Edit Port · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Editing enabled</p>
+    <h1>Edit {{ port.host_port }}/{{ port.protocol }}</h1>
+  </div>
+  <a class="button secondary" href="/ports">Cancel</a>
+</section>
+<form method="post" class="panel form-grid wide">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Device <select name="device_id">{% for device in devices %}<option value="{{ device.id }}" {% if port.device_id == device.id %}selected{% endif %}>{{ device.name }}</option>{% endfor %}</select></label>
+  <label>Service <select name="service_id"><option value="">None</option>{% for service in services %}<option value="{{ service.id }}" {% if port.service_id == service.id %}selected{% endif %}>{{ service.name }} · {{ service.device.name }}</option>{% endfor %}</select></label>
+  <label>Host port <input name="host_port" required inputmode="numeric" value="{{ port.host_port }}"></label>
+  <label>Internal port <input name="internal_port" inputmode="numeric" value="{{ port.internal_port or '' }}"></label>
+  <label>Protocol <input name="protocol" value="{{ port.protocol or 'tcp' }}"></label>
+  <label>Purpose <input name="purpose" value="{{ port.purpose or '' }}" spellcheck="true"></label>
+  <label class="span-2">Tags <input name="tags" value="{{ tag_text }}" spellcheck="true"></label>
+  <label class="span-2">Notes <textarea name="notes" spellcheck="true">{{ port.notes or '' }}</textarea></label>
+  <div class="form-actions span-2">
+    <button type="submit">Save changes</button>
+    <a class="button secondary" href="/ports">Cancel</a>
+  </div>
+</form>
+<form method="post" action="/delete/port/{{ port.id }}" class="panel danger-panel" data-confirm-delete="Delete this port?">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <strong>Delete port</strong>
+  <p class="muted">Use this for duplicate or incorrect port imports.</p>
+  <button class="ghost" type="submit">Delete {{ port.host_port }}/{{ port.protocol }}</button>
+</form>
+{% endblock %}

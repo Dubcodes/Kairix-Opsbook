@@ -25,12 +25,21 @@
   <section class="panel">
     <h2>Overview</h2>
     <dl class="details">
-      <dt>Purpose</dt><dd>{{ device.purpose or "Not documented yet." }}</dd>
-      <dt>Manual state</dt><dd>{{ device.status_manual }}</dd>
-      <dt>Location</dt><dd>{{ device.location or "Not documented." }}</dd>
-      <dt>Update note</dt><dd>{{ device.update_status or "Not checked." }}</dd>
+      {% if device.purpose %}<dt>Purpose</dt><dd>{{ device.purpose }}</dd>{% endif %}
+      {% if device.status_manual %}<dt>Manual state</dt><dd>{{ device.status_manual }}{% if status_log %} · set {{ status_log.created_at|dt }}{% endif %}</dd>{% endif %}
+      {% if device.location %}<dt>Location</dt><dd>{{ device.location }}</dd>{% endif %}
+      {% if device.update_status %}<dt>Update note</dt><dd>{{ device.update_status }}</dd>{% endif %}
+      <dt>Ping</dt>
+      <dd>
+        <form method="post" action="/devices/{{ device.id }}/ping" class="inline-mini ping-line">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <span class="ping-dot ping-{{ ping_status.state }}"></span>
+          <span>{{ ping_status.label }} · next {{ ping_status.next_at }}</span>
+          <button class="secondary small-button" type="submit">Check now</button>
+        </form>
+      </dd>
     </dl>
-    {% if device.notes %}<pre class="note-block">{{ device.notes }}</pre>{% endif %}
+    {% if device.notes and "Created from Smart Paste review" not in device.notes %}<pre class="note-block">{{ device.notes }}</pre>{% endif %}
   </section>
   <section class="quick-grid">
     <div class="panel">
@@ -112,10 +121,10 @@
           </summary>
           <div class="summary-grid">
             <dl class="details">
-              <dt>Purpose</dt><dd>{{ service.purpose or "Not documented." }}</dd>
-              <dt>Compose</dt><dd>{{ service.compose_path or "Not documented." }}</dd>
-              <dt>Data</dt><dd>{{ service.data_path or "Not documented." }}</dd>
-              <dt>Backup</dt><dd>{{ service.backup_path or "Not documented." }}</dd>
+              {% if service.purpose %}<dt>Purpose</dt><dd>{{ service.purpose }}</dd>{% endif %}
+              {% if service.compose_path %}<dt>Compose</dt><dd>{{ service.compose_path }}</dd>{% endif %}
+              {% if service.data_path %}<dt>Data</dt><dd>{{ service.data_path }}</dd>{% endif %}
+              {% if service.backup_path %}<dt>Backup</dt><dd>{{ service.backup_path }}</dd>{% endif %}
             </dl>
             <div>
               <h3>Credentials</h3>
@@ -132,7 +141,7 @@
                     {% endif %}
                   </div>
                 {% else %}
-                  <p class="empty">No credentials linked.</p>
+                  {% if service_no_credentials_needed(service) %}<p class="empty">No saved credentials needed.</p>{% endif %}
                 {% endfor %}
               </div>
             </div>
@@ -178,11 +187,11 @@
     <h2>Hardware</h2>
     {% if device.hardware %}
       <dl class="details">
-        <dt>Model</dt><dd>{{ device.hardware.model or "Not documented." }}</dd>
-        <dt>CPU</dt><dd>{{ device.hardware.cpu or "Not documented." }}</dd>
-        <dt>RAM</dt><dd>{{ device.hardware.ram or "Not documented." }}</dd>
-        <dt>GPU</dt><dd>{{ device.hardware.gpu or "Not documented." }}</dd>
-        <dt>Storage</dt><dd>{{ device.hardware.storage_summary or "Not documented." }}</dd>
+        {% if device.hardware.model %}<dt>Model</dt><dd>{{ device.hardware.model }}</dd>{% endif %}
+        {% if device.hardware.cpu %}<dt>CPU</dt><dd>{{ device.hardware.cpu }}</dd>{% endif %}
+        {% if device.hardware.ram %}<dt>RAM</dt><dd>{{ device.hardware.ram }}</dd>{% endif %}
+        {% if device.hardware.gpu %}<dt>GPU</dt><dd>{{ device.hardware.gpu }}</dd>{% endif %}
+        {% if device.hardware.storage_summary %}<dt>Storage</dt><dd>{{ device.hardware.storage_summary }}</dd>{% endif %}
       </dl>
     {% endif %}
   </section>
@@ -190,8 +199,8 @@
   <section class="panel">
     <h2>Network</h2>
     <dl class="details">
-      <dt>IP address</dt><dd>{{ device.primary_ip or "Not documented." }}</dd>
-      <dt>Hostname</dt><dd>{{ device.hostname or "Not documented." }}</dd>
+      {% if device.primary_ip %}<dt>IP address</dt><dd>{{ device.primary_ip }}</dd>{% endif %}
+      {% if device.hostname %}<dt>Hostname</dt><dd>{{ device.hostname }}</dd>{% endif %}
     </dl>
     <h3>Ports</h3>
     <div class="list compact">{% for port in device.ports %}<div class="list-row static"><strong>{{ port.host_port }}/{{ port.protocol }}</strong><span>{{ port.purpose or port.notes }}</span></div>{% else %}<p class="empty">No ports documented.</p>{% endfor %}</div>

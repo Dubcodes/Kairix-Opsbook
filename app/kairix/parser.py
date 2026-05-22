@@ -233,9 +233,10 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
 
     extras: dict[str, Any] = {
         "paths": paths,
-        "cpu_summary": "\n".join(cpu.splitlines()[:8]),
-        "memory_summary": memory,
-        "disk_summary": disks,
+        "model_summary": _model_summary(host_section),
+        "cpu_summary": _cpu_summary(cpu),
+        "memory_summary": _memory_summary(memory),
+        "disk_summary": _disk_summary(disks),
         "docker_containers": docker_containers,
         "docker_compose": docker_compose,
         "listening_ports": listening_ports,
@@ -351,12 +352,56 @@ def _clean_paths(paths: list[str]) -> list[str]:
     cleaned: list[str] = []
     for path in paths:
         value = path.strip()
-        if value.startswith(("/dev/null", "/www.", "/bugs.")):
+        if (
+            value == "/"
+            or value.startswith(("/dev/null", "/www.", "/bugs."))
+            or re.fullmatch(r"/\d{1,3}(?:\.\d{1,3}){3}", value)
+        ):
             continue
-        if " " in value and not value.startswith(("/srv/", "/home/", "/opt/", "/var/", "/etc/", "/boot/")):
+        if re.search(r"\s(?:ext4|vfat|swap|xfs|btrfs|zfs)$", value):
+            value = value.split(" ", 1)[0]
+        elif " " in value and not value.startswith(("/srv/", "/home/", "/opt/", "/var/", "/etc/", "/boot/")):
             value = value.split(" ", 1)[0]
         cleaned.append(value)
     return cleaned
+
+
+def _cpu_summary(text: str) -> str:
+    model = re.search(r"^Model name:\s*(.+)$", text, re.MULTILINE)
+    if model:
+        return model.group(1).strip()
+    for line in text.splitlines():
+        clean = line.strip()
+        if clean and any(word in clean.lower() for word in ["intel", "amd", "arm", "model"]):
+            return clean.split(":", 1)[-1].strip()
+    return ""
+
+
+def _model_summary(text: str) -> str:
+    model = re.search(r"^\s*Hardware Model:\s*(.+)$", text, re.MULTILINE)
+    if model:
+        return model.group(1).strip()
+    return ""
+
+
+def _memory_summary(text: str) -> str:
+    for line in text.splitlines():
+        parts = line.split()
+        if parts and parts[0].rstrip(":").lower() == "mem" and len(parts) > 1:
+            return parts[1]
+    return ""
+
+
+def _disk_summary(text: str) -> str:
+    for line in text.splitlines():
+        clean = line.strip()
+        if not clean or clean.lower().startswith("name "):
+            continue
+        clean = re.sub(r"^[├└─\s]+", "", clean)
+        parts = clean.split()
+        if len(parts) >= 3 and parts[2] == "disk":
+            return " ".join(parts[:3])
+    return ""
 
 
 def _command_name(command: str) -> str:

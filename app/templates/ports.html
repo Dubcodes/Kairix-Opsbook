@@ -44,12 +44,18 @@
     <h2>Ports</h2>
     <div class="list">
       {% for port in ports %}
-        <div class="list-row static">
-          <div><strong>{{ port.host_port }}/{{ port.protocol }}</strong><span>{{ port.device.name }}{% if port.service %} · {{ port.service.name }}{% endif %} · {{ port.purpose or port.notes }}</span></div>
+        <div class="list-row static clickable-card" data-card-href="{% if port.service %}/services/{{ port.service.id }}?tab=ports{% else %}/ports/{{ port.id }}/edit{% endif %}">
+          <a class="row-main" href="{% if port.service %}/services/{{ port.service.id }}?tab=ports{% else %}/ports/{{ port.id }}/edit{% endif %}">
+            <strong>{{ port.host_port }}/{{ port.protocol }}</strong>
+            <span>{{ port.device.name }}{% if port.service %} · {{ port.service.name }}{% endif %}{% if port.purpose or port.notes %} · {{ port.purpose or port.notes }}{% endif %}</span>
+          </a>
+          <div class="actions compact-actions">
+            <a class="button secondary small-button" href="/ports/{{ port.id }}/edit">Edit</a>
           <form method="post" action="/delete/port/{{ port.id }}" data-confirm-delete="Delete this port?">
             <input type="hidden" name="csrf" value="{{ csrf }}">
-            <button class="ghost" type="submit">Delete</button>
+            <button class="ghost small-button" type="submit">Delete</button>
           </form>
+          </div>
         </div>
       {% else %}<p class="empty">No ports documented.</p>{% endfor %}
     </div>
@@ -58,12 +64,19 @@
     <h2>URLs</h2>
     <div class="list">
       {% for url in urls %}
-        <div class="list-row static">
-          <a href="{{ url.url }}" target="_blank"><strong>{{ url.label or url.url_type }}</strong><span>{{ url.url }}</span></a>
+        <div class="list-row static clickable-card" data-card-href="{% if url.service %}/services/{{ url.service.id }}?tab=ports{% else %}/urls/{{ url.id }}/edit{% endif %}">
+          <a class="row-main" href="{% if url.service %}/services/{{ url.service.id }}?tab=ports{% else %}/urls/{{ url.id }}/edit{% endif %}">
+            <strong>{{ url.label or url.url_type }}</strong>
+            <span>{{ url.url }}{% if url.device %} · {{ url.device.name }}{% endif %}{% if url.service %} · {{ url.service.name }}{% endif %}</span>
+          </a>
+          <div class="actions compact-actions">
+          <a class="button secondary small-button" href="{{ url.url }}" target="_blank">Open</a>
+          <a class="button secondary small-button" href="/urls/{{ url.id }}/edit">Edit</a>
           <form method="post" action="/delete/url/{{ url.id }}" data-confirm-delete="Delete this URL?">
             <input type="hidden" name="csrf" value="{{ csrf }}">
-            <button class="ghost" type="submit">Delete</button>
+            <button class="ghost small-button" type="submit">Delete</button>
           </form>
+          </div>
         </div>
       {% else %}<p class="empty">No URLs documented.</p>{% endfor %}
     </div>

@@ -22,6 +22,23 @@
     <input type="checkbox" name="compact_forms" {% if app_settings.compact_forms != "off" %}checked{% endif %}>
     Compact data-entry forms
   </label>
+  <label>Session timeout minutes
+    <input name="session_timeout_minutes" type="number" min="1" max="999" value="{{ app_settings.session_timeout_minutes or '20' }}">
+    <small>Default is 20. The warning appears 5 minutes before timeout.</small>
+  </label>
+  <label>Ping interval minutes
+    <input name="ping_interval_minutes" type="number" min="5" max="999" value="{{ app_settings.ping_interval_minutes or '60' }}">
+    <small>Devices with an IP/hostname are checked in the background.</small>
+  </label>
+  <label>Ping failures before warning
+    <input name="ping_failures_before_warning" type="number" min="1" max="10" value="{{ app_settings.ping_failures_before_warning or '3' }}">
+  </label>
+  <label>Green ping threshold ms
+    <input name="ping_green_ms" type="number" min="1" max="999" value="{{ app_settings.ping_green_ms or '3' }}">
+  </label>
+  <label>Orange ping threshold ms
+    <input name="ping_orange_ms" type="number" min="1" max="999" value="{{ app_settings.ping_orange_ms or '10' }}">
+  </label>
 
   <h3 class="span-2">Light Mode</h3>
   <label>Background <input type="color" name="light_bg" value="{{ app_settings.light_bg }}"></label>

@@ -312,7 +312,8 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   gap: 8px;
   margin-bottom: 16px;
 }
-.filter-bar input { flex: 1; }
+.filter-bar input { flex: 2 1 360px; min-width: 260px; }
+.filter-bar select { flex: 0 0 190px; }
 
 input, textarea, select {
   width: 100%;
@@ -377,7 +378,7 @@ label small { color: var(--muted); font-weight: 500; }
   border-radius: 6px;
   padding: 8px 10px;
 }
-.tabs a.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+.tabs a.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .tabs a:hover { text-decoration: none; }
 
 .details {
@@ -387,6 +388,21 @@ label small { color: var(--muted); font-weight: 500; }
 }
 .details dt { color: var(--muted); font-weight: 700; }
 .details dd { margin: 0; overflow-wrap: anywhere; }
+.ping-line {
+  margin: 0;
+  flex-wrap: wrap;
+}
+.ping-dot {
+  width: 11px;
+  height: 11px;
+  border-radius: 999px;
+  background: var(--muted);
+  display: inline-block;
+}
+.ping-good { background: var(--green); }
+.ping-slow { background: var(--amber); }
+.ping-bad, .ping-down { background: var(--red); }
+.ping-unknown { background: var(--muted); }
 
 pre {
   margin: 10px 0;
@@ -564,6 +580,9 @@ code {
 .modal-panel textarea {
   min-height: 220px;
 }
+.compact-modal {
+  max-width: 420px;
+}
 
 input[type="color"] {
   min-height: 42px;
@@ -583,6 +602,22 @@ input[type="color"] {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 14px;
+}
+.tag-list-row {
+  display: block;
+}
+.tag-list-row > summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.tag-list-row > summary::-webkit-details-marker {
+  display: none;
+}
+.tag-list-row[open] > summary {
+  margin-bottom: 10px;
 }
 
 .collapsible-panel {

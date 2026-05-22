@@ -89,6 +89,11 @@
       data = await response.json();
     }
     if (!response.ok) {
+      if (data.logged_out) {
+        window.alert(data.detail || "Too many wrong attempts. You have been logged out.");
+        window.location.href = "/login";
+        return;
+      }
       window.alert(data.detail || "Reveal failed.");
       return;
     }
@@ -211,4 +216,74 @@
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", setThemeButtonLabel);
   }
   setThemeButtonLabel();
+
+  const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
+  if (timeoutMeta) {
+    const timeoutMinutes = Math.max(1, Math.min(999, Number(timeoutMeta.getAttribute("content") || "20")));
+    const warnAfterMs = Math.max(30_000, (timeoutMinutes - 5) * 60_000);
+    let warningTimer;
+    let logoutTimer;
+    let lastKeepalive = 0;
+    let warningEl;
+
+    function ensureWarning() {
+      if (warningEl) return warningEl;
+      warningEl = document.createElement("div");
+      warningEl.className = "modal-backdrop session-warning";
+      warningEl.hidden = true;
+      warningEl.innerHTML = `
+        <div class="modal-panel compact-modal">
+          <h2>Session timeout soon</h2>
+          <p class="muted">You will be logged out in about 5 minutes for security.</p>
+          <div class="form-actions">
+            <button type="button" data-session-stay>Stay signed in</button>
+            <button class="secondary" type="button" data-session-extend>Keep open longer</button>
+          </div>
+        </div>`;
+      document.body.appendChild(warningEl);
+      return warningEl;
+    }
+
+    async function keepAlive(extend = false) {
+      const now = Date.now();
+      if (!extend && now - lastKeepalive < 60_000) return;
+      lastKeepalive = now;
+      const csrf = document.querySelector("meta[name='csrf-token']")?.getAttribute("content") || "";
+      await fetch("/session/keepalive", {
+        method: "POST",
+        headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf},
+        body: JSON.stringify({extend})
+      }).catch(() => {});
+    }
+
+    function resetSessionTimers(sendKeepalive = true) {
+      clearTimeout(warningTimer);
+      clearTimeout(logoutTimer);
+      if (warningEl) warningEl.hidden = true;
+      warningTimer = setTimeout(() => {
+        ensureWarning().hidden = false;
+      }, warnAfterMs);
+      logoutTimer = setTimeout(() => {
+        window.location.href = "/login";
+      }, timeoutMinutes * 60_000 + 1000);
+      if (sendKeepalive) keepAlive(false);
+    }
+
+    ["click", "keydown", "pointerdown"].forEach((eventName) => {
+      document.addEventListener(eventName, (event) => {
+        if (event.target.closest("[data-session-extend]")) {
+          keepAlive(true).finally(() => resetSessionTimers(false));
+          return;
+        }
+        if (event.target.closest("[data-session-stay]")) {
+          resetSessionTimers(true);
+          return;
+        }
+        if (warningEl && !warningEl.hidden) {
+          resetSessionTimers(true);
+        }
+      }, true);
+    });
+    resetSessionTimers(false);
+  }
 })();

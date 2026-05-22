@@ -19,7 +19,7 @@
   </label>
   <label>Name <span class="hint" title="The app/service name you search for, like Portainer, Vaultwarden, or Immich.">?</span><input name="name" required value="{{ service.name if service else '' }}" spellcheck="true"></label>
   <label>Type <span class="hint" title="Examples: Docker app, database, tunnel, dashboard, media service.">?</span><input name="type" value="{{ service.type if service else '' }}" spellcheck="true"></label>
-  <label>Manual state <span class="hint" title="This is only your note, not live monitoring. Example: unknown, documented, needs-attention.">?</span><input name="status_manual" value="{{ service.status_manual if service else 'unknown' }}" spellcheck="true"></label>
+  <label>Manual state <span class="hint" title="This is your note, not live monitoring. Example: stable, running, needs-attention, retired. Leave blank when not needed.">?</span><input name="status_manual" value="{{ service.status_manual if service else '' }}" spellcheck="true"></label>
   <label class="span-2">Purpose <span class="hint" title="One short explanation of what the service is for.">?</span><textarea name="purpose" spellcheck="true">{{ service.purpose if service else '' }}</textarea></label>
   <label>Local URL <span class="hint" title="LAN URL you open at home. Example: http://192.168.1.10:9443.">?</span><input name="local_url" value="{{ service.local_url if service else '' }}"></label>
   <label>Public URL <input name="public_url" value="{{ service.public_url if service else '' }}"></label>
@@ -32,7 +32,8 @@
   <label>Stack/group <span class="hint" title="Use this to group Compose services, like immich, people-system, or cloudflare-tunnels.">?</span><input name="docker_project" value="{{ service.docker_project if service else '' }}"></label>
   <label>Container name <input name="container_name" value="{{ service.container_name if service else '' }}"></label>
   <label>Image <input name="image" value="{{ service.image if service else '' }}"></label>
-  <label class="span-2">Notes <textarea name="notes" spellcheck="true">{{ service.notes if service else '' }}</textarea></label>
+  <label class="check-row span-2"><input type="checkbox" name="credentials_not_needed" {% if service and service_no_credentials_needed(service) %}checked{% endif %}> This service does not need saved credentials</label>
+  <label class="span-2">Notes <textarea name="notes" spellcheck="true">{{ public_notes(service.notes) if service else '' }}</textarea></label>
   <label class="span-2">Tags <input name="tags" value="{{ tag_text }}" placeholder="docker, public-url, needs-backup" spellcheck="true"></label>
   <div class="form-actions span-2">
     <button type="submit">Save changes</button>

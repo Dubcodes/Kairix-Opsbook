@@ -31,7 +31,7 @@ class Settings:
         "SESSION_SECRET_KEY", "dev-session-secret-change-before-real-use"
     )
     session_cookie_secure: bool = _bool_env("SESSION_COOKIE_SECURE", False)
-    session_timeout_minutes: int = int(os.getenv("SESSION_TIMEOUT_MINUTES", "60"))
+    session_timeout_minutes: int = int(os.getenv("SESSION_TIMEOUT_MINUTES", "20"))
     medium_unlock_minutes: int = int(os.getenv("MEDIUM_UNLOCK_MINUTES", "5"))
     export_dir: str = os.getenv("EXPORT_DIR", "/app/exports")
     backup_dir: str = os.getenv("BACKUP_DIR", "/app/backups")

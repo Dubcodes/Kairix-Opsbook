@@ -3,39 +3,27 @@
 {% block content %}
 <section class="page-head">
   <div>
-    <p class="eyebrow">Loose organization layer</p>
+    <p class="eyebrow">Used tags only</p>
     <h1>Tags</h1>
   </div>
 </section>
-<section class="tag-cloud">
-  {% for tag in tags %}
-    <article class="panel">
-      <h2>#{{ tag.name }}</h2>
-      <p class="muted">{{ grouped.get(tag.id, [])|length }} linked item(s)</p>
-      <div class="list compact">
-        {% for link in grouped.get(tag.id, []) %}
-          {% if link.object_type == "device" %}
-            <a class="list-row" href="/devices/{{ link.object_id }}"><strong>Device</strong><span>#{{ link.object_id }}</span></a>
-          {% elif link.object_type == "service" %}
-            <a class="list-row" href="/services/{{ link.object_id }}"><strong>Service</strong><span>#{{ link.object_id }}</span></a>
-          {% elif link.object_type == "credential" %}
-            <a class="list-row" href="/credentials/{{ link.object_id }}"><strong>Credential</strong><span>#{{ link.object_id }}</span></a>
-          {% elif link.object_type == "command" %}
-            <a class="list-row" href="/commands"><strong>Command</strong><span>#{{ link.object_id }}</span></a>
-          {% elif link.object_type == "quick_note" %}
-            <a class="list-row" href="/notes"><strong>Quick note</strong><span>#{{ link.object_id }}</span></a>
-          {% else %}
-            <div class="list-row static"><strong>{{ link.object_type }}</strong><span>#{{ link.object_id }}</span></div>
-          {% endif %}
-        {% else %}
-          <p class="empty">Seed tag, not used yet.</p>
-        {% endfor %}
-      </div>
-    </article>
-  {% else %}
-    <section class="panel">
-      <p class="empty">No used tags yet. Tags will appear here after you attach them to devices, services, credentials, commands, or imports.</p>
-    </section>
-  {% endfor %}
+<section class="panel">
+  <div class="list">
+    {% for tag in tags %}
+      <details class="list-row static tag-list-row">
+        <summary>
+          <strong>#{{ tag.name }}</strong>
+          <span>{{ grouped.get(tag.id, [])|length }} linked item(s)</span>
+        </summary>
+        <div class="list compact">
+          {% for link in grouped.get(tag.id, []) %}
+            <a class="list-row" href="{{ link.href }}"><strong>{{ link.kind }}</strong><span>{{ link.label }}</span></a>
+          {% endfor %}
+        </div>
+      </details>
+    {% else %}
+      <p class="empty">No used tags yet. Tags will appear after you attach them to devices, services, credentials, commands, ports, or notes.</p>
+    {% endfor %}
+  </div>
 </section>
 {% endblock %}

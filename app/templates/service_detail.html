@@ -25,13 +25,13 @@
   <section class="panel">
     <h2>Overview</h2>
     <dl class="details">
-      <dt>Purpose</dt><dd>{{ service.purpose or "Not documented yet." }}</dd>
-      <dt>Manual state</dt><dd>{{ service.status_manual }}</dd>
-      <dt>Local URL</dt><dd>{% if service.local_url %}<a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a>{% else %}Not documented.{% endif %}</dd>
-      <dt>Public URL</dt><dd>{% if service.public_url %}<a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a>{% else %}Not documented.{% endif %}</dd>
-      <dt>Repo</dt><dd>{{ service.repo_url or "Not documented." }}</dd>
+      {% if service.purpose %}<dt>Purpose</dt><dd>{{ service.purpose }}</dd>{% endif %}
+      {% if service.status_manual %}<dt>Manual state</dt><dd>{{ service.status_manual }}{% if status_log %} · set {{ status_log.created_at|dt }}{% endif %}</dd>{% endif %}
+      {% if service.local_url %}<dt>Local URL</dt><dd><a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a></dd>{% endif %}
+      {% if service.public_url %}<dt>Public URL</dt><dd><a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a></dd>{% endif %}
+      {% if service.repo_url %}<dt>Repo</dt><dd>{{ service.repo_url }}</dd>{% endif %}
     </dl>
-    {% if service.notes %}<pre class="note-block">{{ service.notes }}</pre>{% endif %}
+    {% if public_notes(service.notes) and "Imported from Smart Paste" not in service.notes %}<pre class="note-block">{{ public_notes(service.notes) }}</pre>{% endif %}
   </section>
 {% elif tab == "login" %}
   <section class="section-title"><h2>Login</h2><a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}">Add Credential</a></section>
@@ -50,16 +50,22 @@
           <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit">Edit</a>
         </div>
       </div>
-    {% else %}<p class="empty">No service credentials yet.</p>{% endfor %}
+    {% else %}
+      {% if service_no_credentials_needed(service) %}
+        <p class="empty">No saved credentials needed for this service.</p>
+      {% else %}
+        <p class="empty">No service credentials yet.</p>
+      {% endif %}
+    {% endfor %}
   </section>
 {% elif tab == "docker" %}
   <section class="panel">
     <h2>Docker</h2>
     <dl class="details">
-      <dt>Compose folder</dt><dd>{{ service.compose_path or "Not documented." }}</dd>
-      <dt>Compose project</dt><dd>{{ service.docker_project or "Not documented." }}</dd>
-      <dt>Container name</dt><dd>{{ service.container_name or "Not documented." }}</dd>
-      <dt>Image</dt><dd>{{ service.image or "Not documented." }}</dd>
+      {% if service.compose_path %}<dt>Compose folder</dt><dd>{{ service.compose_path }}</dd>{% endif %}
+      {% if service.docker_project %}<dt>Compose project</dt><dd>{{ service.docker_project }}</dd>{% endif %}
+      {% if service.container_name %}<dt>Container name</dt><dd>{{ service.container_name }}</dd>{% endif %}
+      {% if service.image %}<dt>Image</dt><dd>{{ service.image }}</dd>{% endif %}
     </dl>
     <div class="warning">Docker API integration is disabled by design in this MVP. Prefer Smart Paste or a future read-only Kairix Agent.</div>
   </section>
@@ -70,11 +76,11 @@
   <section class="panel">
     <h2>Files</h2>
     <dl class="details">
-      <dt>Project path</dt><dd>{{ service.compose_path or "Not documented." }}</dd>
-      <dt>Data path</dt><dd>{{ service.data_path or "Not documented." }}</dd>
-      <dt>Config path</dt><dd>{{ service.config_path or "Not documented." }}</dd>
-      <dt>Log path</dt><dd>{{ service.log_path or "Not documented." }}</dd>
-      <dt>Backup path</dt><dd>{{ service.backup_path or "Not documented." }}</dd>
+      {% if service.compose_path %}<dt>Project path</dt><dd>{{ service.compose_path }}</dd>{% endif %}
+      {% if service.data_path %}<dt>Data path</dt><dd>{{ service.data_path }}</dd>{% endif %}
+      {% if service.config_path %}<dt>Config path</dt><dd>{{ service.config_path }}</dd>{% endif %}
+      {% if service.log_path %}<dt>Log path</dt><dd>{{ service.log_path }}</dd>{% endif %}
+      {% if service.backup_path %}<dt>Backup path</dt><dd>{{ service.backup_path }}</dd>{% endif %}
     </dl>
   </section>
 {% elif tab == "ports" %}
@@ -87,8 +93,8 @@
   <section class="panel">
     <h2>Backups</h2>
     <dl class="details">
-      <dt>Backup path</dt><dd>{{ service.backup_path or "Not documented." }}</dd>
-      <dt>Notes</dt><dd>{{ service.notes or "Add restore notes before this becomes important under pressure." }}</dd>
+      {% if service.backup_path %}<dt>Backup path</dt><dd>{{ service.backup_path }}</dd>{% endif %}
+      {% if public_notes(service.notes) and "Imported from Smart Paste" not in service.notes %}<dt>Notes</dt><dd>{{ public_notes(service.notes) }}</dd>{% endif %}
     </dl>
   </section>
 {% elif tab == "notes" %}

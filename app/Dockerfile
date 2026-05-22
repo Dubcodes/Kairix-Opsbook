@@ -6,7 +6,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends curl iputils-ping \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
@@ -19,4 +19,3 @@ COPY static ./static
 EXPOSE 8000
 
 CMD ["uvicorn", "kairix.main:app", "--host", "0.0.0.0", "--port", "8000"]
-

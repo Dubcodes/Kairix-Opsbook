@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import re
+import subprocess
+import threading
+import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -32,6 +36,7 @@ from .seeds import seed_initial_data
 from .suggestions import TAG_IDEAS, dismiss_suggestion, visible_suggestions
 from .utils import (
     format_dt,
+    merge_tags,
     render_template_vars,
     set_tags,
     slugify,
@@ -46,7 +51,7 @@ app.add_middleware(
     secret_key=settings.session_secret_key,
     https_only=settings.session_cookie_secure,
     same_site="lax",
-    max_age=settings.session_timeout_minutes * 60,
+    max_age=999 * 60,
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
@@ -54,6 +59,20 @@ templates = Jinja2Templates(directory="templates")
 templates.env.filters["dt"] = format_dt
 templates.env.globals["render_vars"] = render_template_vars
 templates.env.globals["settings"] = settings
+
+NO_CREDENTIALS_MARKER = "[opsbook:no-credentials-needed]"
+
+
+def service_no_credentials_needed(service: models.Service) -> bool:
+    return NO_CREDENTIALS_MARKER in (service.notes or "")
+
+
+def public_notes(value: str) -> str:
+    return (value or "").replace(NO_CREDENTIALS_MARKER, "").strip()
+
+
+templates.env.globals["service_no_credentials_needed"] = service_no_credentials_needed
+templates.env.globals["public_notes"] = public_notes
 
 THEME_DEFAULTS = {
     "theme_mode": "auto",
@@ -73,14 +92,27 @@ THEME_DEFAULTS = {
     "dark_accent_text": "#06201d",
     "dashboard_recent_limit": "6",
     "compact_forms": "on",
+    "session_timeout_minutes": "20",
+    "ping_interval_minutes": "60",
+    "ping_failures_before_warning": "3",
+    "ping_green_ms": "3",
+    "ping_orange_ms": "10",
 }
+
+PING_THREAD_STARTED = False
 
 
 @app.on_event("startup")
 def startup() -> None:
+    global PING_THREAD_STARTED
     init_db()
     with SessionLocal() as db:
         seed_initial_data(db)
+        _normalize_unknown_states(db)
+        db.commit()
+    if not PING_THREAD_STARTED:
+        PING_THREAD_STARTED = True
+        threading.Thread(target=_ping_loop, name="kairix-ping-loop", daemon=True).start()
 
 
 def redirect(url: str) -> RedirectResponse:
@@ -152,6 +184,144 @@ def int_setting(db: Session, key: str, default: int, *, minimum: int = 1, maximu
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(maximum, value))
+
+
+def _normalize_unknown_states(db: Session) -> None:
+    for device in db.query(models.Device).filter(models.Device.status_manual == "unknown").all():
+        device.status_manual = ""
+    for service in db.query(models.Service).filter(models.Service.status_manual == "unknown").all():
+        service.status_manual = ""
+
+
+def _infer_tags_for_service(service: models.Service) -> str:
+    text = " ".join(
+        [
+            service.name,
+            service.type,
+            service.docker_project,
+            service.compose_path,
+            service.container_name,
+            service.image,
+            service.local_url,
+            service.public_url,
+        ]
+    ).lower()
+    tags: list[str] = []
+    if "docker" in text or "compose" in text or service.container_name or service.image:
+        tags.append("docker")
+    if "portainer" in text:
+        tags.extend(["portainer", "docker"])
+    if "cloudflare" in text or "cloudflared" in text or "tunnel" in text:
+        tags.append("cloudflare")
+    if "postgres" in text or "postgresql" in text:
+        tags.append("postgres")
+    if "smb" in text or "samba" in text:
+        tags.append("smb")
+    return ", ".join(dict.fromkeys(tags))
+
+
+def _infer_tags_for_device(device: models.Device) -> str:
+    tags: list[str] = []
+    if device.services:
+        tags.append("docker")
+    for service in device.services:
+        service_tags = _infer_tags_for_service(service)
+        if service_tags:
+            tags.extend(service_tags.split(", "))
+    for port in device.ports:
+        if port.host_port == 22:
+            tags.append("ssh")
+        if port.host_port in {139, 445}:
+            tags.append("smb")
+    return ", ".join(dict.fromkeys(tag for tag in tags if tag))
+
+
+def _notes_with_credentials_marker(notes: str, enabled: bool) -> str:
+    cleaned = public_notes(notes)
+    if enabled:
+        return f"{cleaned}\n{NO_CREDENTIALS_MARKER}".strip()
+    return cleaned
+
+
+def _latest_audit(db: Session, object_type: str, object_id: int, action: str) -> models.AuditLog | None:
+    return (
+        db.query(models.AuditLog)
+        .filter(
+            models.AuditLog.object_type == object_type,
+            models.AuditLog.object_id == object_id,
+            models.AuditLog.action == action,
+        )
+        .order_by(models.AuditLog.created_at.desc())
+        .first()
+    )
+
+
+def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
+    latest = _latest_audit(db, "device", device.id, "device_ping")
+    interval = int_setting(db, "ping_interval_minutes", 60, minimum=5, maximum=999)
+    if not latest:
+        return {"state": "unknown", "label": "No ping yet", "latency_ms": None, "next_at": "Not scheduled yet"}
+    details = latest.details_json or {}
+    next_at = latest.created_at + timedelta(minutes=interval)
+    if details.get("ok"):
+        latency = float(details.get("latency_ms") or 0)
+        green = int_setting(db, "ping_green_ms", 3, minimum=1, maximum=999)
+        orange = int_setting(db, "ping_orange_ms", 10, minimum=1, maximum=999)
+        state = "good" if latency <= green else "slow" if latency <= orange else "bad"
+        label = f"{latency:.1f} ms"
+    else:
+        state = "down"
+        label = f"No reply ({int(details.get('failures') or 1)} failed check(s))"
+    return {"state": state, "label": label, "latency_ms": details.get("latency_ms"), "next_at": format_dt(next_at)}
+
+
+def _ping_device(db: Session, device: models.Device) -> dict[str, Any]:
+    host = (device.primary_ip or device.hostname or "").strip()
+    previous = _latest_audit(db, "device", device.id, "device_ping")
+    previous_failures = int((previous.details_json or {}).get("failures") or 0) if previous else 0
+    if not host:
+        details = {"ok": False, "latency_ms": None, "failures": previous_failures + 1, "error": "No IP or hostname"}
+    else:
+        try:
+            result = subprocess.run(
+                ["ping", "-c", "1", "-W", "2", host],
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            latency_match = re.search(r"time[=<]([0-9.]+)\s*ms", result.stdout)
+            ok = result.returncode == 0
+            details = {
+                "ok": ok,
+                "latency_ms": float(latency_match.group(1)) if latency_match else None,
+                "failures": 0 if ok else previous_failures + 1,
+                "host": host,
+            }
+        except Exception as exc:
+            details = {"ok": False, "latency_ms": None, "failures": previous_failures + 1, "host": host, "error": str(exc)}
+    db.add(models.AuditLog(action="device_ping", object_type="device", object_id=device.id, details_json=details))
+    return details
+
+
+def _ping_loop() -> None:
+    while True:
+        try:
+            with SessionLocal() as db:
+                interval = int_setting(db, "ping_interval_minutes", 60, minimum=5, maximum=999)
+                cutoff = now_utc() - timedelta(minutes=interval)
+                devices = db.query(models.Device).all()
+                for device in devices:
+                    if not (device.primary_ip or device.hostname):
+                        continue
+                    latest = _latest_audit(db, "device", device.id, "device_ping")
+                    if latest and latest.created_at > cutoff:
+                        continue
+                    _ping_device(db, device)
+                db.commit()
+        except Exception:
+            pass
+        time.sleep(60)
 
 
 IMPORT_MODELS = {
@@ -369,7 +539,7 @@ def _delete_service_tree(db: Session, service: models.Service) -> None:
 
 
 def _cleanup_obvious_import_misses(db: Session) -> dict[str, int]:
-    cleaned = {"services": 0, "credentials": 0}
+    cleaned = {"services": 0, "credentials": 0, "hardware": 0}
     bad_service_slugs = {
         "checkopenports",
         "portainerfolder",
@@ -409,6 +579,27 @@ def _cleanup_obvious_import_misses(db: Session) -> dict[str, int]:
                 db.delete(loose)
                 cleaned["credentials"] += 1
                 break
+    for hardware in db.query(models.DeviceHardware).all():
+        changed = False
+        cpu_match = re.search(r"Model name:\s*([^\n]+)", hardware.cpu or "")
+        if cpu_match and hardware.cpu.strip() != cpu_match.group(1).strip():
+            hardware.cpu = cpu_match.group(1).strip()
+            changed = True
+        ram_match = re.search(r"Mem:\s+(\S+)", hardware.ram or "")
+        if ram_match and hardware.ram.strip() != ram_match.group(1).strip():
+            hardware.ram = ram_match.group(1).strip()
+            changed = True
+        for line in (hardware.storage_summary or "").splitlines():
+            clean = re.sub(r"^[├└─\s]+", "", line.strip())
+            parts = clean.split()
+            if len(parts) >= 3 and parts[2] == "disk":
+                summary = " ".join(parts[:3])
+                if hardware.storage_summary.strip() != summary:
+                    hardware.storage_summary = summary
+                    changed = True
+                break
+        if changed:
+            cleaned["hardware"] += 1
     return cleaned
 
 
@@ -471,14 +662,42 @@ def _resolve_service_for_credential(
     return device_id, None, ""
 
 
+def _delete_redirect_target(request: Request, object_type: str, object_id: int) -> str:
+    referer = request.headers.get("referer") or ""
+    if object_type == "service" and f"/services/{object_id}" in referer:
+        return "/services"
+    if object_type == "credential" and f"/credentials/{object_id}" in referer:
+        return "/credentials"
+    if object_type in {"port", "url"}:
+        return "/ports"
+    if object_type == "device" and f"/devices/{object_id}" in referer:
+        return "/devices"
+    defaults = {
+        "device": "/devices",
+        "service": "/services",
+        "credential": "/credentials",
+        "command": "/commands",
+        "note": "/notes",
+    }
+    return referer or defaults.get(object_type, "/")
+
+
 def require_user(request: Request, db: Session = Depends(get_db)) -> models.User:
     user_id = request.session.get("user_id")
     if not user_id:
         raise HTTPException(status_code=401, detail="Login required.")
+    timeout_minutes = int(request.session.get("session_timeout_minutes") or int_setting(db, "session_timeout_minutes", 20, minimum=1, maximum=999))
+    extended_raw = request.session.get("session_extended_until")
+    if extended_raw:
+        try:
+            if datetime.fromisoformat(extended_raw) > now_utc():
+                timeout_minutes *= 3
+        except ValueError:
+            request.session.pop("session_extended_until", None)
     last_seen_raw = request.session.get("last_seen")
     if last_seen_raw:
         last_seen = datetime.fromisoformat(last_seen_raw)
-        if (now_utc() - last_seen).total_seconds() > settings.session_timeout_minutes * 60:
+        if (now_utc() - last_seen).total_seconds() > timeout_minutes * 60:
             request.session.clear()
             raise HTTPException(status_code=401, detail="Session expired.")
     user = db.get(models.User, int(user_id))
@@ -656,6 +875,7 @@ def login(
     request.session.clear()
     request.session["user_id"] = user.id
     request.session["last_seen"] = now_utc().isoformat()
+    request.session["session_timeout_minutes"] = int_setting(db, "session_timeout_minutes", 20, minimum=1, maximum=999)
     csrf_token(request)
     flash(request, f"Welcome back, {user.display_name or user.username}.", "success")
     return redirect("/")
@@ -666,6 +886,22 @@ def logout(request: Request, csrf: str = Form(...)) -> RedirectResponse:
     check_csrf(request, csrf)
     request.session.clear()
     return redirect("/login")
+
+
+@app.post("/session/keepalive")
+async def session_keepalive(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    check_csrf(request, request.headers.get("x-csrf-token", ""))
+    payload = await request.json()
+    timeout = int_setting(db, "session_timeout_minutes", 20, minimum=1, maximum=999)
+    request.session["session_timeout_minutes"] = timeout
+    request.session["last_seen"] = now_utc().isoformat()
+    if payload.get("extend"):
+        request.session["session_extended_until"] = (now_utc() + timedelta(minutes=timeout * 3)).isoformat()
+    return JSONResponse({"ok": True, "timeout_minutes": timeout})
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -779,7 +1015,7 @@ def device_create(
     os_name: str = Form(""),
     os_version: str = Form(""),
     location: str = Form(""),
-    status_manual: str = Form("unknown"),
+    status_manual: str = Form(""),
     notes: str = Form(""),
     hw_model: str = Form(""),
     hw_cpu: str = Form(""),
@@ -818,6 +1054,7 @@ def device_create(
         )
     )
     set_tags(db, "device", device.id, tags)
+    merge_tags(db, "device", device.id, _infer_tags_for_device(device))
     db.add(models.AuditLog(user_id=user.id, action="device_created", object_type="device", object_id=device.id))
     db.commit()
     flash(request, f"Device {device.name} created.", "success")
@@ -881,9 +1118,29 @@ def device_detail(
             "service_groups": service_groups,
             "quick_credentials": _quick_credentials_for_device(db, device),
             "favorite_edit": favorites == "edit",
+            "ping_status": _device_ping_status(db, device),
+            "status_log": _latest_audit(db, "device", device.id, "device_status_changed"),
         },
         user=user,
     )
+
+
+@app.post("/devices/{device_id}/ping")
+def device_ping_now(
+    request: Request,
+    device_id: int,
+    csrf: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    device = db.get(models.Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found.")
+    result = _ping_device(db, device)
+    db.commit()
+    flash(request, f"Ping checked: {'reply received' if result.get('ok') else 'no reply'}.", "success" if result.get("ok") else "warning")
+    return redirect(f"/devices/{device.id}")
 
 
 @app.post("/devices/{device_id}/quick-credentials")
@@ -969,7 +1226,7 @@ def device_update(
     os_name: str = Form(""),
     os_version: str = Form(""),
     location: str = Form(""),
-    status_manual: str = Form("unknown"),
+    status_manual: str = Form(""),
     notes: str = Form(""),
     hw_model: str = Form(""),
     hw_cpu: str = Form(""),
@@ -994,6 +1251,7 @@ def device_update(
     device.os_name = os_name
     device.os_version = os_version
     device.location = location
+    old_status = device.status_manual or ""
     device.status_manual = status_manual
     device.notes = notes
     if not device.hardware:
@@ -1004,6 +1262,17 @@ def device_update(
     device.hardware.gpu = hw_gpu
     device.hardware.storage_summary = hw_storage
     set_tags(db, "device", device.id, tags)
+    merge_tags(db, "device", device.id, _infer_tags_for_device(device))
+    if old_status != (status_manual or ""):
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="device_status_changed",
+                object_type="device",
+                object_id=device.id,
+                details_json={"old": old_status, "new": status_manual or ""},
+            )
+        )
     db.add(models.AuditLog(user_id=user.id, action="device_edited", object_type="device", object_id=device.id))
     db.commit()
     flash(request, f"Device {device.name} saved.", "success")
@@ -1064,7 +1333,7 @@ def service_create(
     name: str = Form(...),
     type: str = Form(""),
     purpose: str = Form(""),
-    status_manual: str = Form("unknown"),
+    status_manual: str = Form(""),
     local_url: str = Form(""),
     public_url: str = Form(""),
     repo_url: str = Form(""),
@@ -1077,6 +1346,7 @@ def service_create(
     container_name: str = Form(""),
     image: str = Form(""),
     notes: str = Form(""),
+    credentials_not_needed: str = Form(""),
     tags: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
@@ -1104,11 +1374,13 @@ def service_create(
         docker_project=docker_project,
         container_name=container_name,
         image=image,
-        notes=notes,
+        notes=_notes_with_credentials_marker(notes, credentials_not_needed == "on"),
     )
     db.add(service)
     db.flush()
     set_tags(db, "service", service.id, tags)
+    merge_tags(db, "service", service.id, _infer_tags_for_service(service))
+    merge_tags(db, "device", device.id, _infer_tags_for_device(device))
     db.add(models.AuditLog(user_id=user.id, action="service_created", object_type="service", object_id=service.id))
     db.commit()
     flash(request, f"Service {service.name} created.", "success")
@@ -1161,6 +1433,7 @@ def service_detail(
             "history": history,
             "notes": notes,
             "tag_list": tags_for(db, "service", service.id),
+            "status_log": _latest_audit(db, "service", service.id, "service_status_changed"),
         },
         user=user,
     )
@@ -1199,7 +1472,7 @@ def service_update(
     name: str = Form(...),
     type: str = Form(""),
     purpose: str = Form(""),
-    status_manual: str = Form("unknown"),
+    status_manual: str = Form(""),
     local_url: str = Form(""),
     public_url: str = Form(""),
     repo_url: str = Form(""),
@@ -1212,6 +1485,7 @@ def service_update(
     container_name: str = Form(""),
     image: str = Form(""),
     notes: str = Form(""),
+    credentials_not_needed: str = Form(""),
     tags: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
@@ -1226,6 +1500,7 @@ def service_update(
     service.slug = slugify(name)
     service.type = type
     service.purpose = purpose
+    old_status = service.status_manual or ""
     service.status_manual = status_manual
     service.local_url = local_url
     service.public_url = public_url
@@ -1238,8 +1513,21 @@ def service_update(
     service.docker_project = docker_project
     service.container_name = container_name
     service.image = image
-    service.notes = notes
+    service.notes = _notes_with_credentials_marker(notes, credentials_not_needed == "on")
     set_tags(db, "service", service.id, tags)
+    merge_tags(db, "service", service.id, _infer_tags_for_service(service))
+    if service.device:
+        merge_tags(db, "device", service.device.id, _infer_tags_for_device(service.device))
+    if old_status != (status_manual or ""):
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="service_status_changed",
+                object_type="service",
+                object_id=service.id,
+                details_json={"old": old_status, "new": status_manual or ""},
+            )
+        )
     db.add(models.AuditLog(user_id=user.id, action="service_edited", object_type="service", object_id=service.id))
     db.commit()
     flash(request, f"Service {service.name} saved.", "success")
@@ -1494,6 +1782,7 @@ def delete_object(
     obj = db.get(model, object_id)
     if not obj:
         raise HTTPException(404, "Object not found.")
+    return_to = _delete_redirect_target(request, object_type, object_id)
     if object_type == "device" and isinstance(obj, models.Device):
         service_ids = [service.id for service in obj.services]
         credential_filter = models.Credential.device_id == obj.id
@@ -1524,7 +1813,7 @@ def delete_object(
         db.add(models.AuditLog(user_id=user.id, action=f"{object_type}_deleted", object_type=object_type, object_id=object_id))
         db.commit()
         flash(request, f"{object_type.title()} deleted.", "success")
-        return redirect(request.headers.get("referer") or "/")
+        return redirect(return_to)
     tag_object_types = [object_type]
     if object_type == "note" and isinstance(obj, models.Note):
         tag_object_types.append(obj.object_type)
@@ -1536,7 +1825,7 @@ def delete_object(
     db.add(models.AuditLog(user_id=user.id, action=f"{object_type}_deleted", object_type=object_type, object_id=object_id))
     db.commit()
     flash(request, f"{object_type.title()} deleted.", "success")
-    return redirect(request.headers.get("referer") or "/")
+    return redirect(return_to)
 
 
 def medium_unlocked(request: Request) -> bool:
@@ -1547,6 +1836,39 @@ def medium_unlocked(request: Request) -> bool:
         return datetime.fromisoformat(raw) > now_utc()
     except ValueError:
         return False
+
+
+def _reveal_failure_response(request: Request, *, json_response: bool = False) -> JSONResponse | RedirectResponse:
+    failures = int(request.session.get("reveal_failures") or 0) + 1
+    if failures >= 5:
+        request.session.clear()
+        if json_response:
+            return JSONResponse(
+                {
+                    "detail": "Too many wrong password attempts. You have been logged out for security.",
+                    "logged_out": True,
+                },
+                status_code=403,
+            )
+        flash(request, "Too many wrong password attempts. You have been logged out for security.", "danger")
+        return redirect("/login")
+    request.session["reveal_failures"] = failures
+    message = f"Incorrect password or reveal PIN. {5 - failures} attempt(s) left."
+    if json_response:
+        return JSONResponse(
+            {
+                "detail": message,
+                "requires_challenge": True,
+                "message": "Password or reveal PIN",
+            },
+            status_code=403,
+        )
+    flash(request, message, "danger")
+    return redirect(request.headers.get("referer") or "/credentials")
+
+
+def _reset_reveal_failures(request: Request) -> None:
+    request.session.pop("reveal_failures", None)
 
 
 @app.get("/credentials/{credential_id}/reveal", response_class=HTMLResponse)
@@ -1591,13 +1913,16 @@ def credential_reveal_post(
     needs_challenge = credential.security_level in {"high", "extreme"} or (
         credential.security_level == "medium" and not medium_unlocked(request)
     )
+    if needs_challenge and not challenge.strip():
+        flash(request, "Enter your account password or reveal PIN.", "warning")
+        return redirect(f"/credentials/{credential.id}/reveal")
     if needs_challenge and not challenge_ok(
         challenge, user.password_hash, user.secondary_password_hash
     ):
-        flash(request, "Reveal challenge failed.", "danger")
-        return redirect(f"/credentials/{credential.id}/reveal")
+        return _reveal_failure_response(request)
     if credential.security_level == "medium" and needs_challenge:
         request.session["credential_unlock_until"] = unlock_expiry().isoformat()
+    _reset_reveal_failures(request)
     return reveal_credential(request, credential, user, db, reason=reason)
 
 
@@ -1643,20 +1968,26 @@ async def credential_reveal_json(
     needs_challenge = credential.security_level in {"high", "extreme"} or (
         credential.security_level == "medium" and not medium_unlocked(request)
     )
-    if needs_challenge and not challenge_ok(
-        str(payload.get("challenge", "")), user.password_hash, user.secondary_password_hash
-    ):
+    challenge_value = str(payload.get("challenge", ""))
+    if needs_challenge and not challenge_value:
         return JSONResponse(
             {
-                "detail": "Reveal challenge required.",
+                "detail": "Password or reveal PIN required.",
                 "requires_challenge": True,
                 "requires_reason": credential.security_level in {"high", "extreme"},
                 "message": "Password or reveal PIN",
             },
             status_code=403,
         )
+    if needs_challenge and not challenge_ok(
+        challenge_value, user.password_hash, user.secondary_password_hash
+    ):
+        response = _reveal_failure_response(request, json_response=True)
+        if isinstance(response, JSONResponse):
+            return response
     if credential.security_level == "medium" and needs_challenge:
         request.session["credential_unlock_until"] = unlock_expiry().isoformat()
+    _reset_reveal_failures(request)
     credential.last_revealed_at = now_utc()
     db.add(
         models.AuditLog(
@@ -1906,9 +2237,40 @@ def tags_page(
         if used_tag_ids
         else []
     )
-    grouped: dict[int, list[models.TagLink]] = {}
+    grouped: dict[int, list[dict[str, str]]] = {}
     for link in links:
-        grouped.setdefault(link.tag_id, []).append(link)
+        href = "#"
+        label = f"#{link.object_id}"
+        kind = link.object_type.replace("_", " ").title()
+        if link.object_type == "device":
+            obj = db.get(models.Device, link.object_id)
+            if obj:
+                href, label = f"/devices/{obj.id}", obj.name
+        elif link.object_type == "service":
+            obj = db.get(models.Service, link.object_id)
+            if obj:
+                href, label = f"/services/{obj.id}", obj.name
+        elif link.object_type == "credential":
+            obj = db.get(models.Credential, link.object_id)
+            if obj:
+                href, label = f"/credentials/{obj.id}", obj.label
+        elif link.object_type == "command":
+            obj = db.get(models.Command, link.object_id)
+            if obj:
+                href, label = "/commands", obj.name
+        elif link.object_type == "port":
+            obj = db.get(models.Port, link.object_id)
+            if obj:
+                href, label = "/ports", f"{obj.host_port}/{obj.protocol}"
+        elif link.object_type == "url":
+            obj = db.get(models.Url, link.object_id)
+            if obj:
+                href, label = "/ports", obj.label or obj.url
+        elif link.object_type == "quick_note":
+            obj = db.get(models.Note, link.object_id)
+            if obj:
+                href, label = "/notes", obj.title or "Quick note"
+        grouped.setdefault(link.tag_id, []).append({"kind": kind, "href": href, "label": label})
     return render(request, "tags.html", {"tags": tags, "grouped": grouped}, user=user)
 
 
@@ -1953,6 +2315,8 @@ def add_port(
     db.add(port)
     db.flush()
     set_tags(db, "port", port.id, tags)
+    if tags:
+        merge_tags(db, "device", port.device_id, tags)
     db.add(models.AuditLog(user_id=user.id, action="port_added", object_type="port", object_id=port.id))
     db.commit()
     flash(request, "Port added.", "success")
@@ -1987,6 +2351,119 @@ def add_url(
     db.add(models.AuditLog(user_id=user.id, action="url_added", object_type="url"))
     db.commit()
     flash(request, "URL added.", "success")
+    return redirect("/ports")
+
+
+@app.get("/ports/{port_id}/edit", response_class=HTMLResponse)
+def port_edit_page(
+    request: Request,
+    port_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    port = db.get(models.Port, port_id)
+    if not port:
+        raise HTTPException(404, "Port not found.")
+    return render(
+        request,
+        "port_form.html",
+        {
+            "port": port,
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "tag_text": ", ".join(tags_for(db, "port", port.id)),
+        },
+        user=user,
+    )
+
+
+@app.post("/ports/{port_id}/edit")
+def port_update(
+    request: Request,
+    port_id: int,
+    csrf: str = Form(...),
+    device_id: int = Form(...),
+    service_id: str = Form(""),
+    host_port: int = Form(...),
+    internal_port: str = Form(""),
+    protocol: str = Form("tcp"),
+    purpose: str = Form(""),
+    tags: str = Form(""),
+    notes: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    port = db.get(models.Port, port_id)
+    if not port:
+        raise HTTPException(404, "Port not found.")
+    port.device_id = device_id
+    port.service_id = int(service_id) if service_id else None
+    port.host_port = host_port
+    port.internal_port = int(internal_port) if internal_port else None
+    port.protocol = protocol
+    port.purpose = purpose
+    port.notes = notes
+    set_tags(db, "port", port.id, tags)
+    if tags:
+        merge_tags(db, "device", device_id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="port_edited", object_type="port", object_id=port.id))
+    db.commit()
+    flash(request, "Port saved.", "success")
+    return redirect("/ports")
+
+
+@app.get("/urls/{url_id}/edit", response_class=HTMLResponse)
+def url_edit_page(
+    request: Request,
+    url_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    url = db.get(models.Url, url_id)
+    if not url:
+        raise HTTPException(404, "URL not found.")
+    return render(
+        request,
+        "url_form.html",
+        {
+            "url": url,
+            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "services": db.query(models.Service).order_by(models.Service.name).all(),
+        },
+        user=user,
+    )
+
+
+@app.post("/urls/{url_id}/edit")
+def url_update(
+    request: Request,
+    url_id: int,
+    csrf: str = Form(...),
+    device_id: str = Form(""),
+    service_id: str = Form(""),
+    label: str = Form(""),
+    url: str = Form(...),
+    url_type: str = Form("local"),
+    notes: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    row = db.get(models.Url, url_id)
+    if not row:
+        raise HTTPException(404, "URL not found.")
+    row.device_id = int(device_id) if device_id else None
+    row.service_id = int(service_id) if service_id else None
+    row.label = label
+    row.url = url
+    row.url_type = url_type
+    row.notes = notes
+    db.add(models.AuditLog(user_id=user.id, action="url_edited", object_type="url", object_id=row.id))
+    db.commit()
+    flash(request, "URL saved.", "success")
     return redirect("/ports")
 
 
@@ -2191,7 +2668,6 @@ async def smart_paste_apply(
             type="server",
             primary_ip=str(form.get("device_ip") or detected.get("primary_ip", "")),
             os_name=str(form.get("device_os") or detected.get("os_name", "")),
-            notes="Created from Smart Paste review.",
         )
         db.add(device)
         db.flush()
@@ -2227,11 +2703,13 @@ async def smart_paste_apply(
         )
     )
     extras = parsed.get("extras", {})
-    if device.hardware:
-        if form.get("apply_hardware"):
-            device.hardware.cpu = extras.get("cpu_summary", device.hardware.cpu)
-            device.hardware.ram = extras.get("memory_summary", device.hardware.ram)
-            device.hardware.storage_summary = extras.get("disk_summary", device.hardware.storage_summary)
+    if form.get("apply_hardware"):
+        if not device.hardware:
+            device.hardware = models.DeviceHardware(device_id=device.id)
+        device.hardware.model = extras.get("model_summary") or device.hardware.model
+        device.hardware.cpu = extras.get("cpu_summary") or device.hardware.cpu
+        device.hardware.ram = extras.get("memory_summary") or device.hardware.ram
+        device.hardware.storage_summary = extras.get("disk_summary") or device.hardware.storage_summary
     for index_raw in form.getlist("services"):
         item = parsed.get("services", [])[int(index_raw)]
         service_name = str(form.get(f"service_name_{index_raw}") or item["name"]).strip()
@@ -2262,6 +2740,7 @@ async def smart_paste_apply(
             exists.compose_path = compose_value or exists.compose_path
             exists.container_name = item.get("container_name", "") or exists.container_name
             exists.image = item.get("image", "") or exists.image
+        merge_tags(db, "service", exists.id, _infer_tags_for_service(exists))
         for url_value_raw in form.getlist("service_urls"):
             try:
                 service_index_value, url_index_raw = str(url_value_raw).split(":", 1)
@@ -2394,6 +2873,7 @@ async def smart_paste_apply(
             port_tags = str(form.get(f"port_tags_{index_raw}") or item.get("tags", ""))
             if port_tags:
                 set_tags(db, "port", port.id, port_tags)
+                merge_tags(db, "device", device.id, port_tags)
     for index_raw in form.getlist("urls"):
         item = parsed.get("urls", [])[int(index_raw)]
         url_value = str(form.get(f"url_value_{index_raw}") or item["url"]).strip()
@@ -2487,6 +2967,7 @@ async def smart_paste_apply(
             )
         )
     record.status = "applied"
+    merge_tags(db, "device", device.id, _infer_tags_for_device(device))
     db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id))
     db.commit()
     flash(request, f"Smart Paste applied to {device.name}. Original text was preserved as a note.", "success")
@@ -2561,6 +3042,22 @@ async def settings_save(
                 value = str(max(3, min(20, int(value))))
             except ValueError:
                 value = THEME_DEFAULTS[key]
+        if key == "session_timeout_minutes":
+            try:
+                value = str(max(1, min(999, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
+            request.session["session_timeout_minutes"] = int(value)
+        if key in {"ping_interval_minutes", "ping_green_ms", "ping_orange_ms"}:
+            try:
+                value = str(max(1, min(999, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
+        if key == "ping_failures_before_warning":
+            try:
+                value = str(max(1, min(10, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
         set_app_setting(db, key, value)
     db.add(
         models.AuditLog(
@@ -2596,7 +3093,7 @@ def maintenance_cleanup_smart_paste(
     db.commit()
     flash(
         request,
-        f"Cleaned {cleaned['services']} obvious service miss(es) and {cleaned['credentials']} duplicate credential(s).",
+        f"Cleaned {cleaned['services']} service miss(es), {cleaned['credentials']} duplicate credential(s), and {cleaned['hardware']} hardware summary field(s).",
         "success",
     )
     return redirect("/settings")

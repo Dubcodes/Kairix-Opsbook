@@ -20,7 +20,8 @@
   <label>Location <input name="location" value="{{ device.location if device else '' }}" spellcheck="true"></label>
   <label>Manual state <span class="hint" title="This is your note, not live monitoring. Use it for reminders like needs attention or retired.">?</span>
     <select name="status_manual">
-      {% for status in ["unknown", "documented", "needs-attention", "offline", "planned", "retired"] %}
+      <option value="" {% if not device or not device.status_manual %}selected{% endif %}></option>
+      {% for status in ["stable", "running", "ready", "needs-attention", "offline", "planned", "retired"] %}
         <option value="{{ status }}" {% if device and device.status_manual == status %}selected{% endif %}>{{ status }}</option>
       {% endfor %}
     </select>

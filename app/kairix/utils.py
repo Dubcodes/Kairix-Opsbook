@@ -53,6 +53,16 @@ def set_tags(db: Session, object_type: str, object_id: int, tags_text: str) -> N
         db.add(models.TagLink(tag_id=tag.id, object_type=object_type, object_id=object_id))
 
 
+def merge_tags(db: Session, object_type: str, object_id: int, tags_text: str) -> None:
+    merged = tags_for(db, object_type, object_id)
+    existing = set(merged)
+    for tag in split_tags(tags_text):
+        if tag not in existing:
+            existing.add(tag)
+            merged.append(tag)
+    set_tags(db, object_type, object_id, ", ".join(merged))
+
+
 def tags_for(db: Session, object_type: str, object_id: int) -> list[str]:
     rows = (
         db.query(models.Tag.name)

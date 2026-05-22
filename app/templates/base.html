@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="csrf-token" content="{{ csrf }}">
+  {% if user %}<meta name="session-timeout-minutes" content="{{ request.session.get('session_timeout_minutes', settings.session_timeout_minutes) }}">{% endif %}
   <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/styles.css">

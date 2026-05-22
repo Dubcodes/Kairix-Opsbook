@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Edit URL · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Editing enabled</p>
+    <h1>Edit URL</h1>
+  </div>
+  <a class="button secondary" href="/ports">Cancel</a>
+</section>
+<form method="post" class="panel form-grid wide">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <label>Device <select name="device_id"><option value="">None</option>{% for device in devices %}<option value="{{ device.id }}" {% if url.device_id == device.id %}selected{% endif %}>{{ device.name }}</option>{% endfor %}</select></label>
+  <label>Service <select name="service_id"><option value="">None</option>{% for service in services %}<option value="{{ service.id }}" {% if url.service_id == service.id %}selected{% endif %}>{{ service.name }} · {{ service.device.name }}</option>{% endfor %}</select></label>
+  <label>Label <input name="label" value="{{ url.label or '' }}" spellcheck="true"></label>
+  <label>Type <input name="url_type" value="{{ url.url_type or 'local' }}" spellcheck="true"></label>
+  <label class="span-2">URL <input name="url" required value="{{ url.url }}"></label>
+  <label class="span-2">Notes <textarea name="notes" spellcheck="true">{{ url.notes or '' }}</textarea></label>
+  <div class="form-actions span-2">
+    <button type="submit">Save changes</button>
+    {% if url.url %}<a class="button secondary" href="{{ url.url }}" target="_blank">Open</a>{% endif %}
+    <a class="button secondary" href="/ports">Cancel</a>
+  </div>
+</form>
+<form method="post" action="/delete/url/{{ url.id }}" class="panel danger-panel" data-confirm-delete="Delete this URL?">
+  <input type="hidden" name="csrf" value="{{ csrf }}">
+  <strong>Delete URL</strong>
+  <p class="muted">Use this for duplicate or stale URL imports.</p>
+  <button class="ghost" type="submit">Delete URL</button>
+</form>
+{% endblock %}

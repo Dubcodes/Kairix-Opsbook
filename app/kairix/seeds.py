@@ -83,9 +83,9 @@ STARTER_COMMANDS = [
         "category": "Common",
         "command_template": "uptime",
         "short_description": "Show uptime and load average.",
-        "help_low": "Shows how long the server has been running and current load.",
-        "help_high": "Load average is a rough signal of how busy the machine is. Compare it with CPU core count.",
-        "where_to_run": "Remote SSH host",
+        "help_low": "Shows how long a Linux server has been running and a quick load summary.",
+        "help_high": "Run this in a Linux terminal or inside SSH on the selected server. The output shows current time, uptime, logged-in users, and load averages for the last 1, 5, and 15 minutes. It does not change anything.",
+        "where_to_run": "Linux terminal or remote SSH host",
         "risk_level": "safe",
     },
     {
@@ -358,6 +358,39 @@ STARTER_COMMANDS = [
         "where_to_run": "Remote SSH host",
         "risk_level": "safe",
     },
+    {
+        "name": "Windows ping device",
+        "category": "Windows",
+        "applies_to_type": "generic",
+        "command_template": "ping {{host}}",
+        "short_description": "Check whether a device replies from Windows.",
+        "help_low": "Sends ping packets from Windows to the selected host.",
+        "help_high": "Run this in PowerShell or Windows Terminal on your local PC. It helps confirm whether a server is reachable on the network. A failed ping can mean the device is down, the IP is wrong, or ping is blocked.",
+        "where_to_run": "Local Windows PC",
+        "risk_level": "safe",
+    },
+    {
+        "name": "macOS ping device",
+        "category": "macOS",
+        "applies_to_type": "generic",
+        "command_template": "ping {{host}}",
+        "short_description": "Check whether a device replies from macOS.",
+        "help_low": "Sends ping packets from macOS to the selected host. Press Ctrl+C to stop.",
+        "help_high": "Run this in Terminal on your Mac. It keeps pinging until you press Ctrl+C, which is useful for watching a device come back after reboot.",
+        "where_to_run": "Local macOS Terminal",
+        "risk_level": "safe",
+    },
+    {
+        "name": "Windows open SMB share",
+        "category": "Windows",
+        "applies_to_type": "generic",
+        "command_template": "explorer \\\\{{host}}\\storage",
+        "short_description": "Open an SMB share in Windows File Explorer.",
+        "help_low": "Opens a Windows network share.",
+        "help_high": "Run this from Windows Run, PowerShell, or Command Prompt. Replace storage with the share name you documented. Browser links to SMB shares may be blocked, so this local command is often more reliable.",
+        "where_to_run": "Local Windows PC",
+        "risk_level": "safe",
+    },
 ]
 
 
@@ -367,7 +400,13 @@ def seed_initial_data(db: Session) -> None:
             db.add(models.Tag(name=tag_name))
 
     for item in STARTER_COMMANDS:
-        if not db.query(models.Command).filter_by(name=item["name"], applies_to_type=item.get("applies_to_type", "generic")).first():
+        existing = db.query(models.Command).filter_by(
+            name=item["name"], applies_to_type=item.get("applies_to_type", "generic")
+        ).first()
+        if existing:
+            for key, value in item.items():
+                setattr(existing, key, value)
+        else:
             db.add(models.Command(**item))
 
     if db.query(models.Recipe).count() == 0:

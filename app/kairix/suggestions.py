@@ -66,6 +66,13 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
     suggestions: list[dict[str, str]] = []
 
     for device in db.query(models.Device).order_by(models.Device.name).all():
+        device_tags = {
+            row[0]
+            for row in db.query(models.Tag.name)
+            .join(models.TagLink, models.TagLink.tag_id == models.Tag.id)
+            .filter(models.TagLink.object_type == "device", models.TagLink.object_id == device.id)
+            .all()
+        }
         if not device.purpose.strip():
             suggestions.append(
                 {
@@ -73,6 +80,51 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "severity": "info",
                     "title": f"{device.name} is missing a purpose",
                     "body": "Add a short purpose so future-you can remember why this machine exists.",
+                    "target": f"/devices/{device.id}",
+                }
+            )
+        if any(word in (device.status_manual or "").lower() for word in ["needs", "attention", "broken", "offline"]):
+            suggestions.append(
+                {
+                    "id": f"device:{device.id}:manual-state-attention",
+                    "severity": "warning",
+                    "title": f"{device.name} is marked {device.status_manual}",
+                    "body": "This manual state means the device needs a follow-up. Update the state once it is resolved.",
+                    "target": f"/devices/{device.id}",
+                }
+            )
+        if {"needs-attention", "broken"} & device_tags:
+            suggestions.append(
+                {
+                    "id": f"device:{device.id}:attention-tag",
+                    "severity": "warning",
+                    "title": f"{device.name} is tagged for attention",
+                    "body": "This device has an attention tag. Remove the tag once the follow-up is handled.",
+                    "target": f"/devices/{device.id}",
+                }
+            )
+        latest_ping = (
+            db.query(models.AuditLog)
+            .filter(
+                models.AuditLog.object_type == "device",
+                models.AuditLog.object_id == device.id,
+                models.AuditLog.action == "device_ping",
+            )
+            .order_by(models.AuditLog.created_at.desc())
+            .first()
+        )
+        failure_limit_row = db.query(models.AppSetting).filter_by(key="ping_failures_before_warning").first()
+        try:
+            failure_limit = max(1, int(failure_limit_row.value)) if failure_limit_row else 3
+        except ValueError:
+            failure_limit = 3
+        if latest_ping and int((latest_ping.details_json or {}).get("failures") or 0) >= failure_limit:
+            suggestions.append(
+                {
+                    "id": f"device:{device.id}:ping-failing",
+                    "severity": "warning",
+                    "title": f"{device.name} has not replied to ping",
+                    "body": "Opsbook has seen repeated ping failures. Check power, network, IP address, or whether ping is blocked.",
                     "target": f"/devices/{device.id}",
                 }
             )
@@ -93,6 +145,13 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
             )
 
     for service in db.query(models.Service).order_by(models.Service.name).all():
+        service_tags = {
+            row[0]
+            for row in db.query(models.Tag.name)
+            .join(models.TagLink, models.TagLink.tag_id == models.Tag.id)
+            .filter(models.TagLink.object_type == "service", models.TagLink.object_id == service.id)
+            .all()
+        }
         if not service.backup_path and "backup" not in service.notes.lower():
             suggestions.append(
                 {
@@ -110,6 +169,26 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "severity": "info",
                     "title": f"{service.name} is missing a purpose",
                     "body": "A one-line purpose makes search and emergency runbooks much easier.",
+                    "target": f"/services/{service.id}",
+                }
+            )
+        if any(word in (service.status_manual or "").lower() for word in ["needs", "attention", "broken", "offline"]):
+            suggestions.append(
+                {
+                    "id": f"service:{service.id}:manual-state-attention",
+                    "severity": "warning",
+                    "title": f"{service.name} is marked {service.status_manual}",
+                    "body": "This manual state means the service needs a follow-up. Update the state once it is resolved.",
+                    "target": f"/services/{service.id}",
+                }
+            )
+        if {"needs-attention", "broken"} & service_tags:
+            suggestions.append(
+                {
+                    "id": f"service:{service.id}:attention-tag",
+                    "severity": "warning",
+                    "title": f"{service.name} is tagged for attention",
+                    "body": "This service has an attention tag. Remove the tag once the follow-up is handled.",
                     "target": f"/services/{service.id}",
                 }
             )

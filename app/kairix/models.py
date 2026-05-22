@@ -53,7 +53,7 @@ class Device(Base, TimestampMixin):
     os_name: Mapped[str] = mapped_column(String(160), default="")
     os_version: Mapped[str] = mapped_column(String(120), default="")
     location: Mapped[str] = mapped_column(String(160), default="")
-    status_manual: Mapped[str] = mapped_column(String(80), default="unknown")
+    status_manual: Mapped[str] = mapped_column(String(80), default="")
     update_check_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     update_status: Mapped[str] = mapped_column(String(160), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
@@ -97,7 +97,7 @@ class Service(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(220), index=True)
     type: Mapped[str] = mapped_column(String(100), default="")
     purpose: Mapped[str] = mapped_column(Text, default="")
-    status_manual: Mapped[str] = mapped_column(String(80), default="unknown")
+    status_manual: Mapped[str] = mapped_column(String(80), default="")
     local_url: Mapped[str] = mapped_column(String(500), default="")
     public_url: Mapped[str] = mapped_column(String(500), default="")
     repo_url: Mapped[str] = mapped_column(String(500), default="")
@@ -277,4 +277,3 @@ class AppSetting(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     key: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     value: Mapped[str] = mapped_column(Text, default="")
-
