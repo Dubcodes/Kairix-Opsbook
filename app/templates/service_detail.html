@@ -3,21 +3,25 @@
 {% block content %}
 <section class="page-head">
   <div>
-    <p class="eyebrow">Read-only view. Click Edit to make changes.</p>
-    <h1>{{ service.name }}</h1>
-    <p><a href="/devices/{{ service.device.id }}">{{ service.device.name }}</a> · {{ service.local_url or service.public_url or "No URL" }}</p>
+    <p class="eyebrow">Service record</p>
+    <h1>{{ service.name }}{% if token_credentials %}<a class="token-indicator" href="/tokens?service_id={{ service.id }}" title="This service has linked tokens or API keys">◇</a>{% endif %}</h1>
+    <p><a href="/devices/{{ service.device.id }}">{{ service.device.name }}</a> · <span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span>{{ service.local_url or service.public_url or "No URL" }}</p>
     <div class="tags">{% for tag in tag_list %}<span>{{ tag }}</span>{% endfor %}</div>
   </div>
   <div class="actions">
-    <a class="button" href="/services/{{ service.id }}/edit">Edit</a>
-    <a class="button secondary" href="/raw/service/{{ service.id }}">Raw</a>
+    <form method="post" action="/services/{{ service.id }}/validate">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="secondary" type="submit" title="Check whether this service has a reachable documented URL or port">Validate</button>
+    </form>
+    <a class="button" href="/services/{{ service.id }}/edit" title="Edit this service record">Edit</a>
+    <a class="button secondary" href="/raw/service/{{ service.id }}" title="View the raw saved fields">Raw</a>
   </div>
 </section>
 
-{% set tabs = ["overview", "login", "docker", "commands", "files", "ports", "backups", "notes", "history"] %}
+{% set tabs = ["overview", "creds", "docker", "commands", "files", "ports", "backups", "notes", "history"] %}
 <nav class="tabs">
   {% for item in tabs %}
-    <a class="{% if tab == item %}active{% endif %}" href="/services/{{ service.id }}?tab={{ item }}">{{ "Ports & URLs" if item == "ports" else item|title }}</a>
+    <a class="{% if tab == item %}active{% endif %}" href="/services/{{ service.id }}?tab={{ item }}">{{ "Creds" if item == "creds" else "Ports" if item == "ports" else item|title }}</a>
   {% endfor %}
 </nav>
 
@@ -27,9 +31,10 @@
     <dl class="details">
       {% if service.purpose %}<dt>Purpose</dt><dd>{{ service.purpose }}</dd>{% endif %}
       {% if service.status_manual %}<dt>Manual state</dt><dd>{{ service.status_manual }}{% if status_log %} · set {{ status_log.created_at|dt }}{% endif %}</dd>{% endif %}
-      {% if service.local_url %}<dt>Local URL</dt><dd><a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a></dd>{% endif %}
-      {% if service.public_url %}<dt>Public URL</dt><dd><a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a></dd>{% endif %}
+      {% if service.local_url %}<dt>Local URL</dt><dd><span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span><a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a></dd>{% endif %}
+      {% if service.public_url %}<dt>Public URL</dt><dd><span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span><a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a></dd>{% endif %}
       {% if service.repo_url %}<dt>Repo</dt><dd>{{ service.repo_url }}</dd>{% endif %}
+      {% if validation_status.checked_at %}<dt>Validated</dt><dd>{{ validation_status.label }} · {{ validation_status.checked_at }}</dd>{% endif %}
     </dl>
     {% if public_notes(service.notes) and "Imported from Smart Paste" not in service.notes %}<pre class="note-block">{{ public_notes(service.notes) }}</pre>{% endif %}
   </section>
@@ -39,7 +44,7 @@
       <a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}">Add Credential</a>
     </div>
     <div class="list compact">
-      {% for credential in service.credentials %}
+      {% for credential in login_credentials %}
         <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
           <a class="row-main" href="/credentials/{{ credential.id }}">
             <strong>{{ credential.label }}</strong>
@@ -57,12 +62,24 @@
           <p class="empty">No credentials linked yet.</p>
         {% endif %}
       {% endfor %}
+      {% if token_credentials %}
+        <h3>Tokens & APIs</h3>
+        {% for credential in token_credentials %}
+          <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
+            <a class="row-main" href="/credentials/{{ credential.id }}">
+              <strong>{{ credential.label }}</strong>
+              <span>{{ credential.username or "No account" }} · {{ credential.security_level|title }} security{% if credential.expires_at %} · expires {{ credential.expires_at|date_input }}{% endif %}</span>
+            </a>
+            <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
+          </div>
+        {% endfor %}
+      {% endif %}
     </div>
   </section>
-{% elif tab == "login" %}
-  <section class="section-title"><h2>Login</h2><a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}">Add Credential</a></section>
+{% elif tab == "creds" %}
+  <section class="section-title"><h2>Creds</h2><a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}" title="Add a password, token, or other secret for this service">Add Credential</a></section>
   <section class="list">
-    {% for credential in service.credentials %}
+    {% for credential in login_credentials + token_credentials %}
       <div class="list-row static clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
         <a class="row-main" href="/credentials/{{ credential.id }}">
           <strong>{{ credential.label }}</strong>

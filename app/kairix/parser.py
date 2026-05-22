@@ -197,6 +197,8 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                 break
 
     final_device_name = "" if device_name == os_name else device_name
+    if token_items and not primary_ip and not service_items and not urls and not ports:
+        final_device_name = ""
     likely_device = {
         "name": final_device_name,
         "primary_ip": primary_ip,
@@ -549,11 +551,24 @@ def _github_tokens(text: str) -> list[dict[str, Any]]:
                     if not candidate.lower().startswith(("never used", "expires on", "make sure")):
                         name = candidate
                 break
+        if name == "GitHub token":
+            for line in reversed(prefix_lines):
+                lower = line.lower()
+                if (
+                    line.startswith("@")
+                    or GITHUB_TOKEN_RE.search(line)
+                    or lower.startswith(("never used", "expires on", "make sure", "copied", "skip to content", "settings"))
+                ):
+                    continue
+                if len(line) <= 80:
+                    name = line
+                    break
         tokens.append(
             {
                 "label": name,
                 "username": owner,
                 "token": token,
+                "service_name": _token_service_name(name),
                 "expires_at": expiry,
                 "notes": "Imported GitHub personal access token.",
                 "security_level": "high",
@@ -567,6 +582,13 @@ def _github_tokens(text: str) -> list[dict[str, Any]]:
             seen.add(item["token"])
             deduped.append(item)
     return deduped
+
+
+def _token_service_name(label: str) -> str:
+    clean = re.sub(r"\b(github|personal|access|api|pat|token|key)\b", "", label, flags=re.IGNORECASE)
+    clean = re.sub(r"[-_]+", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip(" -:")
+    return clean
 
 
 def _parse_github_expiry(value: str) -> str:

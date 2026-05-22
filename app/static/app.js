@@ -23,6 +23,46 @@
     button.setAttribute("aria-label", effective === "dark" ? "Switch theme. Dark mode is active." : "Switch theme. Light mode is active.");
   }
 
+  let tooltipTimer;
+  let tooltipTarget;
+  let tooltipEl;
+
+  function removeTooltip() {
+    clearTimeout(tooltipTimer);
+    if (tooltipEl) {
+      tooltipEl.remove();
+      tooltipEl = null;
+    }
+    if (tooltipTarget?.dataset.tooltipText) {
+      tooltipTarget.setAttribute("title", tooltipTarget.dataset.tooltipText);
+      delete tooltipTarget.dataset.tooltipText;
+    }
+    tooltipTarget = null;
+  }
+
+  function scheduleTooltip(target) {
+    const text = target.getAttribute("title");
+    if (!text) return;
+    removeTooltip();
+    tooltipTarget = target;
+    target.dataset.tooltipText = text;
+    target.setAttribute("aria-label", target.getAttribute("aria-label") || text);
+    target.removeAttribute("title");
+    tooltipTimer = setTimeout(() => {
+      if (!tooltipTarget) return;
+      tooltipEl = document.createElement("div");
+      tooltipEl.className = "delayed-tooltip";
+      tooltipEl.textContent = tooltipTarget.dataset.tooltipText || "";
+      document.body.appendChild(tooltipEl);
+      const rect = tooltipTarget.getBoundingClientRect();
+      const tip = tooltipEl.getBoundingClientRect();
+      const left = Math.min(window.innerWidth - tip.width - 12, Math.max(12, rect.left + rect.width / 2 - tip.width / 2));
+      const top = rect.bottom + 8 < window.innerHeight - tip.height ? rect.bottom + 8 : rect.top - tip.height - 8;
+      tooltipEl.style.left = `${left}px`;
+      tooltipEl.style.top = `${Math.max(8, top)}px`;
+    }, 750);
+  }
+
   function findCopySource(button) {
     const mode = button.getAttribute("data-copy-target");
     if (mode === "prev") {
@@ -204,6 +244,16 @@
       setThemeButtonLabel();
     }
   });
+  document.addEventListener("pointerover", (event) => {
+    const target = event.target.closest("button[title], a[title], .hint[title]");
+    if (target) scheduleTooltip(target);
+  });
+  document.addEventListener("pointerout", (event) => {
+    if (tooltipTarget && (event.target === tooltipTarget || tooltipTarget.contains(event.target))) {
+      removeTooltip();
+    }
+  });
+  document.addEventListener("scroll", removeTooltip, true);
   document.addEventListener("submit", (event) => {
     const form = event.target.closest("[data-confirm-delete]");
     if (!form) return;

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 import re
+import socket
 import subprocess
 import threading
 import time
@@ -10,8 +12,11 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pyotp
+import qrcode
+import qrcode.image.svg
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
@@ -57,6 +62,11 @@ app.add_middleware(
     max_age=999 * 60,
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
+
+
+@app.get("/favicon.ico")
+def favicon_ico() -> RedirectResponse:
+    return RedirectResponse("/static/favicon.svg", status_code=308)
 
 
 @app.middleware("http")
@@ -248,6 +258,18 @@ def _token_credentials(db: Session) -> list[models.Credential]:
     return sorted(tokens, key=lambda item: (item.expires_at is None, item.expires_at or datetime.max.replace(tzinfo=timezone.utc), item.label.lower()))
 
 
+def _service_tokens(service: models.Service) -> list[models.Credential]:
+    return [credential for credential in service.credentials if credential.secret_type == "API token"]
+
+
+def _service_login_credentials(service: models.Service) -> list[models.Credential]:
+    return [credential for credential in service.credentials if credential.secret_type != "API token"]
+
+
+templates.env.globals["service_tokens"] = _service_tokens
+templates.env.globals["service_login_credentials"] = _service_login_credentials
+
+
 def _parse_optional_datetime(value: str) -> datetime | None:
     clean = (value or "").strip()
     if not clean:
@@ -377,6 +399,82 @@ def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
         state = "down"
         label = f"No reply ({int(details.get('failures') or 1)} failed check(s))"
     return {"state": state, "label": label, "latency_ms": details.get("latency_ms"), "next_at": format_dt(next_at)}
+
+
+def _service_validation_status(db: Session, service: models.Service) -> dict[str, str]:
+    latest = _latest_audit(db, "service", service.id, "service_validate")
+    if not latest:
+        return {"state": "unknown", "label": "Not checked", "checked_at": ""}
+    details = latest.details_json or {}
+    if not int(details.get("checked") or 0):
+        return {"state": "unknown", "label": "No URL or port documented", "checked_at": format_dt(latest.created_at)}
+    ok = bool(details.get("ok"))
+    return {
+        "state": "good" if ok else "bad",
+        "label": "Reachable" if ok else "No response",
+        "checked_at": format_dt(latest.created_at),
+    }
+
+
+def _service_validation_targets(service: models.Service) -> list[tuple[str, str, int]]:
+    targets: list[tuple[str, str, int]] = []
+    for raw_url in [service.local_url, service.public_url]:
+        if not raw_url:
+            continue
+        parsed = urlparse(raw_url)
+        if not parsed.hostname:
+            continue
+        default_port = 443 if parsed.scheme == "https" else 80
+        try:
+            port = parsed.port or default_port
+        except ValueError:
+            continue
+        targets.append((raw_url, parsed.hostname, port))
+    host = (service.device.primary_ip or service.device.hostname or "").strip() if service.device else ""
+    if host:
+        for port in service.ports:
+            targets.append((f"{host}:{port.host_port}/{port.protocol}", host, port.host_port))
+    seen: set[tuple[str, int]] = set()
+    deduped: list[tuple[str, str, int]] = []
+    for label, host, port in targets:
+        key = (host, port)
+        if key not in seen:
+            seen.add(key)
+            deduped.append((label, host, port))
+    return deduped
+
+
+def _check_tcp_target(host: str, port: int, timeout: float = 2.0) -> dict[str, Any]:
+    started = time.perf_counter()
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            latency = (time.perf_counter() - started) * 1000
+            return {"ok": True, "latency_ms": round(latency, 1)}
+    except OSError as exc:
+        return {"ok": False, "latency_ms": None, "error": str(exc)}
+
+
+def _validate_service(db: Session, service: models.Service, user_id: int | None = None) -> dict[str, Any]:
+    results: list[dict[str, Any]] = []
+    for label, host, port in _service_validation_targets(service):
+        result = _check_tcp_target(host, port)
+        result.update({"label": label, "host": host, "port": port})
+        results.append(result)
+    details = {
+        "ok": any(item["ok"] for item in results),
+        "targets": results,
+        "checked": len(results),
+    }
+    db.add(
+        models.AuditLog(
+            user_id=user_id,
+            action="service_validate",
+            object_type="service",
+            object_id=service.id,
+            details_json=details,
+        )
+    )
+    return details
 
 
 def _dashboard_ping_overview(db: Session) -> list[dict[str, str]]:
@@ -771,6 +869,72 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
     return parsed
 
 
+def _create_token_credential_from_import(
+    db: Session,
+    user: models.User,
+    form: Any,
+    parsed: dict[str, Any],
+    index_raw: str,
+    record: models.ImportRecord,
+    device: models.Device | None,
+) -> models.Credential | None:
+    item = parsed.get("tokens", [])[int(index_raw)]
+    label = str(form.get(f"token_label_{index_raw}") or item.get("label") or "Imported token").strip()
+    username = str(form.get(f"token_username_{index_raw}") or item.get("username", "")).strip()
+    token_value = str(form.get(f"token_value_{index_raw}") or item.get("token", "")).strip()
+    service_name = str(form.get(f"token_service_{index_raw}") or item.get("service_name", "")).strip()
+    expires_at = _parse_optional_datetime(str(form.get(f"token_expiry_{index_raw}") or item.get("expires_at", "")))
+    notes = str(form.get(f"token_notes_{index_raw}") or item.get("notes", "Imported access token.")).strip()
+    if not label or not token_value:
+        return None
+    resolved_device_id, resolved_service_id, _ = _resolve_service_for_credential(
+        db,
+        device_id=device.id if device else None,
+        service_id=None,
+        service_name=service_name,
+        label=label,
+    )
+    duplicate = (
+        db.query(models.Credential)
+        .filter(
+            models.Credential.secret_type == "API token",
+            models.Credential.label.ilike(label),
+            models.Credential.username.ilike(username),
+        )
+        .first()
+    )
+    if duplicate:
+        return None
+    credential = models.Credential(
+        device_id=resolved_device_id or (device.id if device else None),
+        service_id=resolved_service_id,
+        label=label,
+        username=username,
+        secret_encrypted=encrypt_text(token_value),
+        secret_type="API token",
+        security_level=str(item.get("security_level") or "high"),
+        expires_at=expires_at,
+        notes=notes,
+        last_changed_at=now_utc(),
+        active=True,
+    )
+    db.add(credential)
+    db.flush()
+    set_tags(db, "credential", credential.id, "token, api, temporary")
+    if "github" in f"{label} {username} {notes}".lower():
+        merge_tags(db, "credential", credential.id, "github")
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="token_created",
+            object_type="credential",
+            object_id=credential.id,
+            details_json={"source": f"smart_paste:{record.id}", "expires_at": expires_at.isoformat() if expires_at else ""},
+        )
+    )
+    return credential
+
+
 def _quick_credentials_for_device(db: Session, device: models.Device) -> list[models.Credential]:
     order = _id_list(get_app_settings(db).get(f"quick_credential_order:{device.id}", ""))
     hidden = set(_id_list(get_app_settings(db).get(f"quick_credential_hidden:{device.id}", "")))
@@ -912,6 +1076,8 @@ AUDIT_ACTION_LABELS = {
     "service_edited": "Service updated",
     "service_deleted": "Service deleted",
     "service_status_changed": "Service state changed",
+    "service_validate": "Service validation checked",
+    "services_validated": "Services validated",
     "smart_paste_parsed": "Smart Paste reviewed",
     "smart_paste_applied": "Smart Paste applied",
     "quick_note_saved": "Quick note saved",
@@ -1515,6 +1681,7 @@ def device_detail(
         {"name": name, "services": services}
         for name, services in grouped_services.items()
     ]
+    validation_status = {service.id: _service_validation_status(db, service) for service in device.services}
     return render(
         request,
         "device_detail.html",
@@ -1530,6 +1697,8 @@ def device_detail(
             "favorite_edit": favorites == "edit",
             "ping_status": _device_ping_status(db, device),
             "status_log": _latest_audit(db, "device", device.id, "device_status_changed"),
+            "validation_status": validation_status,
+            "validation_log": _latest_audit(db, "device", device.id, "services_validated"),
         },
         user=user,
     )
@@ -1551,6 +1720,41 @@ def device_ping_now(
     db.commit()
     flash(request, f"Ping checked: {'reply received' if result.get('ok') else 'no reply'}.", "success" if result.get("ok") else "warning")
     return redirect(f"/devices/{device.id}")
+
+
+@app.post("/devices/{device_id}/validate-services")
+def device_validate_services(
+    request: Request,
+    device_id: int,
+    csrf: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    device = db.get(models.Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found.")
+    checked = 0
+    reachable = 0
+    for service in device.services:
+        details = _validate_service(db, service, user.id)
+        if details["checked"]:
+            checked += 1
+        if details["ok"]:
+            reachable += 1
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="services_validated",
+            object_type="device",
+            object_id=device.id,
+            details_json={"checked": checked, "reachable": reachable},
+        )
+    )
+    db.commit()
+    flash(request, f"Validated {checked} service(s); {reachable} reachable.", "success")
+    return redirect(request.headers.get("referer") or f"/devices/{device.id}")
 
 
 @app.post("/devices/{device_id}/quick-credentials")
@@ -1824,6 +2028,8 @@ def service_detail(
     service = db.get(models.Service, service_id)
     if not service:
         raise HTTPException(404, "Service not found.")
+    if tab == "login":
+        tab = "creds"
     commands = (
         db.query(models.Command)
         .filter(
@@ -1860,9 +2066,31 @@ def service_detail(
             "notes": notes,
             "tag_list": tags_for(db, "service", service.id),
             "status_log": _latest_audit(db, "service", service.id, "service_status_changed"),
+            "validation_status": _service_validation_status(db, service),
+            "token_credentials": _service_tokens(service),
+            "login_credentials": _service_login_credentials(service),
         },
         user=user,
     )
+
+
+@app.post("/services/{service_id}/validate")
+def service_validate_now(
+    request: Request,
+    service_id: int,
+    csrf: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    service = db.get(models.Service, service_id)
+    if not service:
+        raise HTTPException(404, "Service not found.")
+    details = _validate_service(db, service, user.id)
+    db.commit()
+    flash(request, f"{service.name} is {'reachable' if details['ok'] else 'not responding'}.", "success" if details["ok"] else "warning")
+    return redirect(request.headers.get("referer") or f"/services/{service.id}")
 
 
 @app.get("/services/{service_id}/edit", response_class=HTMLResponse)
@@ -2000,11 +2228,41 @@ def credentials_page(
     )
 
 
+@app.get("/tokens", response_class=HTMLResponse)
+def tokens_page(
+    request: Request,
+    q: str = "",
+    service_id: int | None = None,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    tokens = _token_credentials(db)
+    if service_id:
+        tokens = [token for token in tokens if token.service_id == service_id]
+    if q:
+        needle = q.lower()
+        tokens = [
+            token
+            for token in tokens
+            if needle in token.label.lower()
+            or needle in token.username.lower()
+            or needle in (token.notes or "").lower()
+            or (token.service and needle in token.service.name.lower())
+        ]
+    return render(
+        request,
+        "tokens.html",
+        {"tokens": tokens, "q": q, "service_id": service_id, "tags": tag_map(db, "credential")},
+        user=user,
+    )
+
+
 @app.get("/credentials/new", response_class=HTMLResponse)
 def credential_new_page(
     request: Request,
     device_id: int | None = None,
     service_id: int | None = None,
+    secret_type: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -2019,6 +2277,7 @@ def credential_new_page(
             "device_id": device_id,
             "service_id": service_id,
             "service_name_prefill": selected_service.name if selected_service else "",
+            "secret_type_prefill": secret_type,
             "tag_text": "",
         },
         user=user,
@@ -3126,6 +3385,20 @@ async def smart_paste_apply(
         db.commit()
         flash(request, "Smart Paste review saved with no changes applied.", "success")
         return redirect("/smart-paste")
+    requires_device = any(
+        form.getlist(name)
+        for name in ["services", "ports", "urls", "commands", "credentials"]
+    ) or bool(form.get("apply_hardware"))
+    if form.getlist("tokens") and not requires_device and str(form.get("target_device_id", "new")) == "new":
+        created_tokens = 0
+        for index_raw in form.getlist("tokens"):
+            if _create_token_credential_from_import(db, user, form, parsed, str(index_raw), record, None):
+                created_tokens += 1
+        record.status = "applied"
+        db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id, details_json={"tokens": created_tokens}))
+        db.commit()
+        flash(request, f"Stored {created_tokens} token/API item(s).", "success")
+        return redirect("/tokens")
     target_raw = str(form.get("target_device_id", "new"))
     device: models.Device | None = None
     if target_raw and target_raw != "new":
@@ -3422,49 +3695,7 @@ async def smart_paste_apply(
             )
         )
     for index_raw in form.getlist("tokens"):
-        item = parsed.get("tokens", [])[int(index_raw)]
-        label = str(form.get(f"token_label_{index_raw}") or item.get("label") or "GitHub token").strip()
-        username = str(form.get(f"token_username_{index_raw}") or item.get("username", "")).strip()
-        token_value = str(form.get(f"token_value_{index_raw}") or item.get("token", "")).strip()
-        expires_at = _parse_optional_datetime(str(form.get(f"token_expiry_{index_raw}") or item.get("expires_at", "")))
-        notes = str(form.get(f"token_notes_{index_raw}") or item.get("notes", "Imported GitHub personal access token.")).strip()
-        if not label or not token_value:
-            continue
-        duplicate = (
-            db.query(models.Credential)
-            .filter(
-                models.Credential.secret_type == "API token",
-                models.Credential.label.ilike(label),
-                models.Credential.username.ilike(username),
-            )
-            .first()
-        )
-        if duplicate:
-            continue
-        credential = models.Credential(
-            device_id=device.id,
-            label=label,
-            username=username,
-            secret_encrypted=encrypt_text(token_value),
-            secret_type="API token",
-            security_level="high",
-            expires_at=expires_at,
-            notes=notes,
-            last_changed_at=now_utc(),
-            active=True,
-        )
-        db.add(credential)
-        db.flush()
-        set_tags(db, "credential", credential.id, "github, token, temporary")
-        db.add(
-            models.AuditLog(
-                user_id=user.id,
-                action="token_created",
-                object_type="credential",
-                object_id=credential.id,
-                details_json={"source": f"smart_paste:{record.id}", "expires_at": expires_at.isoformat() if expires_at else ""},
-            )
-        )
+        _create_token_credential_from_import(db, user, form, parsed, str(index_raw), record, device)
     record.status = "applied"
     merge_tags(db, "device", device.id, _infer_tags_for_device(device))
     db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id))
@@ -3520,12 +3751,17 @@ def settings_page(
 ) -> HTMLResponse:
     pending_totp_secret = ""
     pending_totp_uri = ""
+    pending_totp_qr_svg = ""
     if user.totp_secret_encrypted and not user.totp_enabled:
         pending_totp_secret = decrypt_text(user.totp_secret_encrypted)
         pending_totp_uri = pyotp.TOTP(pending_totp_secret).provisioning_uri(
             name=user.username,
             issuer_name=settings.app_name,
         )
+        qr_image = qrcode.make(pending_totp_uri, image_factory=qrcode.image.svg.SvgPathImage)
+        buffer = io.BytesIO()
+        qr_image.save(buffer)
+        pending_totp_qr_svg = buffer.getvalue().decode("utf-8")
     return render(
         request,
         "settings.html",
@@ -3533,6 +3769,7 @@ def settings_page(
             "app_settings": get_app_settings(db),
             "pending_totp_secret": pending_totp_secret,
             "pending_totp_uri": pending_totp_uri,
+            "pending_totp_qr_svg": pending_totp_qr_svg,
             "tokens": _token_credentials(db),
             "devices": _device_order_query(db).all(),
         },
@@ -3650,7 +3887,9 @@ def settings_token_create(
     )
     db.add(credential)
     db.flush()
-    set_tags(db, "credential", credential.id, "github, token, temporary")
+    set_tags(db, "credential", credential.id, "token, api, temporary")
+    if "github" in f"{label} {token_notes}".lower():
+        merge_tags(db, "credential", credential.id, "github")
     db.add(
         models.AuditLog(
             user_id=user.id,
@@ -3677,13 +3916,13 @@ def settings_2fa_start(
     ensure_writable()
     if not verify_password(password, user.password_hash):
         flash(request, "Incorrect password. 2FA setup was not started.", "danger")
-        return redirect("/settings")
+        return redirect("/settings#two-factor")
     user.totp_enabled = False
     user.totp_secret_encrypted = encrypt_text(pyotp.random_base32())
     db.add(models.AuditLog(user_id=user.id, action="totp_setup_started", object_type="user", object_id=user.id))
     db.commit()
     flash(request, "2FA setup started. Add the manual key to your authenticator app, then verify a code.", "success")
-    return redirect("/settings")
+    return redirect("/settings#two-factor")
 
 
 @app.post("/settings/2fa/verify")
@@ -3698,16 +3937,16 @@ def settings_2fa_verify(
     ensure_writable()
     if not user.totp_secret_encrypted:
         flash(request, "Start 2FA setup first.", "warning")
-        return redirect("/settings")
+        return redirect("/settings#two-factor")
     secret = decrypt_text(user.totp_secret_encrypted)
     if not pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1):
         flash(request, "Incorrect 2FA code.", "danger")
-        return redirect("/settings")
+        return redirect("/settings#two-factor")
     user.totp_enabled = True
     db.add(models.AuditLog(user_id=user.id, action="totp_enabled", object_type="user", object_id=user.id))
     db.commit()
     flash(request, "2FA is now enabled for login.", "success")
-    return redirect("/settings")
+    return redirect("/settings#two-factor")
 
 
 @app.post("/settings/2fa/disable")
@@ -3723,18 +3962,18 @@ def settings_2fa_disable(
     ensure_writable()
     if not verify_password(password, user.password_hash):
         flash(request, "Incorrect password. 2FA was not changed.", "danger")
-        return redirect("/settings")
+        return redirect("/settings#two-factor")
     if user.totp_enabled and user.totp_secret_encrypted:
         secret = decrypt_text(user.totp_secret_encrypted)
         if not pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1):
             flash(request, "Incorrect 2FA code. 2FA was not disabled.", "danger")
-            return redirect("/settings")
+            return redirect("/settings#two-factor")
     user.totp_enabled = False
     user.totp_secret_encrypted = None
     db.add(models.AuditLog(user_id=user.id, action="totp_disabled", object_type="user", object_id=user.id))
     db.commit()
     flash(request, "2FA disabled.", "success")
-    return redirect("/settings")
+    return redirect("/settings#two-factor")
 
 
 @app.post("/maintenance/cleanup-smart-paste")

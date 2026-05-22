@@ -3,14 +3,14 @@
 {% block content %}
 <section class="page-head">
   <div>
-    <p class="eyebrow">Read-only view. Click Edit to make changes.</p>
+    <p class="eyebrow">Device record</p>
     <h1>{{ device.name }}</h1>
     <p>{{ device.primary_ip or "No IP" }} · {{ device.hostname or "No hostname" }} · {{ device.os_name or "OS unknown" }}</p>
     <div class="tags">{% for tag in tag_list %}<span>{{ tag }}</span>{% endfor %}</div>
   </div>
   <div class="actions">
-    <a class="button" href="/devices/{{ device.id }}/edit">Edit</a>
-    <a class="button secondary" href="/raw/device/{{ device.id }}">Raw</a>
+    <a class="button" href="/devices/{{ device.id }}/edit" title="Edit this device record">Edit</a>
+    <a class="button secondary" href="/raw/device/{{ device.id }}" title="View the raw saved fields">Raw</a>
   </div>
 </section>
 
@@ -106,7 +106,14 @@
   <section class="panel">
     <div class="section-title">
       <h2>Services On {{ device.name }}</h2>
-      <a class="button" href="/services/new?device_id={{ device.id }}">Add Service</a>
+      <div class="actions compact-actions">
+        <form method="post" action="/devices/{{ device.id }}/validate-services">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="secondary small-button" type="submit" title="Check documented service URLs and ports on this device">Validate</button>
+        </form>
+        {% if validation_log %}<span class="muted">last {{ validation_log.created_at|dt }}</span>{% endif %}
+        <a class="button" href="/services/new?device_id={{ device.id }}" title="Add a service running on this device">Add Service</a>
+      </div>
     </div>
     <div class="service-accordion">
       {% for group in service_groups %}
@@ -116,7 +123,8 @@
         {% for service in group.services %}
         <details class="service-summary" {% if loop.first %}open{% endif %}>
           <summary>
-            <span><strong>{{ service.name }}</strong><small>{{ service.local_url or service.public_url or service.compose_path or "No URL/path yet" }}</small></span>
+            {% set service_status = validation_status.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
+            <span><strong>{{ service.name }}{% if service_tokens(service) %}<a class="token-indicator" href="/tokens?service_id={{ service.id }}" title="This service has linked tokens or API keys">◇</a>{% endif %}</strong><small><span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path yet" }}</small></span>
             <a href="/services/{{ service.id }}">Open</a>
           </summary>
           <div class="summary-grid">
@@ -129,7 +137,7 @@
             <div>
               <h3>Credentials</h3>
               <div class="list compact">
-                {% for credential in service.credentials %}
+                {% for credential in service_login_credentials(service) %}
                   <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
                     <a class="row-main" href="/credentials/{{ credential.id }}">
                       <strong>{{ credential.label }}</strong>
@@ -143,6 +151,15 @@
                 {% else %}
                   {% if service_no_credentials_needed(service) %}<p class="empty">No saved credentials needed.</p>{% endif %}
                 {% endfor %}
+                {% if service_tokens(service) %}
+                  <h4>Tokens & APIs</h4>
+                  {% for credential in service_tokens(service) %}
+                    <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
+                      <a class="row-main" href="/credentials/{{ credential.id }}"><strong>{{ credential.label }}</strong><span>{{ credential.security_level|title }}{% if credential.expires_at %} · expires {{ credential.expires_at|date_input }}{% endif %}</span></a>
+                      <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
+                    </div>
+                  {% endfor %}
+                {% endif %}
               </div>
             </div>
           </div>
@@ -154,10 +171,21 @@
     </div>
   </section>
 {% elif tab == "services" %}
-  <section class="section-title"><h2>Services</h2><a class="button" href="/services/new?device_id={{ device.id }}">Add Service</a></section>
+  <section class="section-title">
+    <h2>Services</h2>
+    <div class="actions compact-actions">
+      <form method="post" action="/devices/{{ device.id }}/validate-services">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="secondary small-button" type="submit" title="Check documented service URLs and ports on this device">Validate</button>
+      </form>
+      {% if validation_log %}<span class="muted">last {{ validation_log.created_at|dt }}</span>{% endif %}
+      <a class="button" href="/services/new?device_id={{ device.id }}">Add Service</a>
+    </div>
+  </section>
   <section class="list">
     {% for service in device.services %}
-      <a class="list-row" href="/services/{{ service.id }}"><strong>{{ service.name }}</strong><span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}</span></a>
+      {% set service_status = validation_status.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
+      <a class="list-row" href="/services/{{ service.id }}"><strong>{{ service.name }}{% if service_tokens(service) %}<span class="token-indicator" title="This service has linked tokens or API keys">◇</span>{% endif %}</strong><span><span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}</span></a>
     {% else %}<p class="empty">No services documented on this device yet.</p>{% endfor %}
   </section>
 {% elif tab == "credentials" %}

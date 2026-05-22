@@ -12,9 +12,12 @@ It is designed to be fast like notes, structured like inventory, and safe like a
 - Devices, services, credentials, commands, ports, URLs, notes, tags, search, and history.
 - Read-only-first device and service pages.
 - Encrypted credential storage with Low, Medium, High, and Extreme security levels.
+- Tokens & APIs section for GitHub PATs, Home Assistant/API tokens, and other temporary or service-linked access keys.
 - Credential reveal audit log.
+- Optional TOTP 2FA setup with a QR code for authenticator apps.
 - Copy-friendly command library with starter Linux, Docker, Docker Compose, Git, networking, and recovery commands.
-- Smart Paste import with review-before-apply for notes, SSH output, Docker output, URLs, ports, paths, commands, and service login blocks.
+- Smart Paste import with review-before-apply for notes, SSH output, Docker output, URLs, ports, paths, commands, service login blocks, and GitHub token pages.
+- Service validation checks documented URLs and ports with a simple TCP connection and records the last result.
 - Suggestions for missing backup notes, duplicate ports, low-security admin credentials, and missing purpose fields.
 - Emergency encrypted backup export, human-readable runbook HTML export, and encrypted import.
 - Standby/read-only instance mode for backup servers.
@@ -89,6 +92,16 @@ example-password
 
 is reviewed as one service/login suggestion with the URL, port, username, password, and service relationship kept together. Nothing is applied until you review and select it.
 
+Smart Paste also recognizes GitHub personal access tokens and stores them as high-security encrypted Tokens & APIs. Token-only imports do not create fake devices.
+
+If you paste Cloudflare or TryCloudflare logs, any detected URLs are reviewed like normal URLs. Live log scraping or Docker socket access is intentionally not part of the default install; a future read-only agent is the safer path for automatic discovery.
+
+## Service Validation
+
+Device pages include a **Validate** button near the services list. It checks each service's documented local/public URL and linked ports with a TCP connection, then shows a small green/red/grey dot next to the service URL.
+
+This is not a full uptime monitor and it does not run commands on the server. It is a quick "is something listening here?" check to catch stale URLs, wrong ports, or services that are probably down.
+
 ## Emergency Export And Import
 
 The Emergency Export page can create:
@@ -106,7 +119,7 @@ The same page can import an encrypted Kairix backup into a clean or standby inst
 - Keep `.env`, `data/`, `backups/`, and `exports/` out of Git.
 - Passwords are hidden from normal list views and reveal events are logged.
 - Smart Paste encrypts detected secrets in pending import data and redacts them from preserved raw notes.
-- Optional TOTP 2FA can be enabled from Settings after confirming your password.
+- Optional TOTP 2FA can be enabled from Settings after confirming your password. Scan the QR code with an authenticator app; if two trusted people need access, scan the same setup QR on both phones before completing verification.
 - Docker API control is intentionally not part of this MVP.
 
 ## Development

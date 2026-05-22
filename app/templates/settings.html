@@ -108,7 +108,7 @@
   </form>
 </details>
 
-<section class="panel">
+<section class="panel" id="two-factor">
   <h2>Two-Factor Authentication</h2>
   {% if user.totp_enabled %}
     <p class="muted">2FA is enabled for your login. Disabling it requires your password and a current authenticator code.</p>
@@ -119,8 +119,12 @@
       <div class="form-actions span-2"><button class="secondary" type="submit">Disable 2FA</button></div>
     </form>
   {% elif pending_totp_secret %}
-    <p class="muted">Add this manual key to Google Authenticator, Authy, 1Password, Bitwarden, or another TOTP app, then enter the 6-digit code.</p>
-    <pre>{{ pending_totp_secret }}</pre>
+    <p class="muted">Scan this QR code with your authenticator app, then enter the 6-digit code. If two people need access, scan the same QR on both phones before enabling.</p>
+    <div class="qr-code">{{ pending_totp_qr_svg|safe }}</div>
+    <details class="collapsible-panel">
+      <summary><span><strong>Manual setup key</strong><small>Use this if scanning the QR code is not available.</small></span></summary>
+      <pre>{{ pending_totp_secret }}</pre>
+    </details>
     <details class="collapsible-panel">
       <summary><span><strong>Advanced setup URI</strong><small>Use this if your authenticator can import an otpauth URI.</small></span></summary>
       <pre>{{ pending_totp_uri }}</pre>

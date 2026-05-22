@@ -10,27 +10,35 @@
 </section>
 <form method="post" action="/smart-paste/{{ record.id }}/apply" class="panel">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  {% set token_only = parsed.tokens and not parsed.device.name and not parsed.device.primary_ip and not parsed.services and not parsed.ports and not parsed.urls and not parsed.commands and not parsed.credentials %}
   <div class="form-actions">
     <button class="secondary" type="button" data-select-all="smart-paste" data-select-state="on">Select all useful</button>
     <button class="secondary" type="button" data-select-all="smart-paste" data-select-state="off">Deselect all</button>
   </div>
-  <label>Apply to device
-    <select name="target_device_id">
-      <option value="new">Create new: {{ parsed.device.name or "Imported Device" }}</option>
-      {% for device in devices %}
-        <option value="{{ device.id }}" {% if parsed.matched_device_id == device.id %}selected{% endif %}>{{ device.name }}{% if parsed.matched_device_id == device.id %} · matched{% endif %}</option>
-      {% endfor %}
-    </select>
-  </label>
+  {% if token_only %}
+    <input type="hidden" name="target_device_id" value="new">
+    <p class="muted">Token-only import. No device will be created unless you link a token to an existing service below.</p>
+  {% else %}
+    <label>Apply to device
+      <select name="target_device_id">
+        <option value="new">Create new: {{ parsed.device.name or "Imported Device" }}</option>
+        {% for device in devices %}
+          <option value="{{ device.id }}" {% if parsed.matched_device_id == device.id %}selected{% endif %}>{{ device.name }}{% if parsed.matched_device_id == device.id %} · matched{% endif %}</option>
+        {% endfor %}
+      </select>
+    </label>
+  {% endif %}
   <div class="suggestion-grid" data-select-scope="smart-paste">
-    <section>
-      <h2>Detected device</h2>
-      <label>Name <input name="device_name" value="{{ parsed.device.name or '' }}" spellcheck="true"></label>
-      <label>IP <input name="device_ip" value="{{ parsed.device.primary_ip or '' }}"></label>
-      <label>OS <input name="device_os" value="{{ parsed.device.os_name or '' }}" spellcheck="true"></label>
-      <p class="muted">Confidence: {{ parsed.device.confidence }}</p>
-      <label class="check-row"><input type="checkbox" name="apply_hardware" checked data-useful="true"> Apply hardware summaries if detected</label>
-    </section>
+    {% if not token_only %}
+      <section>
+        <h2>Detected device</h2>
+        <label>Name <input name="device_name" value="{{ parsed.device.name or '' }}" spellcheck="true"></label>
+        <label>IP <input name="device_ip" value="{{ parsed.device.primary_ip or '' }}"></label>
+        <label>OS <input name="device_os" value="{{ parsed.device.os_name or '' }}" spellcheck="true"></label>
+        <p class="muted">Confidence: {{ parsed.device.confidence }}</p>
+        <label class="check-row"><input type="checkbox" name="apply_hardware" checked data-useful="true"> Apply hardware summaries if detected</label>
+      </section>
+    {% endif %}
     <section class="span-2">
       <h2>Services</h2>
       {% for item in parsed.services %}
@@ -193,6 +201,7 @@
           </label>
           <label>Name <input name="token_label_{{ loop.index0 }}" value="{{ item.label or 'GitHub token' }}" spellcheck="true"></label>
           <label>Account <input name="token_username_{{ loop.index0 }}" value="{{ item.username or '' }}" placeholder="@username or org"></label>
+          <label>Service <input name="token_service_{{ loop.index0 }}" value="{{ item.service_name or '' }}" placeholder="Optional service to link" spellcheck="true"></label>
           <label>Token <input name="token_value_{{ loop.index0 }}" type="password" value="{{ item.token or '' }}" autocomplete="new-password"></label>
           <label>Expires <input name="token_expiry_{{ loop.index0 }}" type="date" value="{{ (item.expires_at or '')[:10] }}"></label>
           <label class="span-2">Notes <textarea name="token_notes_{{ loop.index0 }}" spellcheck="true">{{ item.notes or 'Imported GitHub personal access token.' }}</textarea></label>
