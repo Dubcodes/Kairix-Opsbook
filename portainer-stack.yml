@@ -1,0 +1,57 @@
+services:
+  app:
+    image: ghcr.io/dubcodes/kairix-opsbook:latest
+    pull_policy: always
+    container_name: kairix-opsbook-app
+    restart: unless-stopped
+    ports:
+      - "${APP_PORT:-8095}:8000"
+    environment:
+      APP_NAME: "${APP_NAME:-Kairix Opsbook}"
+      APP_VERSION: "${APP_VERSION:-0.1.0}"
+      INSTANCE_NAME: "${INSTANCE_NAME:-Opsbook}"
+      INSTANCE_MODE: "${INSTANCE_MODE:-primary}"
+
+      POSTGRES_DB: "${POSTGRES_DB:-opsbook}"
+      POSTGRES_USER: "${POSTGRES_USER:-opsbook}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+
+      DATABASE_URL: "postgresql+psycopg://${POSTGRES_USER:-opsbook}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-opsbook}"
+
+      OPSBOOK_SECRET_KEY: "${OPSBOOK_SECRET_KEY}"
+      EXPORT_SECRET_KEY: "${EXPORT_SECRET_KEY}"
+      SESSION_SECRET_KEY: "${SESSION_SECRET_KEY}"
+
+      SESSION_COOKIE_SECURE: "${SESSION_COOKIE_SECURE:-false}"
+      SESSION_TIMEOUT_MINUTES: "${SESSION_TIMEOUT_MINUTES:-20}"
+      MEDIUM_UNLOCK_MINUTES: "${MEDIUM_UNLOCK_MINUTES:-5}"
+
+      EXPORT_DIR: "/app/exports"
+      BACKUP_DIR: "/app/backups"
+    volumes:
+      - kairix-opsbook-exports:/app/exports
+      - kairix-opsbook-backups:/app/backups
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    container_name: kairix-opsbook-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${POSTGRES_DB:-opsbook}"
+      POSTGRES_USER: "${POSTGRES_USER:-opsbook}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+    volumes:
+      - kairix-opsbook-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opsbook} -d ${POSTGRES_DB:-opsbook}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  kairix-opsbook-postgres:
+  kairix-opsbook-exports:
+  kairix-opsbook-backups:
