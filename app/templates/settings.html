@@ -20,7 +20,7 @@
   </label>
   <label class="check-row">
     <input type="checkbox" name="compact_forms" {% if app_settings.compact_forms != "off" %}checked{% endif %}>
-    Compact data-entry forms
+    Compact data-entry forms <span class="hint" title="Reduces padding and textarea height so more fields fit on screen. It does not hide fields or change saved data.">?</span>
   </label>
   <label>Session timeout minutes
     <input name="session_timeout_minutes" type="number" min="1" max="999" value="{{ app_settings.session_timeout_minutes or '20' }}">
@@ -62,6 +62,51 @@
     <button type="submit">Save Settings</button>
   </div>
 </form>
+
+<details class="panel collapsible-panel">
+  <summary><span><strong>Temporary Tokens</strong><small>GitHub PATs and other short-lived access tokens, encrypted like credentials.</small></span></summary>
+  <form method="post" action="/settings/tokens" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Token name <span class="hint" title="Use a searchable name like GitHub Opsbook deploy token.">?</span><input name="token_name" required spellcheck="true"></label>
+    <label>Expires <span class="hint" title="Optional. Opsbook can warn you when a temporary token is expired or expiring soon.">?</span><input name="token_expiry" type="date"></label>
+    <label class="span-2">Token <span class="hint" title="Paste the token once. It is encrypted before storage and hidden by default.">?</span><input name="token_value" type="password" required autocomplete="new-password"></label>
+    <label class="span-2">Notes <textarea name="token_notes" spellcheck="true" placeholder="Repository scope, why it exists, or where it is used."></textarea></label>
+    <div class="form-actions span-2"><button type="submit">Store Token</button></div>
+  </form>
+  <div class="list compact">
+    {% for token in tokens %}
+      <div class="list-row static" data-credential-row>
+        <div>
+          <strong>{{ token.label }}</strong>
+          <span>{% if token.expires_at %}expires {{ token.expires_at|date_input }}{% else %}no expiry saved{% endif %} · {{ token.security_level|title }} security</span>
+        </div>
+        <div class="actions compact-actions">
+          <button class="secondary small-button" type="button" data-copy-credential="{{ token.id }}">Copy</button>
+          <a class="button secondary small-button" href="/credentials/{{ token.id }}/edit">Edit</a>
+          <form method="post" action="/delete/credential/{{ token.id }}" data-confirm-delete="Delete this token?">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="ghost small-button" type="submit">Delete</button>
+          </form>
+        </div>
+      </div>
+    {% else %}
+      <p class="empty">No temporary tokens stored yet. Smart Paste can detect GitHub PAT pages and offer them here as high-security credentials.</p>
+    {% endfor %}
+  </div>
+</details>
+
+<details class="panel collapsible-panel">
+  <summary><span><strong>Device Order</strong><small>Controls dashboard order and device grouping order on other pages.</small></span></summary>
+  <form method="post" action="/settings/device-order" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    {% for device in devices %}
+      <label>{{ device.name }} <input name="device_order_{{ device.id }}" type="number" min="0" max="999999" value="{{ device.display_order }}"></label>
+    {% else %}
+      <p class="empty">No devices yet.</p>
+    {% endfor %}
+    <div class="form-actions span-2"><button type="submit">Save Device Order</button></div>
+  </form>
+</details>
 
 <section class="panel">
   <h2>Two-Factor Authentication</h2>

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import copy
 import json
 import re
 import subprocess
 import threading
 import time
 from datetime import datetime, timedelta, timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
@@ -56,12 +58,22 @@ app.add_middleware(
 )
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    return response
+
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["dt"] = format_dt
 templates.env.globals["render_vars"] = render_template_vars
 templates.env.globals["settings"] = settings
 
 NO_CREDENTIALS_MARKER = "[opsbook:no-credentials-needed]"
+GITHUB_TOKEN_RE = re.compile(r"\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b")
 
 
 def service_no_credentials_needed(service: models.Service) -> bool:
@@ -194,6 +206,73 @@ def _normalize_unknown_states(db: Session) -> None:
         service.status_manual = ""
 
 
+def _device_order_query(db: Session):
+    return db.query(models.Device).order_by(models.Device.display_order, models.Device.name)
+
+
+def _service_order_query(db: Session):
+    return (
+        db.query(models.Service)
+        .join(models.Device, models.Service.device_id == models.Device.id)
+        .order_by(models.Device.display_order, models.Device.name, models.Service.name)
+    )
+
+
+def _next_device_order(db: Session) -> int:
+    current = db.query(func.max(models.Device.display_order)).scalar()
+    return (int(current) if current is not None else 0) + 10
+
+
+def _credential_context_device(credential: models.Credential) -> models.Device | None:
+    if credential.service and credential.service.device:
+        return credential.service.device
+    return credential.device
+
+
+def _credential_sort_key(credential: models.Credential) -> tuple[int, str, str, str]:
+    device = _credential_context_device(credential)
+    return (
+        device.display_order if device else 999999,
+        (device.name if device else "zzzz").lower(),
+        (credential.service.name if credential.service else "").lower(),
+        credential.label.lower(),
+    )
+
+
+def _token_credentials(db: Session) -> list[models.Credential]:
+    tokens = (
+        db.query(models.Credential)
+        .filter(models.Credential.secret_type == "API token")
+        .all()
+    )
+    return sorted(tokens, key=lambda item: (item.expires_at is None, item.expires_at or datetime.max.replace(tzinfo=timezone.utc), item.label.lower()))
+
+
+def _parse_optional_datetime(value: str) -> datetime | None:
+    clean = (value or "").strip()
+    if not clean:
+        return None
+    try:
+        parsed = datetime.fromisoformat(clean.replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except ValueError:
+        pass
+    try:
+        parsed = parsedate_to_datetime(clean)
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError, IndexError):
+        return None
+
+
+def _date_input(value: datetime | None) -> str:
+    if not value:
+        return ""
+    return value.date().isoformat()
+
+
+templates.env.filters["date_input"] = _date_input
+
+
 def _infer_tags_for_service(service: models.Service) -> str:
     text = " ".join(
         [
@@ -303,7 +382,7 @@ def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
 def _dashboard_ping_overview(db: Session) -> list[dict[str, str]]:
     cutoff = now_utc() - timedelta(hours=12)
     items: list[dict[str, str]] = []
-    for device in db.query(models.Device).order_by(models.Device.name).all():
+    for device in _device_order_query(db).all():
         latest = _latest_audit(db, "device", device.id, "device_ping")
         if not latest:
             items.append({"name": device.name, "state": "unknown", "label": "no ping"})
@@ -354,7 +433,7 @@ def _ping_loop() -> None:
             with SessionLocal() as db:
                 interval = int_setting(db, "ping_interval_minutes", 60, minimum=5, maximum=999)
                 cutoff = now_utc() - timedelta(minutes=interval)
-                devices = db.query(models.Device).all()
+                devices = _device_order_query(db).all()
                 for device in devices:
                     if not (device.primary_ip or device.hostname):
                         continue
@@ -446,6 +525,65 @@ def _auto_tags_for_label(label: str) -> str:
     return ", ".join(dict.fromkeys(tags))
 
 
+def _walk_import_credentials(parsed: dict[str, Any]) -> list[dict[str, Any]]:
+    credentials: list[dict[str, Any]] = []
+    credentials.extend(parsed.get("credentials", []))
+    for service in parsed.get("services", []):
+        credentials.extend(service.get("credentials", []))
+    return credentials
+
+
+def _sensitive_values_from_parsed(parsed: dict[str, Any]) -> list[str]:
+    values: list[str] = []
+    for credential in _walk_import_credentials(parsed):
+        secret = str(credential.get("secret") or "").strip()
+        if secret:
+            values.append(secret)
+    for token in parsed.get("tokens", []):
+        value = str(token.get("token") or "").strip()
+        if value:
+            values.append(value)
+    return values
+
+
+def _secure_parsed_for_storage(parsed: dict[str, Any]) -> dict[str, Any]:
+    secured = copy.deepcopy(parsed)
+    for credential in _walk_import_credentials(secured):
+        secret = str(credential.pop("secret", "") or "").strip()
+        if secret:
+            credential["secret_encrypted"] = encrypt_text(secret)
+            credential["secret_detected"] = True
+    for token in secured.get("tokens", []):
+        value = str(token.pop("token", "") or "").strip()
+        if value:
+            token["token_encrypted"] = encrypt_text(value)
+    return secured
+
+
+def _decrypted_parsed(record: models.ImportRecord) -> dict[str, Any]:
+    parsed = copy.deepcopy(record.parsed_json or {})
+    for credential in _walk_import_credentials(parsed):
+        if "secret" not in credential and credential.get("secret_encrypted"):
+            credential["secret"] = decrypt_text(str(credential.get("secret_encrypted")))
+    for token in parsed.get("tokens", []):
+        if "token" not in token and token.get("token_encrypted"):
+            token["token"] = decrypt_text(str(token.get("token_encrypted")))
+    return parsed
+
+
+def _redact_sensitive_text(raw_text: str, parsed: dict[str, Any]) -> tuple[str, bool]:
+    redacted = raw_text
+    changed = False
+    for value in sorted(_sensitive_values_from_parsed(parsed), key=len, reverse=True):
+        if len(value) >= 3 and value in redacted:
+            redacted = redacted.replace(value, "[redacted imported secret]")
+            changed = True
+    redacted = GITHUB_TOKEN_RE.sub("[redacted github token]", redacted)
+    if redacted != raw_text:
+        changed = True
+    return redacted, changed
+
+
 def _id_list(value: str) -> list[int]:
     result: list[int] = []
     for part in (value or "").split(","):
@@ -503,7 +641,7 @@ def _match_device_for_import(db: Session, parsed_device: dict[str, Any]) -> mode
             return match
     if name:
         slug = slugify(name)
-        for device in db.query(models.Device).all():
+        for device in _device_order_query(db).all():
             if device.name.lower() == name.lower() or device.slug == slug:
                 return device
     return None
@@ -614,6 +752,22 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
             duplicate = query.first()
         credential["duplicate_id"] = duplicate.id if duplicate else None
         credential["selected"] = bool(credential.get("secret")) and duplicate is None
+    for token in parsed.get("tokens", []):
+        label = str(token.get("label", ""))
+        username = str(token.get("username", ""))
+        duplicate = None
+        if label:
+            duplicate = (
+                db.query(models.Credential)
+                .filter(
+                    models.Credential.secret_type == "API token",
+                    models.Credential.label.ilike(label),
+                    models.Credential.username.ilike(username),
+                )
+                .first()
+            )
+        token["duplicate_id"] = duplicate.id if duplicate else None
+        token["selected"] = bool(token.get("token")) and duplicate is None
     return parsed
 
 
@@ -742,6 +896,78 @@ def _cleanup_obvious_import_misses(db: Session) -> dict[str, int]:
         else:
             seen_links.add(key)
     return cleaned
+
+
+AUDIT_ACTION_LABELS = {
+    "credential_created": "Credential saved",
+    "credential_edited": "Credential updated",
+    "credential_revealed": "Credential revealed",
+    "credential_deleted": "Credential deleted",
+    "token_created": "Temporary token stored",
+    "device_created": "Device added",
+    "device_edited": "Device updated",
+    "device_deleted": "Device deleted",
+    "device_ping": "Device ping checked",
+    "service_created": "Service added",
+    "service_edited": "Service updated",
+    "service_deleted": "Service deleted",
+    "service_status_changed": "Service state changed",
+    "smart_paste_parsed": "Smart Paste reviewed",
+    "smart_paste_applied": "Smart Paste applied",
+    "quick_note_saved": "Quick note saved",
+    "emergency_export_created": "Emergency export created",
+    "emergency_export_imported": "Emergency backup imported",
+    "settings_updated": "Settings changed",
+    "device_order_updated": "Device order changed",
+    "totp_setup_started": "2FA setup started",
+    "totp_enabled": "2FA enabled",
+    "totp_disabled": "2FA disabled",
+}
+
+
+def _safe_audit_details(details: dict[str, Any] | None) -> str:
+    if not details:
+        return ""
+    hidden_words = ("secret", "password", "token", "key", "encrypted")
+    parts: list[str] = []
+    for key, value in details.items():
+        if any(word in key.lower() for word in hidden_words):
+            continue
+        if value in (None, "", [], {}):
+            continue
+        parts.append(f"{key.replace('_', ' ')}: {value}")
+    return " · ".join(parts[:4])
+
+
+def _audit_target_label(db: Session, log: models.AuditLog) -> tuple[str, str]:
+    model_map: dict[str, tuple[type[Any], str, str]] = {
+        "device": (models.Device, "name", "devices"),
+        "service": (models.Service, "name", "services"),
+        "credential": (models.Credential, "label", "credentials"),
+        "command": (models.Command, "name", "commands"),
+        "note": (models.Note, "title", "notes"),
+    }
+    model_info = model_map.get(log.object_type)
+    if model_info and log.object_id:
+        model, label_attr, path = model_info
+        obj = db.get(model, log.object_id)
+        if obj:
+            return str(getattr(obj, label_attr) or f"{log.object_type.title()} #{log.object_id}"), f"/{path}/{log.object_id}"
+    if log.object_type:
+        return f"{log.object_type.replace('_', ' ').title()} {log.object_id or ''}".strip(), ""
+    return "Opsbook", ""
+
+
+def _human_audit_log(db: Session, log: models.AuditLog) -> dict[str, str]:
+    target, href = _audit_target_label(db, log)
+    return {
+        "title": AUDIT_ACTION_LABELS.get(log.action, log.action.replace("_", " ").title()),
+        "target": target,
+        "href": href,
+        "when": format_dt(log.created_at),
+        "details": _safe_audit_details(log.details_json),
+        "severity": "danger" if "deleted" in log.action else "info",
+    }
 
 
 def _resolve_service_for_credential(
@@ -1097,8 +1323,8 @@ def dashboard(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     recent_limit = int_setting(db, "dashboard_recent_limit", 6, minimum=3, maximum=20)
-    devices = db.query(models.Device).order_by(models.Device.updated_at.desc()).limit(recent_limit).all()
-    services = db.query(models.Service).order_by(models.Service.updated_at.desc()).limit(recent_limit).all()
+    devices = _device_order_query(db).limit(recent_limit).all()
+    services = _service_order_query(db).limit(recent_limit).all()
     recent_logs = db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(8).all()
     suggestions = visible_suggestions(db)[:6]
     return render(
@@ -1140,7 +1366,7 @@ def devices_page(
                 models.Device.notes.ilike(like),
             )
         )
-    devices = query.order_by(models.Device.name).all()
+    devices = query.order_by(models.Device.display_order, models.Device.name).all()
     service_counts = {
         device_id: count
         for device_id, count in db.query(
@@ -1226,6 +1452,7 @@ def device_create(
         os_version=os_version,
         location=location,
         status_manual=status_manual,
+        display_order=_next_device_order(db),
         notes=notes,
     )
     db.add(device)
@@ -1482,7 +1709,10 @@ def services_page(
                 models.Service.notes.ilike(like),
             )
         )
-    services = query.order_by(models.Service.name).all()
+    if q:
+        services = query.order_by(models.Service.name).all()
+    else:
+        services = _service_order_query(db).all()
     return render(
         request,
         "services.html",
@@ -1501,7 +1731,7 @@ def service_new_page(
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    devices = db.query(models.Device).order_by(models.Device.name).all()
+    devices = _device_order_query(db).all()
     return render(
         request,
         "service_form.html",
@@ -1645,7 +1875,7 @@ def service_edit_page(
     service = db.get(models.Service, service_id)
     if not service:
         raise HTTPException(404, "Service not found.")
-    devices = db.query(models.Device).order_by(models.Device.name).all()
+    devices = _device_order_query(db).all()
     return render(
         request,
         "service_form.html",
@@ -1751,7 +1981,7 @@ def credentials_page(
                 models.Credential.notes.ilike(like),
             )
         )
-    credentials = query.order_by(models.Credential.label).all()
+    credentials = sorted(query.all(), key=_credential_sort_key)
     groups: dict[str, list[models.Credential]] = {}
     for credential in credentials:
         device_name = (
@@ -1784,8 +2014,8 @@ def credential_new_page(
         "credential_form.html",
         {
             "credential": None,
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
-            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
             "device_id": device_id,
             "service_id": service_id,
             "service_name_prefill": selected_service.name if selected_service else "",
@@ -1829,6 +2059,7 @@ def credential_create(
     service_id: str = Form(""),
     service_name: str = Form(""),
     login_url: str = Form(""),
+    expires_at: str = Form(""),
     notes: str = Form(""),
     tags: str = Form(""),
     user: models.User = Depends(require_user),
@@ -1864,6 +2095,7 @@ def credential_create(
         device_id=resolved_device_id,
         service_id=resolved_service_id,
         login_url=login_url,
+        expires_at=_parse_optional_datetime(expires_at),
         notes=notes,
         last_changed_at=now_utc(),
     )
@@ -1892,8 +2124,8 @@ def credential_edit_page(
         "credential_form.html",
         {
             "credential": credential,
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
-            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
             "device_id": credential.device_id,
             "service_id": credential.service_id,
             "service_name_prefill": credential.service.name if credential.service else "",
@@ -1917,6 +2149,7 @@ def credential_update(
     service_id: str = Form(""),
     service_name: str = Form(""),
     login_url: str = Form(""),
+    expires_at: str = Form(""),
     notes: str = Form(""),
     active: str = Form("on"),
     tags: str = Form(""),
@@ -1958,6 +2191,7 @@ def credential_update(
     credential.device_id = resolved_device_id
     credential.service_id = resolved_service_id
     credential.login_url = login_url
+    credential.expires_at = _parse_optional_datetime(expires_at)
     credential.notes = notes
     credential.active = active == "on"
     tag_text = ", ".join(filter(None, [tags, _auto_tags_for_label(label)]))
@@ -2285,8 +2519,8 @@ def command_new_page(
             "applies_to_type": applies_to_type,
             "applies_to_id": applies_to_id,
             "tag_text": "",
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
-            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
         },
         user=user,
     )
@@ -2358,8 +2592,8 @@ def command_edit_page(
             "applies_to_type": command.applies_to_type,
             "applies_to_id": command.applies_to_id,
             "tag_text": ", ".join(tags_for(db, "command", command.id)),
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
-            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
         },
         user=user,
     )
@@ -2426,8 +2660,8 @@ def ports_page(
         {
             "ports": db.query(models.Port).order_by(models.Port.host_port).all(),
             "urls": db.query(models.Url).order_by(models.Url.url).all(),
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
-            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
         },
         user=user,
     )
@@ -2581,8 +2815,8 @@ def port_edit_page(
         "port_form.html",
         {
             "port": port,
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
-            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
             "tag_text": ", ".join(tags_for(db, "port", port.id)),
         },
         user=user,
@@ -2641,8 +2875,8 @@ def url_edit_page(
         "url_form.html",
         {
             "url": url,
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
-            "services": db.query(models.Service).order_by(models.Service.name).all(),
+            "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
         },
         user=user,
     )
@@ -2747,7 +2981,7 @@ def smart_paste_page(
         "smart_paste.html",
         {
             "inventory_command": INVENTORY_COMMAND,
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "devices": _device_order_query(db).all(),
         },
         user=user,
     )
@@ -2763,11 +2997,26 @@ def smart_paste_parse(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     check_csrf(request, csrf)
+    ensure_writable()
     parsed = _annotate_import_suggestions(db, parse_smart_paste(raw_text))
-    record = models.ImportRecord(source_type=source_type, raw_text=raw_text, parsed_json=parsed, status="review")
+    safe_raw_text, secrets_redacted = _redact_sensitive_text(raw_text, parsed)
+    record = models.ImportRecord(
+        source_type=source_type,
+        raw_text=safe_raw_text,
+        parsed_json=_secure_parsed_for_storage(parsed),
+        status="review",
+    )
     db.add(record)
     db.flush()
-    db.add(models.AuditLog(user_id=user.id, action="smart_paste_parsed", object_type="import", object_id=record.id))
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="smart_paste_parsed",
+            object_type="import",
+            object_id=record.id,
+            details_json={"secrets_redacted": secrets_redacted},
+        )
+    )
     db.commit()
     return redirect(f"/smart-paste/{record.id}")
 
@@ -2785,26 +3034,35 @@ def quick_note_parse(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
+    parsed = _annotate_import_suggestions(db, parse_smart_paste(raw_text))
+    safe_raw_text, secrets_redacted = _redact_sensitive_text(raw_text, parsed)
     note = models.Note(
         object_type="quick_note",
         object_id=0,
         title=title.strip() or "Quick note",
-        body=raw_text,
+        body=safe_raw_text,
         source="quick_note",
     )
     db.add(note)
     db.flush()
     set_tags(db, "quick_note", note.id, tags)
-    db.add(models.AuditLog(user_id=user.id, action="quick_note_saved", object_type="quick_note", object_id=note.id))
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="quick_note_saved",
+            object_type="quick_note",
+            object_id=note.id,
+            details_json={"secrets_redacted": secrets_redacted},
+        )
+    )
     if action != "smart_paste":
         db.commit()
         flash(request, "Quick note saved.", "success")
         return redirect(request.headers.get("referer") or "/notes")
-    parsed = _annotate_import_suggestions(db, parse_smart_paste(raw_text))
     record = models.ImportRecord(
         source_type="quick_note",
-        raw_text=raw_text,
-        parsed_json=parsed,
+        raw_text=safe_raw_text,
+        parsed_json=_secure_parsed_for_storage(parsed),
         status="review",
     )
     db.add(record)
@@ -2815,6 +3073,7 @@ def quick_note_parse(
             action="quick_note_parsed",
             object_type="import",
             object_id=record.id,
+            details_json={"secrets_redacted": secrets_redacted},
         )
     )
     db.commit()
@@ -2836,8 +3095,8 @@ def smart_paste_review(
         "smart_paste_review.html",
         {
             "record": record,
-            "parsed": _annotate_import_suggestions(db, record.parsed_json),
-            "devices": db.query(models.Device).order_by(models.Device.name).all(),
+            "parsed": _annotate_import_suggestions(db, _decrypted_parsed(record)),
+            "devices": _device_order_query(db).all(),
         },
         user=user,
     )
@@ -2856,10 +3115,10 @@ async def smart_paste_apply(
     record = db.get(models.ImportRecord, import_id)
     if not record:
         raise HTTPException(404, "Import not found.")
-    parsed = record.parsed_json
+    parsed = _decrypted_parsed(record)
     has_selected_items = any(
         form.getlist(name)
-        for name in ["services", "ports", "urls", "commands", "credentials"]
+        for name in ["services", "ports", "urls", "commands", "credentials", "tokens"]
     ) or bool(form.get("apply_hardware"))
     if not has_selected_items:
         record.status = "reviewed"
@@ -2880,6 +3139,7 @@ async def smart_paste_apply(
             type="server",
             primary_ip=str(form.get("device_ip") or detected.get("primary_ip", "")),
             os_name=str(form.get("device_os") or detected.get("os_name", "")),
+            display_order=_next_device_order(db),
         )
         db.add(device)
         db.flush()
@@ -2892,19 +3152,7 @@ async def smart_paste_apply(
             device.primary_ip = str(form.get("device_ip")).strip()
         if form.get("device_os"):
             device.os_name = str(form.get("device_os")).strip()
-    note_body = record.raw_text
-    secrets_redacted = False
-    for credential_hint in parsed.get("credentials", []):
-        secret_value = str(credential_hint.get("secret", "")).strip()
-        if len(secret_value) >= 3 and secret_value in note_body:
-            note_body = note_body.replace(secret_value, "[redacted imported secret]")
-            secrets_redacted = True
-    for service_hint in parsed.get("services", []):
-        for credential_hint in service_hint.get("credentials", []):
-            secret_value = str(credential_hint.get("secret", "")).strip()
-            if len(secret_value) >= 3 and secret_value in note_body:
-                note_body = note_body.replace(secret_value, "[redacted imported secret]")
-                secrets_redacted = True
+    note_body, secrets_redacted = _redact_sensitive_text(record.raw_text, parsed)
     db.add(
         models.Note(
             object_type="device",
@@ -3173,6 +3421,50 @@ async def smart_paste_apply(
                 details_json={"source": f"smart_paste:{record.id}"},
             )
         )
+    for index_raw in form.getlist("tokens"):
+        item = parsed.get("tokens", [])[int(index_raw)]
+        label = str(form.get(f"token_label_{index_raw}") or item.get("label") or "GitHub token").strip()
+        username = str(form.get(f"token_username_{index_raw}") or item.get("username", "")).strip()
+        token_value = str(form.get(f"token_value_{index_raw}") or item.get("token", "")).strip()
+        expires_at = _parse_optional_datetime(str(form.get(f"token_expiry_{index_raw}") or item.get("expires_at", "")))
+        notes = str(form.get(f"token_notes_{index_raw}") or item.get("notes", "Imported GitHub personal access token.")).strip()
+        if not label or not token_value:
+            continue
+        duplicate = (
+            db.query(models.Credential)
+            .filter(
+                models.Credential.secret_type == "API token",
+                models.Credential.label.ilike(label),
+                models.Credential.username.ilike(username),
+            )
+            .first()
+        )
+        if duplicate:
+            continue
+        credential = models.Credential(
+            device_id=device.id,
+            label=label,
+            username=username,
+            secret_encrypted=encrypt_text(token_value),
+            secret_type="API token",
+            security_level="high",
+            expires_at=expires_at,
+            notes=notes,
+            last_changed_at=now_utc(),
+            active=True,
+        )
+        db.add(credential)
+        db.flush()
+        set_tags(db, "credential", credential.id, "github, token, temporary")
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="token_created",
+                object_type="credential",
+                object_id=credential.id,
+                details_json={"source": f"smart_paste:{record.id}", "expires_at": expires_at.isoformat() if expires_at else ""},
+            )
+        )
     record.status = "applied"
     merge_tags(db, "device", device.id, _infer_tags_for_device(device))
     db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id))
@@ -3241,6 +3533,8 @@ def settings_page(
             "app_settings": get_app_settings(db),
             "pending_totp_secret": pending_totp_secret,
             "pending_totp_uri": pending_totp_uri,
+            "tokens": _token_credentials(db),
+            "devices": _device_order_query(db).all(),
         },
         user=user,
     )
@@ -3293,6 +3587,81 @@ async def settings_save(
     )
     db.commit()
     flash(request, "Settings saved.", "success")
+    return redirect("/settings")
+
+
+@app.post("/settings/device-order")
+async def settings_device_order(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    form = await request.form()
+    check_csrf(request, str(form.get("csrf", "")))
+    ensure_writable()
+    for device in db.query(models.Device).all():
+        raw_value = str(form.get(f"device_order_{device.id}", device.display_order)).strip()
+        try:
+            device.display_order = max(0, min(999999, int(raw_value)))
+        except ValueError:
+            continue
+    db.add(models.AuditLog(user_id=user.id, action="device_order_updated", object_type="settings"))
+    db.commit()
+    flash(request, "Device order saved.", "success")
+    return redirect("/settings")
+
+
+@app.post("/settings/tokens")
+def settings_token_create(
+    request: Request,
+    csrf: str = Form(...),
+    token_name: str = Form(...),
+    token_value: str = Form(...),
+    token_expiry: str = Form(""),
+    token_notes: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    label = token_name.strip()
+    value = token_value.strip()
+    if not label or not value:
+        flash(request, "Token name and token are required.", "warning")
+        return redirect("/settings")
+    duplicate = (
+        db.query(models.Credential)
+        .filter(models.Credential.secret_type == "API token", models.Credential.label.ilike(label))
+        .first()
+    )
+    if duplicate:
+        flash(request, "A token with that name already exists. Edit the existing token if needed.", "warning")
+        return redirect("/settings")
+    credential = models.Credential(
+        label=label,
+        username="",
+        secret_encrypted=encrypt_text(value),
+        secret_type="API token",
+        security_level="high",
+        expires_at=_parse_optional_datetime(token_expiry),
+        notes=token_notes,
+        last_changed_at=now_utc(),
+        active=True,
+    )
+    db.add(credential)
+    db.flush()
+    set_tags(db, "credential", credential.id, "github, token, temporary")
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="token_created",
+            object_type="credential",
+            object_id=credential.id,
+            details_json={"expires_at": credential.expires_at.isoformat() if credential.expires_at else ""},
+        )
+    )
+    db.commit()
+    flash(request, "Token stored as a high-security encrypted credential.", "success")
     return redirect("/settings")
 
 
@@ -3571,7 +3940,8 @@ def history_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     logs = db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(200).all()
-    return render(request, "history.html", {"logs": logs}, user=user)
+    human_logs = [_human_audit_log(db, item) for item in logs]
+    return render(request, "history.html", {"logs": human_logs}, user=user)
 
 
 @app.get("/raw/{object_type}/{object_id}", response_class=HTMLResponse)

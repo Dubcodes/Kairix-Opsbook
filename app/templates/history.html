@@ -11,8 +11,11 @@
   <div class="list">
     {% for item in logs %}
       <div class="list-row static">
-        <div><strong>{{ item.action }}</strong><span>{{ item.object_type }} #{{ item.object_id or "" }} · {{ item.created_at|dt }}</span></div>
-        <code>{{ item.details_json }}</code>
+        <div>
+          <strong>{{ item.title }}</strong>
+          <span>{% if item.href %}<a href="{{ item.href }}">{{ item.target }}</a>{% else %}{{ item.target }}{% endif %} · {{ item.when }}</span>
+          {% if item.details %}<small>{{ item.details }}</small>{% endif %}
+        </div>
       </div>
     {% else %}
       <p class="empty">No audit events yet.</p>
@@ -20,4 +23,3 @@
   </div>
 </section>
 {% endblock %}
-

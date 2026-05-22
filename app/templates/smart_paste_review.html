@@ -182,6 +182,24 @@
       {% else %}<p class="empty">No credential hints detected.</p>{% endfor %}
     </section>
     <section>
+      <h2>Tokens</h2>
+      <p class="muted">Detected access tokens are stored as high-security encrypted credentials.</p>
+      {% for item in parsed.tokens %}
+        <div class="review-item">
+          <label class="check-row">
+            <input type="checkbox" name="tokens" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+            Store token <small>{{ item.confidence }}</small>
+            {% if item.duplicate_id %}<small class="inline-note">Duplicate; unchecked</small>{% endif %}
+          </label>
+          <label>Name <input name="token_label_{{ loop.index0 }}" value="{{ item.label or 'GitHub token' }}" spellcheck="true"></label>
+          <label>Account <input name="token_username_{{ loop.index0 }}" value="{{ item.username or '' }}" placeholder="@username or org"></label>
+          <label>Token <input name="token_value_{{ loop.index0 }}" type="password" value="{{ item.token or '' }}" autocomplete="new-password"></label>
+          <label>Expires <input name="token_expiry_{{ loop.index0 }}" type="date" value="{{ (item.expires_at or '')[:10] }}"></label>
+          <label class="span-2">Notes <textarea name="token_notes_{{ loop.index0 }}" spellcheck="true">{{ item.notes or 'Imported GitHub personal access token.' }}</textarea></label>
+        </div>
+      {% else %}<p class="empty">No access tokens detected.</p>{% endfor %}
+    </section>
+    <section>
       <h2>Paths</h2>
       {% for item in parsed.paths %}
         <div class="mini-row">{{ item.path }} <small>{{ item.confidence }}</small></div>

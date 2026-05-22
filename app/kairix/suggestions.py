@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 import json
 
@@ -65,7 +66,7 @@ def visible_suggestions(db: Session) -> list[dict[str, str]]:
 def build_suggestions(db: Session) -> list[dict[str, str]]:
     suggestions: list[dict[str, str]] = []
 
-    for device in db.query(models.Device).order_by(models.Device.name).all():
+    for device in db.query(models.Device).order_by(models.Device.display_order, models.Device.name).all():
         device_tags = {
             row[0]
             for row in db.query(models.Tag.name)
@@ -144,7 +145,12 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                 }
             )
 
-    for service in db.query(models.Service).order_by(models.Service.name).all():
+    for service in (
+        db.query(models.Service)
+        .join(models.Device, models.Service.device_id == models.Device.id)
+        .order_by(models.Device.display_order, models.Device.name, models.Service.name)
+        .all()
+    ):
         service_tags = {
             row[0]
             for row in db.query(models.Tag.name)
@@ -236,6 +242,29 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "target": f"/credentials/{cred.id}/edit",
                 }
             )
+        if cred.secret_type == "API token" and cred.expires_at:
+            now = datetime.now(timezone.utc)
+            expiry = cred.expires_at if cred.expires_at.tzinfo else cred.expires_at.replace(tzinfo=timezone.utc)
+            if expiry < now:
+                suggestions.append(
+                    {
+                        "id": f"credential:{cred.id}:token-expired",
+                        "severity": "warning",
+                        "title": f"{cred.label} has expired",
+                        "body": "Rotate or delete this token so you do not trust a dead credential later.",
+                        "target": f"/credentials/{cred.id}",
+                    }
+                )
+            elif expiry <= now + timedelta(days=7):
+                suggestions.append(
+                    {
+                        "id": f"credential:{cred.id}:token-expiring",
+                        "severity": "info",
+                        "title": f"{cred.label} expires soon",
+                        "body": "This temporary token expires within the next week.",
+                        "target": f"/credentials/{cred.id}",
+                    }
+                )
 
     suggestions.extend(
         [

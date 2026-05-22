@@ -56,6 +56,7 @@ class Device(Base, TimestampMixin):
     status_manual: Mapped[str] = mapped_column(String(80), default="")
     update_check_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     update_status: Mapped[str] = mapped_column(String(160), default="")
+    display_order: Mapped[int] = mapped_column(Integer, default=1000)
     notes: Mapped[str] = mapped_column(Text, default="")
 
     hardware: Mapped["DeviceHardware"] = relationship(
@@ -131,6 +132,7 @@ class Credential(Base, TimestampMixin):
     security_level: Mapped[str] = mapped_column(String(40), default="low")
     login_url: Mapped[str] = mapped_column(String(500), default="")
     notes: Mapped[str] = mapped_column(Text, default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_revealed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)

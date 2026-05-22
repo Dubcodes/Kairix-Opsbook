@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -28,6 +30,7 @@ COMMAND_RE = re.compile(
 )
 USERNAME_RE = re.compile(r"\b(?:user(?:name)?|login|account)\s*(?:is|:)?\s*([a-z_][a-z0-9_-]{1,31})\b", re.IGNORECASE)
 PASSWORD_STYLE_USER_RE = re.compile(r"\b([a-z_][a-z0-9_-]{1,31})\s+password\b", re.IGNORECASE)
+GITHUB_TOKEN_RE = re.compile(r"\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b")
 
 
 def _unique(items: list[str]) -> list[str]:
@@ -134,7 +137,9 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
             )
     if not is_inventory:
         service_items.extend(_note_services(raw_text))
+        service_items.extend(_inline_service_entries(raw_text))
     service_items = _unique_services(service_items)
+    token_items = _github_tokens(raw_text)
     grouped_urls = {
         url["url"]
         for service in service_items
@@ -266,6 +271,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         "ports": suggested_ports,
         "commands": suggested_commands,
         "credentials": suggested_credentials,
+        "tokens": token_items,
         "paths": [{"path": path, "confidence": "medium"} for path in paths],
         "extras": extras,
         "counts": dict(
@@ -278,6 +284,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                     "commands": len(commands),
                     "services": len(service_items),
                     "usernames": len(usernames),
+                    "tokens": len(token_items),
                 }
             )
         ),
@@ -522,6 +529,63 @@ def _note_credentials(text: str) -> list[dict[str, Any]]:
     return deduped
 
 
+def _github_tokens(text: str) -> list[dict[str, Any]]:
+    tokens: list[dict[str, Any]] = []
+    for match in GITHUB_TOKEN_RE.finditer(text):
+        token = match.group(0)
+        prefix_lines = [line.strip() for line in text[: match.start()].splitlines() if line.strip()]
+        owner = ""
+        name = "GitHub token"
+        expiry = ""
+        for index in range(len(prefix_lines) - 1, -1, -1):
+            line = prefix_lines[index]
+            if line.lower().startswith("expires on "):
+                expiry = _parse_github_expiry(line.removeprefix("Expires on ").strip())
+                continue
+            if line.startswith("@"):
+                owner = line
+                if index + 1 < len(prefix_lines):
+                    candidate = prefix_lines[index + 1]
+                    if not candidate.lower().startswith(("never used", "expires on", "make sure")):
+                        name = candidate
+                break
+        tokens.append(
+            {
+                "label": name,
+                "username": owner,
+                "token": token,
+                "expires_at": expiry,
+                "notes": "Imported GitHub personal access token.",
+                "security_level": "high",
+                "confidence": "high",
+            }
+        )
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in tokens:
+        if item["token"] not in seen:
+            seen.add(item["token"])
+            deduped.append(item)
+    return deduped
+
+
+def _parse_github_expiry(value: str) -> str:
+    clean = value.strip().rstrip(".")
+    try:
+        parsed = parsedate_to_datetime(clean)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.isoformat()
+    except (TypeError, ValueError, IndexError):
+        pass
+    for fmt in ("%a, %b %d %Y", "%b %d %Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(clean, fmt).replace(tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            continue
+    return clean
+
+
 def _compose_projects(text: str) -> dict[str, str]:
     projects: dict[str, str] = {}
     for line in text.splitlines():
@@ -588,6 +652,8 @@ def _note_services(text: str) -> list[dict[str, Any]]:
         if name_port and 0 < int(name_port.group(2)) <= 65535:
             name = name_port.group(1).strip(" :-")
             inline_ports.append(int(name_port.group(2)))
+        if not inline_urls and not inline_ports and len(URL_RE.findall(block)) > 1:
+            continue
         if not _looks_like_note_service_name(name):
             continue
         urls = _unique(inline_urls + URL_RE.findall(block))
@@ -621,6 +687,73 @@ def _note_services(text: str) -> list[dict[str, Any]]:
                 "confidence": "medium" if urls else "low",
                 "urls": service_urls,
                 "ports": service_ports,
+                "credentials": credentials,
+            }
+        )
+    return services
+
+
+def _inline_service_entries(text: str) -> list[dict[str, Any]]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    services: list[dict[str, Any]] = []
+    for index, line in enumerate(lines):
+        urls = URL_RE.findall(line)
+        name_source = URL_RE.sub("", line).strip(" :-")
+        inline_ports: list[int] = []
+        name_port = re.match(r"^(.+?)\s+(\d{4,5})$", name_source)
+        if name_port and 0 < int(name_port.group(2)) <= 65535:
+            name_source = name_port.group(1).strip(" :-")
+            inline_ports.append(int(name_port.group(2)))
+        known_credential_service = name_source.lower() in {
+            "docker",
+            "portainer",
+            "gluetun",
+            "qbittorrent",
+            "sonarr",
+            "radarr",
+            "plex",
+            "filebrowser",
+            "syncthing",
+        }
+        username = lines[index + 1] if index + 1 < len(lines) else ""
+        secret = lines[index + 2] if index + 2 < len(lines) else ""
+        has_inline_credentials = _looks_like_username(username) and _looks_like_secret(secret)
+        if not urls and not inline_ports and not (known_credential_service and has_inline_credentials):
+            continue
+        if not _looks_like_note_service_name(name_source):
+            continue
+        service_urls = [
+            {"url": url, "url_type": "public" if not _is_private_url(url) else "local", "confidence": "high"}
+            for url in urls
+        ]
+        ports = [
+            {"host_port": parsed.port, "protocol": "tcp", "confidence": "high"}
+            for parsed in (urlparse(url) for url in urls)
+            if parsed.port
+        ]
+        for port in inline_ports:
+            if all(existing["host_port"] != port for existing in ports):
+                ports.append({"host_port": port, "protocol": "tcp", "confidence": "medium"})
+        credentials: list[dict[str, Any]] = []
+        if has_inline_credentials:
+            credentials.append(
+                {
+                    "label": f"{name_source} login",
+                    "username": username,
+                    "secret": secret,
+                    "service_name": name_source,
+                    "login_url": service_urls[0]["url"] if service_urls else "",
+                    "security_level": "medium" if username.lower() in {"root", "admin"} else "low",
+                    "secret_detected": True,
+                    "confidence": "medium",
+                }
+            )
+        services.append(
+            {
+                "name": name_source,
+                "confidence": "high" if urls else "medium",
+                "urls": service_urls,
+                "ports": ports,
                 "credentials": credentials,
             }
         )

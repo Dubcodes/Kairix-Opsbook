@@ -54,6 +54,18 @@ SESSION_COOKIE_SECURE=false
 
 Set `SESSION_COOKIE_SECURE=true` when serving Kairix Opsbook behind HTTPS.
 
+To generate strong first-run values for Portainer or `.env`:
+
+```bash
+python generate-portainer-env.py
+```
+
+For an HTTPS install:
+
+```bash
+python generate-portainer-env.py --secure-cookie
+```
+
 ## Standby Mode
 
 Set this in `.env` to make the UI read-only:
@@ -93,6 +105,7 @@ The same page can import an encrypted Kairix backup into a clean or standby inst
 - Change `OPSBOOK_SECRET_KEY`, `EXPORT_SECRET_KEY`, and `SESSION_SECRET_KEY` before entering real secrets.
 - Keep `.env`, `data/`, `backups/`, and `exports/` out of Git.
 - Passwords are hidden from normal list views and reveal events are logged.
+- Smart Paste encrypts detected secrets in pending import data and redacts them from preserved raw notes.
 - Optional TOTP 2FA can be enabled from Settings after confirming your password.
 - Docker API control is intentionally not part of this MVP.
 
@@ -128,6 +141,14 @@ EXPORT_SECRET_KEY=make-another-long-random-secret
 SESSION_SECRET_KEY=make-one-more-long-random-secret
 SESSION_COOKIE_SECURE=false
 ```
+
+You can generate those values locally instead of typing long random strings:
+
+```bash
+python generate-portainer-env.py
+```
+
+Copy the output into Portainer's environment variable editor. Use the same `OPSBOOK_SECRET_KEY` and `EXPORT_SECRET_KEY` on a standby instance if it needs to import/decrypt backups from the primary.
 
 The Portainer stack stores data in named Docker volumes:
 
