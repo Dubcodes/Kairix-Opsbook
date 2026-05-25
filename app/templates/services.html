@@ -14,9 +14,10 @@
 </form>
 <section class="list">
   {% for service in services %}
+    {% set service_status = validation_statuses.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
     <a class="device-row" href="/services/{{ service.id }}">
       <div>
-        <strong>{{ service.name }}</strong>
+        <strong><span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.name }}</strong>
         <span>{{ service.device.name }} · {{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}</span>
       </div>
       <div class="tags">{% for tag in tags.get(service.id, []) %}<span>{{ tag }}</span>{% endfor %}</div>
@@ -26,4 +27,3 @@
   {% endfor %}
 </section>
 {% endblock %}
-

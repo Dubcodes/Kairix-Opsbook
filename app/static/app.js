@@ -149,9 +149,6 @@
     if (response.status === 403 && data.requires_challenge) {
       challenge = window.prompt(data.message || "Password or reveal PIN") || "";
       if (!challenge) return;
-      if (data.requires_reason) {
-        reason = window.prompt("Why are you revealing this credential?") || "";
-      }
       response = await sendReveal();
       data = await response.json();
     }

@@ -329,7 +329,7 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
         )
         if latest_validation:
             details = latest_validation.details_json or {}
-            if int(details.get("checked") or 0) and (not details.get("ok") or details.get("partial")):
+            if int(details.get("checked") or 0) and not details.get("ok") and not details.get("partial"):
                 targets = details.get("targets") or []
                 target_label = ""
                 if targets and isinstance(targets, list):
@@ -340,7 +340,7 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                         "id": f"service:{service.id}:validation-failing",
                         "severity": "warning",
                         "title": f"{service.name} has a validation warning",
-                        "body": f"Last TCP check {'partially failed' if details.get('partial') else 'failed'}{f' for {target_label}' if target_label else ''}. Confirm the URL, port, service state, or mark it scheduled.",
+                        "body": f"Last TCP check failed{f' for {target_label}' if target_label else ''}. Confirm the URL, port, service state, or mark it scheduled.",
                         "target": f"/services/{service.id}",
                         "action": "mute-ping",
                         "object_type": "service",

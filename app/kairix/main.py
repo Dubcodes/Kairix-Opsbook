@@ -274,7 +274,7 @@ def _webhook_allows(db: Session, object_type: str) -> bool:
 def _validation_good(details: dict[str, Any]) -> bool | None:
     if not int(details.get("checked") or 0):
         return None
-    return bool(details.get("ok")) and not bool(details.get("partial"))
+    return bool(details.get("ok")) or bool(details.get("partial"))
 
 
 def _latest_service_validation_good(db: Session, service: models.Service) -> bool | None:
@@ -815,7 +815,7 @@ def _failed_ping_summary(db: Session) -> dict[str, int]:
         if not latest:
             continue
         details = latest.details_json or {}
-        if int(details.get("checked") or 0) and (not details.get("ok") or details.get("partial")):
+        if int(details.get("checked") or 0) and not details.get("ok") and not details.get("partial"):
             services_failed += 1
     return {"devices": devices_failed, "services": services_failed, "total": devices_failed + services_failed}
 
@@ -1920,6 +1920,7 @@ def dashboard(
         {
             "devices": devices,
             "services": services,
+            "service_statuses": {service.id: _service_validation_status(db, service) for service in services},
             "recent_logs": recent_logs,
             "suggestions": suggestions,
             "ping_overview": _dashboard_ping_overview(db),
@@ -2354,7 +2355,12 @@ def services_page(
     return render(
         request,
         "services.html",
-        {"services": services, "q": q, "tags": tag_map(db, "service")},
+        {
+            "services": services,
+            "q": q,
+            "tags": tag_map(db, "service"),
+            "validation_statuses": {service.id: _service_validation_status(db, service) for service in services},
+        },
         user=user,
     )
 
@@ -3138,7 +3144,7 @@ async def credential_reveal_json(
             {
                 "detail": "Password or reveal PIN required.",
                 "requires_challenge": True,
-                "requires_reason": credential.security_level in {"high", "extreme"},
+                "requires_reason": False,
                 "message": "Password or reveal PIN",
             },
             status_code=403,
