@@ -118,7 +118,11 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "severity": "info",
                     "title": f"{device.name} is missing a purpose",
                     "body": "Add a short purpose so future-you can remember why this machine exists.",
-                    "target": f"/devices/{device.id}",
+                    "target": f"/devices/{device.id}/edit?focus=purpose",
+                    "action": "device-purpose",
+                    "object_type": "device",
+                    "object_id": str(device.id),
+                    "placeholder": "Example: Docker host for media, backups, and Portainer.",
                 }
             )
         if any(word in (device.status_manual or "").lower() for word in ["needs", "attention", "broken", "offline"]):
@@ -202,11 +206,15 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "severity": "warning",
                     "title": f"{service.name} has no backup notes",
                     "body": "Document what data matters, where it is stored, and the restore command.",
-                    "target": f"/services/{service.id}",
+                    "target": f"/services/{service.id}/edit?focus=backup_path",
                     "subject": service.name,
                     "group_id": f"group:device:{service.device_id}:missing-backup",
                     "group_title": f"{service.device.name}: services missing backup notes",
                     "group_target": f"/devices/{service.device_id}?tab=services",
+                    "action": "service-backup",
+                    "object_type": "service",
+                    "object_id": str(service.id),
+                    "placeholder": "Backup path or note, e.g. /srv/backups/service-name",
                 }
             )
         if not service.purpose.strip():
@@ -216,11 +224,15 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "severity": "info",
                     "title": f"{service.name} is missing a purpose",
                     "body": "A one-line purpose makes search and emergency runbooks much easier.",
-                    "target": f"/services/{service.id}",
+                    "target": f"/services/{service.id}/edit?focus=purpose",
                     "subject": service.name,
                     "group_id": f"group:device:{service.device_id}:missing-purpose",
                     "group_title": f"{service.device.name}: services missing a purpose",
                     "group_target": f"/devices/{service.device_id}?tab=services",
+                    "action": "service-purpose",
+                    "object_type": "service",
+                    "object_id": str(service.id),
+                    "placeholder": "Example: Web UI for managing Docker containers.",
                 }
             )
         if any(word in (service.status_manual or "").lower() for word in ["needs", "attention", "broken", "offline"]):

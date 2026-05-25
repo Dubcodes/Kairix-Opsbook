@@ -15,11 +15,11 @@ It is designed to be fast like notes, structured like inventory, and safe like a
 - Tokens & APIs section for GitHub PATs, Home Assistant/API tokens, and other temporary or service-linked access keys.
 - Credential reveal audit log.
 - Optional TOTP 2FA setup with a QR code for authenticator apps.
-- Copy-friendly command library with starter Linux, Docker, Docker Compose, Git, networking, and recovery commands.
+- Copy-friendly command library with starter Linux, Docker, Docker Compose, Git, networking, stability, and recovery commands.
 - Smart Paste import with review-before-apply for notes, SSH output, Docker output, URLs, ports, paths, commands, service login blocks, and GitHub token pages.
 - Service validation checks documented URLs and ports with a simple TCP connection and records the last result.
 - Background device pings with browser-local time display, plus optional login-time device/service refresh checks.
-- Suggestions for missing backup notes, duplicate ports, low-security admin credentials, and missing purpose fields.
+- Suggestions for missing backup notes, duplicate ports, low-security admin credentials, and missing purpose fields, with quick inline fixes for simple cleanup.
 - Emergency encrypted backup export, human-readable runbook HTML export, and encrypted import.
 - Standby/read-only instance mode for backup servers.
 
@@ -93,7 +93,7 @@ example-password
 
 is reviewed as one service/login suggestion with the URL, port, username, password, and service relationship kept together. Nothing is applied until you review and select it.
 
-Smart Paste also recognizes GitHub personal access tokens and stores them as high-security encrypted Tokens & APIs. Token-only imports do not create fake devices.
+Smart Paste also recognizes GitHub personal access tokens and stores them as high-security encrypted Tokens & APIs. Token-only imports do not create fake devices, and the review screen lets you uncheck device creation when pasted text is only a command, token, or loose note.
 
 If you paste Cloudflare or TryCloudflare logs, any detected URLs are reviewed like normal URLs. Live log scraping or Docker socket access is intentionally not part of the default install; a future read-only agent is the safer path for automatic discovery.
 

@@ -78,6 +78,18 @@
     });
   }
 
+  function highlightFocusedField() {
+    const focus = new URLSearchParams(window.location.search).get("focus");
+    if (!focus || !/^[A-Za-z0-9_-]+$/.test(focus)) return;
+    const field = document.querySelector(`[name="${focus}"]`);
+    if (!field) return;
+    field.classList.add("field-highlight");
+    field.scrollIntoView({block: "center", behavior: "smooth"});
+    if (typeof field.focus === "function") {
+      setTimeout(() => field.focus({preventScroll: true}), 250);
+    }
+  }
+
   function findCopySource(button) {
     const mode = button.getAttribute("data-copy-target");
     if (mode === "prev") {
@@ -282,6 +294,7 @@
   }
   setThemeButtonLabel();
   hydrateLocalTimes();
+  highlightFocusedField();
 
   const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
   if (timeoutMeta) {

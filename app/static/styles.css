@@ -291,6 +291,11 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
 }
 .row-main:hover { text-decoration: none; }
 .row-main span { display: block; color: var(--muted); margin-top: 2px; }
+.row-title-with-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
 .detail-tags {
   justify-content: flex-start;
   margin: 12px 0;
@@ -544,6 +549,11 @@ code {
   padding: 2px 7px;
 }
 
+.field-highlight {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+}
+
 .hint {
   display: inline-flex;
   align-items: center;
@@ -759,6 +769,14 @@ input[type="color"] {
 .suggestion-list article > a:hover,
 .device-row.static > a:hover {
   text-decoration: none;
+}
+
+.inline-suggestion-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  min-width: min(360px, 100%);
 }
 
 .tag-advice-grid {

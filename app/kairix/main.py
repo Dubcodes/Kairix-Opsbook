@@ -331,15 +331,29 @@ def _infer_tags_for_service(service: models.Service) -> str:
     if "cloudflare" in text or "cloudflared" in text or "tunnel" in text:
         tags.append("cloudflare")
     if "postgres" in text or "postgresql" in text:
-        tags.append("postgres")
+        tags.extend(["postgres", "database"])
     if "smb" in text or "samba" in text:
-        tags.append("smb")
+        tags.extend(["smb", "file-sharing"])
     if "ssh" in text:
-        tags.append("ssh")
+        tags.extend(["ssh", "remote-access"])
     if "qbittorrent" in text or "torrent" in text:
         tags.extend(["torrent", "media"])
     if "sonarr" in text or "radarr" in text or "plex" in text or "immich" in text:
         tags.append("media")
+    if "frigate" in text or "nvr" in text or "camera" in text:
+        tags.extend(["frigate", "camera", "nvr"])
+    if "home assistant" in text or "home-assistant" in text or "homeassistant" in text:
+        tags.extend(["home-assistant", "smart-home"])
+    if "mqtt" in text or "mosquitto" in text:
+        tags.extend(["mqtt", "iot"])
+    if "omada" in text:
+        tags.extend(["omada", "network"])
+    if "vaultwarden" in text or "bitwarden" in text:
+        tags.extend(["vaultwarden", "password-manager"])
+    if "filebrowser" in text:
+        tags.extend(["filebrowser", "file-sharing"])
+    if "syncthing" in text:
+        tags.extend(["syncthing", "sync"])
     if "gluetun" in text or "vpn" in text:
         tags.append("vpn")
     if "windows" in text:
@@ -351,8 +365,30 @@ def _infer_tags_for_service(service: models.Service) -> str:
 
 def _infer_tags_for_device(device: models.Device) -> str:
     tags: list[str] = []
+    device_text = " ".join(
+        [
+            device.name,
+            device.type,
+            device.hostname,
+            device.os_name,
+            device.os_version,
+            device.location,
+            device.purpose,
+            device.notes,
+            device.hardware.model if device.hardware else "",
+            device.hardware.cpu if device.hardware else "",
+        ]
+    ).lower()
+    if "debian" in device_text:
+        tags.append("debian")
+    if "ubuntu" in device_text:
+        tags.append("ubuntu")
+    if "windows" in device_text:
+        tags.append("windows")
+    if "raspberry" in device_text or "raspbian" in device_text or " pi " in f" {device_text} ":
+        tags.extend(["raspberry-pi", "linux"])
     if device.services:
-        tags.append("docker")
+        tags.extend(["docker", "docker-host"])
     for service in device.services:
         service_tags = _infer_tags_for_service(service)
         if service_tags:
@@ -638,7 +674,8 @@ def _coerce_import_row(model: type[Any], row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _auto_tags_for_label(label: str) -> str:
-    words = [slugify(piece) for piece in label.replace("_", " ").replace("-", " ").split()]
+    raw = label.lower().replace("_", " ").replace("-", " ")
+    words = [slugify(piece) for piece in raw.split()]
     useful = [word for word in words if len(word) > 2]
     known = {
         "portainer",
@@ -663,19 +700,49 @@ def _auto_tags_for_label(label: str) -> str:
         "windows",
         "raspberry-pi",
         "opsbook",
+        "frigate",
+        "mqtt",
+        "mosquitto",
+        "omada",
+        "vaultwarden",
+        "bitwarden",
+        "filebrowser",
+        "syncthing",
+        "immich",
+        "nvr",
+        "camera",
     }
     aliases = {
         "qbittorrent": ["qbittorrent", "torrent", "media"],
         "sonarr": ["sonarr", "media"],
         "radarr": ["radarr", "media"],
         "plex": ["plex", "media"],
+        "immich": ["immich", "media", "photos"],
+        "frigate": ["frigate", "camera", "nvr"],
+        "nvr": ["nvr", "camera"],
+        "mqtt": ["mqtt", "iot"],
+        "mosquitto": ["mqtt", "iot"],
+        "omada": ["omada", "network"],
+        "vaultwarden": ["vaultwarden", "password-manager"],
+        "bitwarden": ["bitwarden", "password-manager"],
+        "filebrowser": ["filebrowser", "file-sharing"],
+        "syncthing": ["syncthing", "sync"],
         "gluetun": ["gluetun", "vpn"],
         "samba": ["smb", "file-sharing"],
         "smb": ["smb", "file-sharing"],
         "portainer": ["portainer", "docker"],
         "opsbook": ["opsbook", "docker"],
+        "ssh": ["ssh", "remote-access"],
+    }
+    phrase_aliases = {
+        "home assistant": ["home-assistant", "smart-home"],
+        "raspberry pi": ["raspberry-pi", "linux"],
+        "cloudflare tunnel": ["cloudflare", "tunnel"],
     }
     tags: list[str] = []
+    for phrase, phrase_tags in phrase_aliases.items():
+        if phrase in raw:
+            tags.extend(phrase_tags)
     for word in useful:
         if word in aliases:
             tags.extend(aliases[word])
@@ -1646,6 +1713,7 @@ def devices_page(
             "service_counts": service_counts,
             "credential_counts": credential_counts,
             "command_counts": command_counts,
+            "ping_statuses": {device.id: _device_ping_status(db, device) for device in devices},
         },
         user=user,
     )
@@ -3474,31 +3542,64 @@ async def smart_paste_apply(
     if not record:
         raise HTTPException(404, "Import not found.")
     parsed = _decrypted_parsed(record)
+    target_raw = str(form.get("target_device_id", "new"))
+    apply_device = bool(form.get("apply_device"))
     has_selected_items = any(
         form.getlist(name)
         for name in ["services", "ports", "urls", "commands", "credentials", "tokens"]
-    ) or bool(form.get("apply_hardware"))
+    ) or bool(form.get("apply_hardware")) or apply_device
     if not has_selected_items:
         record.status = "reviewed"
         db.add(models.AuditLog(user_id=user.id, action="smart_paste_reviewed_no_changes", object_type="import", object_id=record.id))
         db.commit()
         flash(request, "Smart Paste review saved with no changes applied.", "success")
         return redirect("/smart-paste")
-    requires_device = any(
+    device_bound_selected = any(
         form.getlist(name)
-        for name in ["services", "ports", "urls", "commands", "credentials"]
+        for name in ["services", "ports", "urls", "credentials", "service_credentials", "service_urls"]
     ) or bool(form.get("apply_hardware"))
-    if form.getlist("tokens") and not requires_device and str(form.get("target_device_id", "new")) == "new":
+    if target_raw == "new" and device_bound_selected and not apply_device:
+        flash(
+            request,
+            "Nothing was applied. Choose an existing device, or check Create/update this device before importing services, ports, URLs, credentials, or hardware.",
+            "warning",
+        )
+        return redirect(f"/smart-paste/{record.id}")
+    requires_device = device_bound_selected or target_raw != "new" or apply_device
+    if not requires_device and (form.getlist("tokens") or form.getlist("commands")):
         created_tokens = 0
         for index_raw in form.getlist("tokens"):
             if _create_token_credential_from_import(db, user, form, parsed, str(index_raw), record, None):
                 created_tokens += 1
+        created_commands = 0
+        for index_raw in form.getlist("commands"):
+            item = parsed.get("commands", [])[int(index_raw)]
+            command_text = str(form.get(f"command_text_{index_raw}") or item["command_template"]).strip()
+            if not command_text or _duplicate_command(db, command_text):
+                continue
+            applies_to_type = str(form.get(f"command_applies_to_type_{index_raw}") or "generic")
+            if applies_to_type == "device":
+                applies_to_type = "generic"
+            db.add(
+                models.Command(
+                    name=str(form.get(f"command_name_{index_raw}") or item["name"]),
+                    category=str(form.get(f"command_category_{index_raw}") or "Imported"),
+                    applies_to_type=applies_to_type,
+                    applies_to_id=None,
+                    command_template=command_text,
+                    where_to_run=str(form.get(f"command_where_{index_raw}") or "Remote SSH host"),
+                    risk_level=str(form.get(f"command_risk_{index_raw}") or "safe"),
+                    help_low=str(form.get(f"command_help_low_{index_raw}") or "Imported from pasted notes. Review before running."),
+                    help_high="This command was detected by Smart Paste. Confirm the folder, host, and intent before copying.",
+                    notes=str(form.get(f"command_notes_{index_raw}") or f"Imported from Smart Paste {record.id}."),
+                )
+            )
+            created_commands += 1
         record.status = "applied"
-        db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id, details_json={"tokens": created_tokens}))
+        db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id, details_json={"tokens": created_tokens, "commands": created_commands}))
         db.commit()
-        flash(request, f"Stored {created_tokens} token/API item(s).", "success")
-        return redirect("/tokens")
-    target_raw = str(form.get("target_device_id", "new"))
+        flash(request, f"Stored {created_tokens} token/API item(s) and {created_commands} command(s).", "success")
+        return redirect("/commands" if created_commands else "/tokens")
     device: models.Device | None = None
     if target_raw and target_raw != "new":
         device = db.get(models.Device, int(target_raw))
@@ -3517,12 +3618,12 @@ async def smart_paste_apply(
         db.flush()
         _ensure_device_hardware(db, device)
     else:
-        if form.get("device_name"):
+        if apply_device and form.get("device_name"):
             device.name = str(form.get("device_name")).strip()
             device.slug = unique_slug(db, models.Device, device.name, existing_id=device.id)
-        if form.get("device_ip"):
+        if apply_device and form.get("device_ip"):
             device.primary_ip = str(form.get("device_ip")).strip()
-        if form.get("device_os"):
+        if apply_device and form.get("device_os"):
             device.os_name = str(form.get("device_os")).strip()
     note_body, secrets_redacted = _redact_sensitive_text(record.raw_text, parsed)
     db.add(
@@ -3535,7 +3636,7 @@ async def smart_paste_apply(
         )
     )
     extras = parsed.get("extras", {})
-    if form.get("apply_hardware"):
+    if apply_device and form.get("apply_hardware"):
         hardware = _ensure_device_hardware(db, device)
         hardware.model = extras.get("model_summary") or hardware.model
         hardware.cpu = extras.get("cpu_summary") or hardware.cpu
@@ -3815,6 +3916,69 @@ def suggestions_page(
         {"suggestions": visible_suggestions(db), "tag_ideas": TAG_IDEAS},
         user=user,
     )
+
+
+@app.post("/suggestions/apply")
+def suggestions_apply(
+    request: Request,
+    csrf: str = Form(...),
+    suggestion_id: str = Form(...),
+    action: str = Form(...),
+    object_type: str = Form(...),
+    object_id: int = Form(...),
+    value: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    cleaned = value.strip()
+    if not cleaned:
+        flash(request, "Add a little text before applying that suggestion.", "warning")
+        return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
+    target = ""
+    if action == "service-purpose" and object_type == "service":
+        service = db.get(models.Service, object_id)
+        if not service:
+            raise HTTPException(404, "Service not found.")
+        service.purpose = cleaned
+        merge_tags(db, "service", service.id, _infer_tags_for_service(service))
+        merge_tags(db, "device", service.device_id, _infer_tags_for_device(service.device))
+        target = f"/services/{service.id}"
+    elif action == "service-backup" and object_type == "service":
+        service = db.get(models.Service, object_id)
+        if not service:
+            raise HTTPException(404, "Service not found.")
+        if cleaned.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:\\", cleaned):
+            service.backup_path = cleaned
+        else:
+            prefix = "\n" if service.notes.strip() else ""
+            service.notes = f"{service.notes.rstrip()}{prefix}Backup notes: {cleaned}"
+        merge_tags(db, "service", service.id, "backup-documented")
+        target = f"/services/{service.id}"
+    elif action == "device-purpose" and object_type == "device":
+        device = db.get(models.Device, object_id)
+        if not device:
+            raise HTTPException(404, "Device not found.")
+        device.purpose = cleaned
+        merge_tags(db, "device", device.id, _infer_tags_for_device(device))
+        target = f"/devices/{device.id}"
+    else:
+        flash(request, "That suggestion action is not available yet.", "warning")
+        return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
+    dismiss_suggestion(db, suggestion_id)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="suggestion_applied",
+            object_type=object_type,
+            object_id=object_id,
+            details_json={"id": suggestion_id, "action": action},
+        )
+    )
+    db.commit()
+    flash(request, "Suggestion applied.", "success")
+    return redirect(target)
 
 
 @app.post("/suggestions/dismiss")

@@ -30,13 +30,18 @@
   {% endif %}
   <div class="suggestion-grid" data-select-scope="smart-paste">
     {% if not token_only %}
+      {% set apply_device_default = parsed.device.primary_ip or parsed.device.os_name or parsed.services or parsed.ports or parsed.urls or parsed.credentials %}
       <section>
         <h2>Detected device</h2>
+        <label class="check-row">
+          <input type="checkbox" name="apply_device" {% if apply_device_default %}checked data-useful="true"{% endif %}>
+          Create or update this device <small>uncheck for notes, commands, or tokens only</small>
+        </label>
         <label>Name <input name="device_name" value="{{ parsed.device.name or '' }}" spellcheck="true"></label>
         <label>IP <input name="device_ip" value="{{ parsed.device.primary_ip or '' }}"></label>
         <label>OS <input name="device_os" value="{{ parsed.device.os_name or '' }}" spellcheck="true"></label>
         <p class="muted">Confidence: {{ parsed.device.confidence }}</p>
-        <label class="check-row"><input type="checkbox" name="apply_hardware" checked data-useful="true"> Apply hardware summaries if detected</label>
+        <label class="check-row"><input type="checkbox" name="apply_hardware" {% if apply_device_default and parsed.extras %}checked data-useful="true"{% endif %}> Apply hardware summaries if detected</label>
       </section>
     {% endif %}
     <section class="span-2">
