@@ -255,35 +255,26 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "target": f"/services/{service.id}",
                 }
             )
-        if service.public_url and not any(
-            word in service.notes.lower()
-            for word in ["access", "auth", "cloudflare", "security", "login"]
-        ):
-            suggestions.append(
-                {
-                    "id": f"service:{service.id}:public-url-security-note",
-                    "severity": "warning",
-                    "title": f"{service.name} has a public URL without a security note",
-                    "body": "Add how access is protected, such as Cloudflare Access, app login, VPN, or private-only notes.",
-                    "target": f"/services/{service.id}",
-                }
-            )
-
-    ports: dict[tuple[int, str], list[models.Port]] = defaultdict(list)
+    ports: dict[tuple[int, int, str], list[models.Port]] = defaultdict(list)
     for port in db.query(models.Port).all():
-        ports[(port.host_port, port.protocol)].append(port)
-    for (host_port, protocol), matches in ports.items():
+        ports[(port.device_id, port.host_port, port.protocol)].append(port)
+    for (device_id, host_port, protocol), matches in ports.items():
         if len(matches) > 1:
             names = ", ".join(
                 port.service.name if port.service else port.device.name for port in matches
             )
+            loose_count = sum(1 for port in matches if not port.service_id)
             suggestions.append(
                 {
-                    "id": f"port:{host_port}:{protocol}:duplicate",
+                    "id": f"device:{device_id}:port:{host_port}:{protocol}:duplicate",
                     "severity": "warning",
                     "title": f"Duplicate {protocol.upper()} port {host_port}",
-                    "body": f"Multiple entries mention this port: {names}. Confirm this is intentional.",
+                    "body": f"Multiple entries on the same device mention this port: {names}."
+                    + (" Quick cleanup can remove loose duplicates." if loose_count else " Open Ports & URLs and keep the correct service link."),
                     "target": "/ports",
+                    "action": "duplicate-port-cleanup" if loose_count else "",
+                    "object_type": "port",
+                    "object_id": str(device_id),
                 }
             )
 

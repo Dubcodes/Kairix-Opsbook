@@ -26,7 +26,10 @@
       {% endfor %}
     </select>
   </label>
-  <label class="span-2">Purpose <span class="hint" title="One sentence: what this machine does and why it matters.">?</span><textarea name="purpose" spellcheck="true">{{ device.purpose if device else '' }}</textarea></label>
+  <label class="span-2">Purpose <span class="hint" title="One sentence: what this machine does and why it matters. If left blank, Opsbook can show a short summary from linked services.">?</span><textarea name="purpose" spellcheck="true" placeholder="{{ auto_purpose or 'Example: Docker host for Portainer, media services, and backups.' }}">{{ device.purpose if device else '' }}</textarea></label>
+  {% if auto_purpose and device and not device.purpose %}
+    <p class="muted span-2">Suggested from linked services: {{ auto_purpose }}</p>
+  {% endif %}
   <label>Model <input name="hw_model" value="{{ hardware.model if hardware else '' }}" spellcheck="true"></label>
   <label>CPU <input name="hw_cpu" value="{{ hardware.cpu if hardware else '' }}" spellcheck="true"></label>
   <label>RAM <input name="hw_ram" value="{{ hardware.ram if hardware else '' }}" spellcheck="true"></label>

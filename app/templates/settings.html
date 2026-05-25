@@ -8,6 +8,25 @@
   </div>
 </section>
 
+<section class="panel">
+  <div class="section-title">
+    <h2>Instance</h2>
+    <span class="badge">{{ instance_mode|upper }}</span>
+  </div>
+  <dl class="details">
+    <dt>Version</dt><dd>{{ app_version }}</dd>
+    <dt>Instance name</dt><dd>{{ instance_name }}</dd>
+    <dt>Mode</dt><dd>{{ instance_mode|title }}</dd>
+  </dl>
+  <p class="muted">Mode is set with the `INSTANCE_MODE` environment variable. Use `primary` for the writable instance and `standby` for a read-only imported copy.</p>
+</section>
+
+<details class="panel collapsible-panel">
+  <summary><span><strong>Primary / Standby</strong><small>How two Opsbook installs work today</small></span></summary>
+  <p class="muted">Current supported flow is primary-to-standby via encrypted Emergency Export and Import. The standby should use the same `OPSBOOK_SECRET_KEY` and `EXPORT_SECRET_KEY`, stay read-only, and be promoted manually if the primary is down.</p>
+  <p class="muted">Bidirectional multi-instance sync is not enabled yet. It needs conflict handling for edited records and encrypted secrets so two writable instances do not quietly overwrite each other.</p>
+</details>
+
 <form method="post" class="panel form-grid wide">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   <h2 class="span-2">Color Options</h2>

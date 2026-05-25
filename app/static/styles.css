@@ -195,6 +195,18 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   padding: 5px 8px;
   font-size: 13px;
 }
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  color: var(--ink);
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 750;
+}
 .icon-only {
   width: 30px;
   padding-left: 0;
@@ -833,7 +845,32 @@ input[type="color"] {
 
 .service-accordion {
   display: grid;
+  gap: 8px;
+}
+
+.service-group-summary {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.service-group-summary > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 10px;
+  padding: 9px 11px;
+  cursor: pointer;
+}
+
+.service-group-summary > summary::marker { content: ""; }
+
+.service-group-body {
+  display: grid;
+  gap: 6px;
+  border-top: 1px solid var(--line);
+  padding: 7px;
 }
 
 .service-summary {
@@ -848,7 +885,7 @@ input[type="color"] {
   justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
+  padding: 8px 10px;
   cursor: pointer;
 }
 
@@ -859,9 +896,9 @@ input[type="color"] {
 .summary-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(260px, 0.8fr);
-  gap: 16px;
+  gap: 10px;
   border-top: 1px solid var(--line);
-  padding: 14px;
+  padding: 10px;
 }
 
 @media (prefers-color-scheme: dark) {

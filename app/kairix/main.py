@@ -401,6 +401,16 @@ def _infer_tags_for_device(device: models.Device) -> str:
     return ", ".join(dict.fromkeys(tag for tag in tags if tag))
 
 
+def _device_auto_purpose(device: models.Device, *, limit: int = 8) -> str:
+    if device.purpose.strip() or not device.services:
+        return ""
+    names = [service.name for service in sorted(device.services, key=lambda item: item.name.lower())]
+    visible = ", ".join(names[:limit])
+    if len(names) > limit:
+        visible += f", and {len(names) - limit} more"
+    return f"Runs: {visible}."
+
+
 def _notes_with_credentials_marker(notes: str, enabled: bool) -> str:
     cleaned = public_notes(notes)
     if enabled:
@@ -1420,6 +1430,7 @@ def render(
         "read_only": settings.read_only,
         "instance_mode": settings.instance_mode,
         "instance_name": settings.instance_name,
+        "app_version": settings.app_version,
     }
     payload.update(context or {})
     return templates.TemplateResponse(request, template_name, payload)
@@ -1827,6 +1838,7 @@ def device_detail(
         {"name": name, "services": services}
         for name, services in grouped_services.items()
     ]
+    auto_purpose = _device_auto_purpose(device)
     validation_status = {service.id: _service_validation_status(db, service) for service in device.services}
     return render(
         request,
@@ -1845,6 +1857,7 @@ def device_detail(
             "status_log": _latest_audit(db, "device", device.id, "device_status_changed"),
             "validation_status": validation_status,
             "validation_log": _latest_audit(db, "device", device.id, "services_validated"),
+            "auto_purpose": auto_purpose,
         },
         user=user,
     )
@@ -1967,7 +1980,12 @@ def device_edit_page(
     return render(
         request,
         "device_form.html",
-        {"device": device, "hardware": device.hardware, "tag_text": ", ".join(tags_for(db, "device", device.id))},
+        {
+            "device": device,
+            "hardware": device.hardware,
+            "tag_text": ", ".join(tags_for(db, "device", device.id)),
+            "auto_purpose": _device_auto_purpose(device),
+        },
         user=user,
     )
 
@@ -3933,6 +3951,47 @@ def suggestions_apply(
     check_csrf(request, csrf)
     ensure_writable()
     cleaned = value.strip()
+    if action == "duplicate-port-cleanup" and object_type == "port":
+        match = re.match(r"device:(\d+):port:(\d+):([^:]+):duplicate", suggestion_id)
+        if not match:
+            flash(request, "That duplicate-port suggestion could not be read.", "warning")
+            return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
+        device_id, host_port, protocol = int(match.group(1)), int(match.group(2)), match.group(3)
+        matches = (
+            db.query(models.Port)
+            .filter(
+                models.Port.device_id == device_id,
+                models.Port.host_port == host_port,
+                models.Port.protocol == protocol,
+            )
+            .order_by(models.Port.service_id.is_(None), models.Port.id)
+            .all()
+        )
+        keep = next((port for port in matches if port.service_id), matches[0] if matches else None)
+        removed = 0
+        if keep:
+            for port in matches:
+                if port.id == keep.id:
+                    continue
+                if not port.service_id or port.service_id == keep.service_id:
+                    db.delete(port)
+                    removed += 1
+        if not removed:
+            flash(request, "No loose duplicate port was safe to remove. Open Ports & URLs to choose manually.", "warning")
+            return redirect("/ports")
+        dismiss_suggestion(db, suggestion_id)
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="suggestion_applied",
+                object_type="port",
+                object_id=keep.id if keep else None,
+                details_json={"id": suggestion_id, "action": action, "removed": removed},
+            )
+        )
+        db.commit()
+        flash(request, f"Removed {removed} loose duplicate port entr{'y' if removed == 1 else 'ies'}.", "success")
+        return redirect("/ports")
     if not cleaned:
         flash(request, "Add a little text before applying that suggestion.", "warning")
         return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")

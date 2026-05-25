@@ -27,8 +27,10 @@
           <input type="hidden" name="action" value="{{ suggestion.action }}">
           <input type="hidden" name="object_type" value="{{ suggestion.object_type }}">
           <input type="hidden" name="object_id" value="{{ suggestion.object_id }}">
-          <input name="value" value="" placeholder="{{ suggestion.placeholder or 'Type the fix here' }}" spellcheck="true">
-          <button class="secondary" type="submit">Apply</button>
+          {% if suggestion.placeholder %}
+            <input name="value" value="" placeholder="{{ suggestion.placeholder }}" spellcheck="true">
+          {% endif %}
+          <button class="secondary" type="submit">{% if suggestion.placeholder %}Apply{% else %}Clean Up{% endif %}</button>
         </form>
       {% endif %}
       <form method="post" action="/suggestions/dismiss">
