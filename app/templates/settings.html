@@ -8,24 +8,88 @@
   </div>
 </section>
 
-<section class="panel">
-  <div class="section-title">
-    <h2>Instance</h2>
-    <span class="badge">{{ instance_mode|upper }}</span>
+<section class="panel instance-panel">
+  <div class="section-title instance-title">
+    <div>
+      <h2>Instance</h2>
+      <span class="badge">{{ instance_mode|upper }}</span>
+    </div>
+    <div class="instance-links">
+      <a class="icon-link large-link" href="https://github.com/Dubcodes/Kairix-Opsbook" target="_blank" rel="noopener" title="Kairix Opsbook on GitHub" aria-label="Kairix Opsbook on GitHub">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path fill="currentColor" d="M12 .5A11.5 11.5 0 0 0 8.36 22.9c.58.11.79-.25.79-.56v-2.15c-3.22.7-3.9-1.37-3.9-1.37-.53-1.35-1.3-1.71-1.3-1.71-1.06-.72.08-.71.08-.71 1.17.08 1.79 1.2 1.79 1.2 1.04 1.78 2.73 1.27 3.4.97.1-.75.41-1.27.74-1.56-2.57-.29-5.27-1.28-5.27-5.72 0-1.26.45-2.3 1.19-3.11-.12-.29-.52-1.47.11-3.07 0 0 .98-.31 3.18 1.19a10.98 10.98 0 0 1 5.8 0c2.2-1.5 3.17-1.19 3.17-1.19.64 1.6.24 2.78.12 3.07.74.81 1.19 1.85 1.19 3.11 0 4.45-2.71 5.42-5.29 5.71.42.36.79 1.07.79 2.17v3.18c0 .31.21.68.8.56A11.5 11.5 0 0 0 12 .5Z"/>
+        </svg>
+      </a>
+      <a class="icon-link large-link kairix-site-link" href="https://www.dubcodesmedia.com/kairix/kairix-opsbook" target="_blank" rel="noopener" title="Kairix Opsbook website" aria-label="Kairix Opsbook website">
+        <img src="/static/kairix-core-logo-20260521.png" alt="">
+      </a>
+    </div>
   </div>
   <dl class="details">
     <dt>Version</dt><dd>{{ app_version }}</dd>
     <dt>Instance name</dt><dd>{{ instance_name }}</dd>
     <dt>Mode</dt><dd>{{ instance_mode|title }}</dd>
   </dl>
-  <p class="muted">Mode is set with the `INSTANCE_MODE` environment variable. Use `primary` for the writable instance and `standby` for a read-only imported copy.</p>
+  <p class="muted">Mode is set with the <code>INSTANCE_MODE</code> environment variable. Use <code>primary</code> for the writable instance and <code>standby</code> for a mirror copy that stays read-only until you promote it.</p>
 </section>
 
 <details class="panel collapsible-panel">
-  <summary><span><strong>Primary / Standby</strong><small>How two Opsbook installs work today</small></span></summary>
-  <p class="muted">Current supported flow is primary-to-standby via encrypted Emergency Export and Import. The standby should use the same `OPSBOOK_SECRET_KEY` and `EXPORT_SECRET_KEY`, stay read-only, and be promoted manually if the primary is down.</p>
-  <p class="muted">Bidirectional multi-instance sync is not enabled yet. It needs conflict handling for edited records and encrypted secrets so two writable instances do not quietly overwrite each other.</p>
+  <summary><span><strong>Primary / Mirror Setup</strong><small>Plain-English secondary instance steps</small></span></summary>
+  <p class="muted">Today, Opsbook supports a simple primary plus mirror model. The primary is where you normally write. The mirror imports encrypted backups, stays read-only, and can be promoted if the primary is down.</p>
+  <ol class="steps-list">
+    <li>Install a second Opsbook stack on another machine.</li>
+    <li>Use the same <code>OPSBOOK_SECRET_KEY</code> and <code>EXPORT_SECRET_KEY</code> as the primary so encrypted data can be read after import.</li>
+    <li>Set the mirror to <code>INSTANCE_MODE=standby</code> so normal edits are blocked.</li>
+    <li>Create an Emergency Export on the primary and import it on the mirror.</li>
+    <li>If the primary is down, change the mirror to <code>INSTANCE_MODE=primary</code> and restart it.</li>
+  </ol>
+  <p class="muted">Bidirectional live sync is not enabled yet. That is deliberate: two writable copies can create conflicts, especially for encrypted secrets. The current flow is boring on purpose, which is exactly what you want in an emergency.</p>
 </details>
+
+<section class="panel" id="ping-webhook">
+  <div class="section-title">
+    <div>
+      <h2>Ping Webhook</h2>
+      <p class="muted">Send device or service state changes to Home Assistant, n8n, Discord bridges, or another webhook listener.</p>
+    </div>
+    {% if webhook_url_saved %}<span class="badge">Saved</span>{% else %}<span class="badge">Off</span>{% endif %}
+  </div>
+  <form method="post" action="/settings/webhook" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label class="span-2">Webhook URL
+      <input name="webhook_url" type="password" autocomplete="off" placeholder="{% if webhook_url_saved %}Saved. Paste a new URL to replace it.{% else %}https://homeassistant.local:8123/api/webhook/opsbook-ping{% endif %}">
+      <small>Stored encrypted. Opsbook sends status, device/service name, group, and UTC timestamp only. It never sends passwords, tokens, or notes.</small>
+    </label>
+    <div class="webhook-scope-grid span-2">
+      <label class="check-row"><input type="checkbox" name="webhook_scope_both" {% if webhook_scope == "both" %}checked{% endif %}> Both</label>
+      <label class="check-row"><input type="checkbox" name="webhook_scope_devices" {% if webhook_scope == "devices" %}checked{% endif %}> Devices only</label>
+      <label class="check-row"><input type="checkbox" name="webhook_scope_services" {% if webhook_scope == "services" %}checked{% endif %}> Services only</label>
+    </div>
+    <label class="check-row span-2">
+      <input type="checkbox" name="webhook_send_recovery" {% if webhook_send_recovery %}checked{% endif %}>
+      Send recovery/pass events when a previous failure comes back
+    </label>
+    <label class="check-row span-2">
+      <input type="checkbox" name="clear_webhook">
+      Clear saved webhook URL
+    </label>
+    <div class="form-actions span-2">
+      <button type="submit">Save Webhook</button>
+    </div>
+  </form>
+  <div class="form-actions webhook-test-actions">
+    <form method="post" action="/settings/webhook/test">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="event" value="pass">
+      <button class="secondary" type="submit">Test Pass</button>
+    </form>
+    <form method="post" action="/settings/webhook/test">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <input type="hidden" name="event" value="fail">
+      <button class="secondary" type="submit">Test Fail</button>
+    </form>
+  </div>
+</section>
 
 <form method="post" class="panel form-grid wide">
   <input type="hidden" name="csrf" value="{{ csrf }}">

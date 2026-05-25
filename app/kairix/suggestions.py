@@ -34,6 +34,34 @@ TAG_IDEAS = [
 ]
 
 
+ROADMAP_IDEAS = [
+    {
+        "title": "Network map",
+        "body": "A simple visual map for devices, services, ports, and public/private exposure.",
+    },
+    {
+        "title": "Service attachments",
+        "body": "Screenshots and small files per service, especially settings pages you only need once in a while.",
+    },
+    {
+        "title": "Recovery checklists",
+        "body": "Printable restore steps for DNS, password vaults, Docker hosts, NAS shares, and other emergency systems.",
+    },
+    {
+        "title": "IP and DNS inventory",
+        "body": "Lightweight IPAM-style helpers for addresses, DNS names, VLANs, and service ownership.",
+    },
+    {
+        "title": "Sanitized public export",
+        "body": "A shareable GitHub-friendly export that strips secrets, private notes, and sensitive addresses.",
+    },
+    {
+        "title": "Maintenance calendar",
+        "body": "Review dates for certificates, token expiry, backup checks, and planned update windows.",
+    },
+]
+
+
 def dismissed_suggestion_ids(db: Session) -> set[str]:
     row = db.query(models.AppSetting).filter_by(key="dismissed_suggestions").first()
     if not row or not row.value:

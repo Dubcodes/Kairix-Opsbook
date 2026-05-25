@@ -200,6 +200,19 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   align-items: center;
   gap: 6px;
 }
+.instance-title {
+  align-items: flex-start;
+}
+.instance-title > div:first-child {
+  display: grid;
+  gap: 6px;
+}
+.instance-links {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .icon-link {
   display: inline-flex;
   align-items: center;
@@ -223,6 +236,18 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
 .icon-link:hover {
   border-color: var(--accent);
   text-decoration: none;
+}
+.large-link {
+  width: 46px;
+  height: 46px;
+}
+.large-link svg {
+  width: 25px;
+  height: 25px;
+}
+.large-link img {
+  width: 34px;
+  height: 34px;
 }
 .badge {
   display: inline-flex;
@@ -418,6 +443,27 @@ label small { color: var(--muted); font-weight: 500; }
   font-weight: 600;
 }
 .check-row input { width: auto; }
+
+.webhook-scope-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 18px;
+  padding: 9px 0;
+}
+
+.webhook-test-actions {
+  margin-top: 10px;
+}
+
+.steps-list {
+  margin: 10px 0 12px 20px;
+  padding: 0;
+  color: var(--ink);
+}
+
+.steps-list li {
+  margin: 6px 0;
+}
 
 .tabs {
   display: flex;

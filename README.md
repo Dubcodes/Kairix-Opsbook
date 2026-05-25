@@ -19,9 +19,10 @@ It is designed to be fast like notes, structured like inventory, and safe like a
 - Smart Paste import with review-before-apply for notes, SSH output, Docker output, URLs, ports, paths, commands, service login blocks, and GitHub token pages.
 - Service validation checks documented URLs and ports with a simple TCP connection and records the last result.
 - Background device pings with browser-local time display, plus optional login-time device/service refresh checks.
+- Optional ping webhooks for Home Assistant or other listeners. Webhooks can report devices, services, or both, and recovery/pass events are sent only when a previous failure comes back.
 - Suggestions for missing backup notes, duplicate ports, low-security admin credentials, and missing purpose fields, with quick inline fixes for simple cleanup.
 - Emergency encrypted backup export, human-readable runbook HTML export, and encrypted import.
-- Standby/read-only instance mode for backup servers.
+- Mirror/read-only standby mode for backup servers.
 
 ## Quick Start
 
@@ -104,6 +105,20 @@ Device pages include a **Validate** button near the services list. It checks eac
 This is not a full uptime monitor and it does not run commands on the server. It is a quick "is something listening here?" check to catch stale URLs, wrong ports, or services that are probably down.
 
 Settings can also run device pings and service validation in the background after login. Times shown in the browser are converted to the viewer's local timezone.
+
+## Ping Webhooks
+
+Settings includes a **Ping Webhook** tile for Home Assistant, n8n, Discord bridges, or similar webhook listeners.
+
+The webhook URL is encrypted before storage. Events include only operational status fields such as instance, object type, status, device/service name, group, target summary, and UTC timestamp. Passwords, tokens, notes, and credential values are never sent.
+
+Webhook scope can be:
+
+- Both devices and services.
+- Devices only.
+- Services only.
+
+Fail events are sent when a check changes into a failed state. Pass/recovery events are optional and are only sent when a previously failed device or service comes back. When multiple services in the same documented stack/group fail in the same validation run, Opsbook sends one group event instead of spamming one notification per service.
 
 ## Emergency Export And Import
 
@@ -188,18 +203,31 @@ To update:
 
 If Portainer cannot pull the image, check that the GitHub Container Registry package is public or configure registry authentication in Portainer.
 
-## Primary And Standby
+If Settings still shows an old version after redeploying, check whether `APP_VERSION` was manually set in the Portainer environment variables. A pinned value such as `APP_VERSION=0.1.0` overrides the image default.
+
+## Primary And Mirror
 
 Use `INSTANCE_MODE=primary` for the normal writable instance.
 
-Use `INSTANCE_MODE=standby` for a secondary read-only instance. The standby instance should use the same `OPSBOOK_SECRET_KEY` and `EXPORT_SECRET_KEY` as the primary so encrypted credentials and encrypted exports can be decrypted after import.
+Use `INSTANCE_MODE=standby` for a secondary mirror instance. The mirror is a read-only copy until you promote it. It should use the same `OPSBOOK_SECRET_KEY` and `EXPORT_SECRET_KEY` as the primary so encrypted credentials and encrypted exports can be decrypted after import.
 
-A simple standby flow is:
+A simple mirror flow is:
 
 1. Create an Emergency Export on the primary.
-2. Copy the encrypted backup file to the standby.
-3. Import it from the standby Emergency Export page.
-4. Keep the standby read-only until the primary is unavailable.
-5. To promote standby, set `INSTANCE_MODE=primary` and restart the stack.
+2. Copy the encrypted backup file to the mirror.
+3. Import it from the mirror Emergency Export page.
+4. Keep the mirror read-only until the primary is unavailable.
+5. To promote the mirror, set `INSTANCE_MODE=primary` and restart the stack.
 
-Avoid writing to both instances at once. Multi-master sync is intentionally not part of the MVP.
+Avoid writing to both instances at once. Bidirectional multi-master sync is intentionally not part of the MVP because it needs careful conflict handling for edited records and encrypted secrets.
+
+## Roadmap Ideas
+
+Useful next features being considered:
+
+- Simple network map for devices, services, ports, and public/private exposure.
+- Attachments and screenshots per service.
+- Recovery mode printable/exportable checklists.
+- IP/DNS inventory helpers.
+- Sanitized public export for sharing a homelab without secrets.
+- Maintenance calendar for cert expiry, token expiry, backup reviews, and update windows.

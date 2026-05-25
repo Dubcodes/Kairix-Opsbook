@@ -13,6 +13,7 @@ from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
+from urllib.request import Request as UrlRequest, urlopen
 
 import pyotp
 import qrcode
@@ -41,7 +42,7 @@ from .security import (
     verify_password,
 )
 from .seeds import seed_initial_data
-from .suggestions import TAG_IDEAS, dismiss_suggestion, mute_ping_failure, visible_suggestions
+from .suggestions import ROADMAP_IDEAS, TAG_IDEAS, dismiss_suggestion, mute_ping_failure, visible_suggestions
 from .utils import (
     format_dt,
     iso_dt,
@@ -127,6 +128,9 @@ THEME_DEFAULTS = {
 }
 
 PING_THREAD_STARTED = False
+WEBHOOK_URL_SETTING = "ping_webhook_url_encrypted"
+WEBHOOK_SCOPE_SETTING = "ping_webhook_scope"
+WEBHOOK_RECOVERY_SETTING = "ping_webhook_send_recovery"
 
 
 @app.on_event("startup")
@@ -222,6 +226,219 @@ def bool_setting(db: Session, key: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _webhook_scope(db: Session) -> str:
+    row = db.query(models.AppSetting).filter_by(key=WEBHOOK_SCOPE_SETTING).first()
+    value = (row.value if row and row.value else "both").strip().lower()
+    return value if value in {"both", "devices", "services"} else "both"
+
+
+def _webhook_recovery_enabled(db: Session) -> bool:
+    row = db.query(models.AppSetting).filter_by(key=WEBHOOK_RECOVERY_SETTING).first()
+    if row is None:
+        return True
+    return str(row.value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _webhook_url(db: Session) -> str:
+    row = db.query(models.AppSetting).filter_by(key=WEBHOOK_URL_SETTING).first()
+    if not row or not row.value:
+        return ""
+    try:
+        return decrypt_text(row.value)
+    except Exception:
+        return ""
+
+
+def _set_webhook_url(db: Session, url: str) -> None:
+    clean = url.strip()
+    if not clean:
+        set_app_setting(db, WEBHOOK_URL_SETTING, "")
+        return
+    parsed = urlparse(clean)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Webhook URL must start with http:// or https://.")
+    set_app_setting(db, WEBHOOK_URL_SETTING, encrypt_text(clean))
+
+
+def _webhook_allows(db: Session, object_type: str) -> bool:
+    scope = _webhook_scope(db)
+    if scope == "both":
+        return True
+    if scope == "devices":
+        return object_type == "device"
+    return object_type in {"service", "service_group"}
+
+
+def _validation_good(details: dict[str, Any]) -> bool | None:
+    if not int(details.get("checked") or 0):
+        return None
+    return bool(details.get("ok")) and not bool(details.get("partial"))
+
+
+def _latest_service_validation_good(db: Session, service: models.Service) -> bool | None:
+    latest = _latest_audit(db, "service", service.id, "service_validate")
+    if not latest:
+        return None
+    return _validation_good(latest.details_json or {})
+
+
+def _send_webhook_payload(db: Session, payload: dict[str, Any]) -> bool:
+    url = _webhook_url(db)
+    if not url:
+        return False
+    safe_payload = {
+        "app": settings.app_name,
+        "instance": settings.instance_name,
+        "version": settings.app_version,
+        "time_utc": now_utc().isoformat(),
+        **payload,
+    }
+    try:
+        request = UrlRequest(
+            url,
+            data=json.dumps(safe_payload, default=str).encode("utf-8"),
+            headers={"Content-Type": "application/json", "User-Agent": f"kairix-opsbook/{settings.app_version}"},
+            method="POST",
+        )
+        with urlopen(request, timeout=5) as response:
+            status_code = getattr(response, "status", 200)
+            ok = 200 <= int(status_code) < 300
+    except Exception as exc:
+        db.add(
+            models.AuditLog(
+                action="webhook_failed",
+                object_type=str(payload.get("object_type") or "webhook"),
+                details_json={
+                    "event": payload.get("event"),
+                    "status": payload.get("status"),
+                    "name": payload.get("name"),
+                    "error": str(exc)[:240],
+                },
+            )
+        )
+        return False
+    db.add(
+        models.AuditLog(
+            action="webhook_sent" if ok else "webhook_failed",
+            object_type=str(payload.get("object_type") or "webhook"),
+            details_json={
+                "event": payload.get("event"),
+                "status": payload.get("status"),
+                "name": payload.get("name"),
+                "http_status": status_code,
+            },
+        )
+    )
+    return ok
+
+
+def _send_ping_webhook_event(
+    db: Session,
+    *,
+    object_type: str,
+    status_text: str,
+    name: str,
+    previous_good: bool | None,
+    payload: dict[str, Any],
+) -> bool:
+    if not _webhook_allows(db, object_type):
+        return False
+    if status_text == "pass":
+        if previous_good is not False or not _webhook_recovery_enabled(db):
+            return False
+    elif status_text == "fail":
+        if previous_good is False:
+            return False
+    else:
+        return False
+    return _send_webhook_payload(
+        db,
+        {
+            "event": "ping_state_change",
+            "object_type": object_type,
+            "status": status_text,
+            "name": name,
+            **payload,
+        },
+    )
+
+
+def _notify_service_validation_webhooks(
+    db: Session,
+    transitions: list[tuple[models.Service, dict[str, Any], bool | None]],
+) -> None:
+    grouped_failures: dict[tuple[int, str], list[tuple[models.Service, dict[str, Any], bool | None]]] = {}
+    for service, details, previous_good in transitions:
+        current_good = _validation_good(details)
+        if current_good is None:
+            continue
+        if current_good:
+            _send_ping_webhook_event(
+                db,
+                object_type="service",
+                status_text="pass",
+                name=service.name,
+                previous_good=previous_good,
+                payload={
+                    "device": service.device.name if service.device else "",
+                    "service": service.name,
+                    "group": service.docker_project,
+                    "targets": details.get("targets") or [],
+                },
+            )
+            continue
+        if previous_good is False:
+            continue
+        group = (service.docker_project or "").strip()
+        if group:
+            grouped_failures.setdefault((service.device_id, group), []).append((service, details, previous_good))
+        else:
+            _send_ping_webhook_event(
+                db,
+                object_type="service",
+                status_text="fail",
+                name=service.name,
+                previous_good=previous_good,
+                payload={
+                    "device": service.device.name if service.device else "",
+                    "service": service.name,
+                    "group": "",
+                    "targets": details.get("targets") or [],
+                },
+            )
+    for (_device_id, group), members in grouped_failures.items():
+        if len(members) == 1:
+            service, details, previous_good = members[0]
+            _send_ping_webhook_event(
+                db,
+                object_type="service",
+                status_text="fail",
+                name=service.name,
+                previous_good=previous_good,
+                payload={
+                    "device": service.device.name if service.device else "",
+                    "service": service.name,
+                    "group": group,
+                    "targets": details.get("targets") or [],
+                },
+            )
+            continue
+        device = members[0][0].device
+        _send_ping_webhook_event(
+            db,
+            object_type="service_group",
+            status_text="fail",
+            name=group,
+            previous_good=True,
+            payload={
+                "device": device.name if device else "",
+                "group": group,
+                "services_down": len(members),
+                "services": [service.name for service, _details, _previous_good in members],
+            },
+        )
 
 
 def _normalize_unknown_states(db: Session) -> None:
@@ -606,6 +823,7 @@ def _failed_ping_summary(db: Session) -> dict[str, int]:
 def _ping_device(db: Session, device: models.Device) -> dict[str, Any]:
     host = (device.primary_ip or device.hostname or "").strip()
     previous = _latest_audit(db, "device", device.id, "device_ping")
+    previous_good = bool((previous.details_json or {}).get("ok")) if previous else None
     previous_failures = int((previous.details_json or {}).get("failures") or 0) if previous else 0
     if not host:
         details = {"ok": False, "latency_ms": None, "failures": previous_failures + 1, "error": "No IP or hostname"}
@@ -629,6 +847,19 @@ def _ping_device(db: Session, device: models.Device) -> dict[str, Any]:
         except Exception as exc:
             details = {"ok": False, "latency_ms": None, "failures": previous_failures + 1, "host": host, "error": str(exc)}
     db.add(models.AuditLog(action="device_ping", object_type="device", object_id=device.id, details_json=details))
+    _send_ping_webhook_event(
+        db,
+        object_type="device",
+        status_text="pass" if details.get("ok") else "fail",
+        name=device.name,
+        previous_good=previous_good,
+        payload={
+            "device": device.name,
+            "host": host,
+            "latency_ms": details.get("latency_ms"),
+            "failures": details.get("failures"),
+        },
+    )
     return details
 
 
@@ -666,8 +897,12 @@ def _run_login_checks(user_id: int | None = None) -> None:
                         _ping_device(db, device)
                 db.commit()
             if bool_setting(db, "validate_services_on_login", True):
+                transitions: list[tuple[models.Service, dict[str, Any], bool | None]] = []
                 for service in _service_order_query(db).all():
-                    _validate_service(db, service, user_id)
+                    previous_good = _latest_service_validation_good(db, service)
+                    details = _validate_service(db, service, user_id)
+                    transitions.append((service, details, previous_good))
+                _notify_service_validation_webhooks(db, transitions)
                 db.commit()
     except Exception:
         pass
@@ -1264,6 +1499,10 @@ AUDIT_ACTION_LABELS = {
     "emergency_export_imported": "Emergency backup imported",
     "settings_updated": "Settings changed",
     "device_order_updated": "Device order changed",
+    "webhook_settings_updated": "Webhook settings changed",
+    "webhook_sent": "Webhook sent",
+    "webhook_failed": "Webhook failed",
+    "webhook_test": "Webhook tested",
     "totp_setup_started": "2FA setup started",
     "totp_enabled": "2FA enabled",
     "totp_disabled": "2FA disabled",
@@ -1924,12 +2163,16 @@ def device_validate_services(
         raise HTTPException(404, "Device not found.")
     checked = 0
     reachable = 0
+    transitions: list[tuple[models.Service, dict[str, Any], bool | None]] = []
     for service in device.services:
+        previous_good = _latest_service_validation_good(db, service)
         details = _validate_service(db, service, user.id)
+        transitions.append((service, details, previous_good))
         if details["checked"]:
             checked += 1
         if details["ok"] or details.get("partial"):
             reachable += 1
+    _notify_service_validation_webhooks(db, transitions)
     db.add(
         models.AuditLog(
             user_id=user.id,
@@ -2278,7 +2521,9 @@ def service_validate_now(
     service = db.get(models.Service, service_id)
     if not service:
         raise HTTPException(404, "Service not found.")
+    previous_good = _latest_service_validation_good(db, service)
     details = _validate_service(db, service, user.id)
+    _notify_service_validation_webhooks(db, [(service, details, previous_good)])
     db.commit()
     status_text = "partially reachable" if details.get("partial") else "reachable" if details["ok"] else "not responding"
     flash(request, f"{service.name} is {status_text}.", "success" if details["ok"] else "warning")
@@ -3995,7 +4240,12 @@ def suggestions_page(
     return render(
         request,
         "suggestions.html",
-        {"suggestions": visible_suggestions(db), "tag_ideas": TAG_IDEAS, "fill_candidates": fill_candidates[:40]},
+        {
+            "suggestions": visible_suggestions(db),
+            "tag_ideas": TAG_IDEAS,
+            "roadmap_ideas": ROADMAP_IDEAS,
+            "fill_candidates": fill_candidates[:40],
+        },
         user=user,
     )
 
@@ -4178,6 +4428,9 @@ def settings_page(
             "pending_totp_qr_svg": pending_totp_qr_svg,
             "tokens": _token_credentials(db),
             "devices": _device_order_query(db).all(),
+            "webhook_url_saved": bool(_webhook_url(db)),
+            "webhook_scope": _webhook_scope(db),
+            "webhook_send_recovery": _webhook_recovery_enabled(db),
         },
         user=user,
     )
@@ -4231,6 +4484,83 @@ async def settings_save(
     db.commit()
     flash(request, "Settings saved.", "success")
     return redirect("/settings")
+
+
+@app.post("/settings/webhook")
+async def settings_webhook_save(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    form = await request.form()
+    check_csrf(request, str(form.get("csrf", "")))
+    ensure_writable()
+    try:
+        if form.get("clear_webhook") == "on":
+            _set_webhook_url(db, "")
+        else:
+            new_url = str(form.get("webhook_url", "")).strip()
+            if new_url:
+                _set_webhook_url(db, new_url)
+    except ValueError as exc:
+        flash(request, str(exc), "warning")
+        return redirect("/settings#ping-webhook")
+    both = form.get("webhook_scope_both") == "on"
+    devices = form.get("webhook_scope_devices") == "on"
+    services = form.get("webhook_scope_services") == "on"
+    if both or (devices and services) or (not devices and not services):
+        scope = "both"
+    elif devices:
+        scope = "devices"
+    else:
+        scope = "services"
+    set_app_setting(db, WEBHOOK_SCOPE_SETTING, scope)
+    set_app_setting(db, WEBHOOK_RECOVERY_SETTING, "on" if form.get("webhook_send_recovery") == "on" else "off")
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="webhook_settings_updated",
+            object_type="app_settings",
+            details_json={"scope": scope, "send_recovery": form.get("webhook_send_recovery") == "on"},
+        )
+    )
+    db.commit()
+    flash(request, "Webhook settings saved.", "success")
+    return redirect("/settings#ping-webhook")
+
+
+@app.post("/settings/webhook/test")
+def settings_webhook_test(
+    request: Request,
+    csrf: str = Form(...),
+    event: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    status_text = "pass" if event == "pass" else "fail"
+    sent = _send_webhook_payload(
+        db,
+        {
+            "event": "webhook_test",
+            "object_type": "test",
+            "status": status_text,
+            "name": f"Test {status_text}",
+            "message": f"Kairix Opsbook test {status_text} webhook from {settings.instance_name}.",
+        },
+    )
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="webhook_test",
+            object_type="app_settings",
+            details_json={"status": status_text, "sent": sent},
+        )
+    )
+    db.commit()
+    flash(request, f"Webhook test {status_text} {'sent' if sent else 'could not be sent. Check the saved URL'}.", "success" if sent else "warning")
+    return redirect("/settings#ping-webhook")
 
 
 @app.post("/settings/device-order")
@@ -4587,7 +4917,7 @@ def history_page(
 ) -> HTMLResponse:
     query = db.query(models.AuditLog)
     if kind == "ping":
-        query = query.filter(models.AuditLog.action.in_(["device_ping", "service_validate", "services_validated", "ping_warning_scheduled"]))
+        query = query.filter(models.AuditLog.action.in_(["device_ping", "service_validate", "services_validated", "ping_warning_scheduled", "webhook_sent", "webhook_failed", "webhook_test"]))
     elif kind == "credentials":
         query = query.filter(models.AuditLog.action.ilike("credential_%"))
     elif kind == "smart-paste":
