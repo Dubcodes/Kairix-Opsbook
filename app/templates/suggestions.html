@@ -78,17 +78,4 @@
   </section>
 </details>
 
-<details class="panel collapsible-panel">
-  <summary>
-    <span><strong>Roadmap Ideas</strong><small>Nice-to-have features for busier homelabs</small></span>
-  </summary>
-  <section class="tag-advice-grid">
-    {% for idea in roadmap_ideas %}
-      <article class="advice-card">
-        <h2>{{ idea.title }}</h2>
-        <p>{{ idea.body }}</p>
-      </article>
-    {% endfor %}
-  </section>
-</details>
 {% endblock %}

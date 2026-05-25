@@ -20,13 +20,20 @@
 <section class="panel">
   <div class="list">
     {% for item in logs %}
-      <div class="list-row static">
-        <div>
-          <strong>{{ item.title }}</strong>
-          <span>{% if item.href %}<a href="{{ item.href }}">{{ item.target }}</a>{% else %}{{ item.target }}{% endif %} · {{ item.when }}</span>
-          {% if item.details %}<small>{{ item.details }}</small>{% endif %}
-        </div>
-      </div>
+      <details class="list-row static history-row">
+        <summary>
+          <span>
+            <strong>{{ item.title }}</strong>
+            <small>{% if item.href %}<a href="{{ item.href }}">{{ item.target }}</a>{% else %}{{ item.target }}{% endif %} · {{ item.when }}</small>
+            {% if item.details %}<small>{{ item.details }}</small>{% endif %}
+          </span>
+        </summary>
+        <dl class="details compact-details">
+          <dt>Action</dt><dd>{{ item.action }}</dd>
+          {% if item.object_type %}<dt>Object</dt><dd>{{ item.object_type }}{% if item.object_id %} #{{ item.object_id }}{% endif %}</dd>{% endif %}
+        </dl>
+        {% if item.raw %}<pre>{{ item.raw }}</pre>{% endif %}
+      </details>
     {% else %}
       <p class="empty">No audit events yet.</p>
     {% endfor %}

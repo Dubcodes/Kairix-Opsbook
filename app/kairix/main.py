@@ -42,7 +42,7 @@ from .security import (
     verify_password,
 )
 from .seeds import seed_initial_data
-from .suggestions import ROADMAP_IDEAS, TAG_IDEAS, dismiss_suggestion, mute_ping_failure, visible_suggestions
+from .suggestions import TAG_IDEAS, dismiss_suggestion, mute_ping_failure, visible_suggestions
 from .utils import (
     format_dt,
     iso_dt,
@@ -77,6 +77,13 @@ async def security_headers(request: Request, call_next):
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "same-origin")
     response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault(
+        "Content-Security-Policy",
+        "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; "
+        "script-src 'self'; connect-src 'self'; form-action 'self'; frame-ancestors 'none'; base-uri 'self'",
+    )
+    if request.session.get("user_id") or request.url.path in {"/login", "/login/2fa", "/setup"}:
+        response.headers.setdefault("Cache-Control", "no-store")
     return response
 
 templates = Jinja2Templates(directory="templates")
@@ -1180,10 +1187,59 @@ def _match_service_for_import(db: Session, device_id: int, service_hint: dict[st
     return None
 
 
+def _service_import_aliases(value: str) -> set[str]:
+    aliases = {_service_alias(value), slugify(value)}
+    return {alias for alias in aliases if alias}
+
+
+def _missing_services_from_import(
+    db: Session,
+    device: models.Device | None,
+    parsed: dict[str, Any],
+) -> list[dict[str, Any]]:
+    docker_text = str(parsed.get("extras", {}).get("docker_containers", "") or "").strip()
+    if not device or not docker_text or not parsed.get("services"):
+        return []
+
+    seen_aliases: set[str] = set()
+    for item in parsed.get("services", []):
+        for value in [item.get("name", ""), item.get("container_name", "")]:
+            seen_aliases.update(_service_import_aliases(str(value)))
+
+    missing: list[dict[str, Any]] = []
+    for service in sorted(device.services, key=lambda item: item.name.lower()):
+        is_docker_documented = bool(
+            service.container_name
+            or service.image
+            or service.compose_path
+            or service.docker_project
+        )
+        if not is_docker_documented:
+            continue
+        service_aliases: set[str] = set()
+        for value in [service.name, service.container_name]:
+            service_aliases.update(_service_import_aliases(value))
+        if service_aliases & seen_aliases:
+            continue
+        missing.append(
+            {
+                "id": service.id,
+                "name": service.name,
+                "group": service.docker_project or "Ungrouped",
+                "compose_path": service.compose_path,
+                "credential_count": len(service.credentials),
+                "port_count": len(service.ports),
+                "url_count": len(service.urls),
+            }
+        )
+    return missing
+
+
 def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[str, Any]:
     parsed = dict(parsed)
     matched_device = _match_device_for_import(db, parsed.get("device", {}))
     parsed["matched_device_id"] = matched_device.id if matched_device else None
+    parsed["missing_services"] = _missing_services_from_import(db, matched_device, parsed)
     existing_device_id = matched_device.id if matched_device else None
     for command in parsed.get("commands", []):
         duplicate = _duplicate_command(db, command.get("command_template", ""))
@@ -1536,20 +1592,45 @@ def _audit_target_label(db: Session, log: models.AuditLog) -> tuple[str, str]:
         model, label_attr, path = model_info
         obj = db.get(model, log.object_id)
         if obj:
-            return str(getattr(obj, label_attr) or f"{log.object_type.title()} #{log.object_id}"), f"/{path}/{log.object_id}"
+            href = f"/commands/{log.object_id}/edit" if log.object_type == "command" else f"/{path}/{log.object_id}"
+            return str(getattr(obj, label_attr) or f"{log.object_type.title()} #{log.object_id}"), href
     if log.object_type:
         return f"{log.object_type.replace('_', ' ').title()} {log.object_id or ''}".strip(), ""
     return "Opsbook", ""
 
 
+def _note_target_label(db: Session, note: models.Note) -> tuple[str, str]:
+    model_map: dict[str, tuple[type[Any], str, str]] = {
+        "device": (models.Device, "name", "devices"),
+        "service": (models.Service, "name", "services"),
+        "credential": (models.Credential, "label", "credentials"),
+        "command": (models.Command, "name", "commands"),
+        "quick_note": (models.Note, "title", "notes"),
+    }
+    model_info = model_map.get(note.object_type)
+    if not model_info:
+        return note.object_type.replace("_", " ").title(), ""
+    model, label_attr, path = model_info
+    obj = db.get(model, note.object_id)
+    if not obj:
+        return note.object_type.replace("_", " ").title(), ""
+    href = f"/commands/{note.object_id}/edit" if note.object_type == "command" else f"/{path}/{note.object_id}"
+    return str(getattr(obj, label_attr) or f"{note.object_type.title()} #{note.object_id}"), href
+
+
 def _human_audit_log(db: Session, log: models.AuditLog) -> dict[str, str]:
     target, href = _audit_target_label(db, log)
+    raw = json.dumps(log.details_json or {}, indent=2, sort_keys=True, default=str)
     return {
         "title": AUDIT_ACTION_LABELS.get(log.action, log.action.replace("_", " ").title()),
         "target": target,
         "href": href,
         "when": format_dt(log.created_at),
         "details": _safe_audit_details(log.details_json),
+        "raw": raw if raw != "{}" else "",
+        "action": log.action,
+        "object_type": log.object_type,
+        "object_id": str(log.object_id or ""),
         "severity": "danger" if "deleted" in log.action else "info",
     }
 
@@ -1820,8 +1901,24 @@ def login(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
+    locked_raw = request.session.get("login_locked_until")
+    if locked_raw:
+        try:
+            locked_until = datetime.fromisoformat(locked_raw)
+            if locked_until > now_utc():
+                flash(request, "Too many failed login attempts. Try again in a few minutes.", "danger")
+                return redirect("/login")
+        except ValueError:
+            request.session.pop("login_locked_until", None)
     user = db.query(models.User).filter_by(username=username.strip().lower()).first()
     if not user or not verify_password(password, user.password_hash):
+        failures = int(request.session.get("login_failures") or 0) + 1
+        request.session["login_failures"] = failures
+        if failures >= 5:
+            request.session["login_failures"] = 0
+            request.session["login_locked_until"] = (now_utc() + timedelta(minutes=5)).isoformat()
+            flash(request, "Too many failed login attempts. This browser is paused for 5 minutes.", "danger")
+            return redirect("/login")
         flash(request, "Login failed. Check the username and password.", "danger")
         return redirect("/login")
     request.session.clear()
@@ -2352,11 +2449,16 @@ def services_page(
         services = query.order_by(models.Service.name).all()
     else:
         services = _service_order_query(db).all()
+    service_groups: dict[str, list[models.Service]] = {}
+    for service in services:
+        group_name = service.device.name if service.device else "Unlinked"
+        service_groups.setdefault(group_name, []).append(service)
     return render(
         request,
         "services.html",
         {
             "services": services,
+            "service_groups": service_groups,
             "q": q,
             "tags": tag_map(db, "service"),
             "validation_statuses": {service.id: _service_validation_status(db, service) for service in services},
@@ -2932,6 +3034,8 @@ def delete_object(
     object_type: str,
     object_id: int,
     csrf: str = Form(...),
+    delete_services: str = Form(""),
+    delete_credentials: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -2954,20 +3058,38 @@ def delete_object(
         raise HTTPException(404, "Object not found.")
     return_to = _delete_redirect_target(request, object_type, object_id)
     if object_type == "device" and isinstance(obj, models.Device):
+        remove_services = delete_services.lower() in {"on", "true", "1", "yes"}
+        remove_credentials = delete_credentials.lower() in {"on", "true", "1", "yes"}
         service_ids = [service.id for service in obj.services]
+        if service_ids and not remove_services:
+            flash(
+                request,
+                "This device still has linked services. Check Delete linked services, or move those services before deleting the device.",
+                "warning",
+            )
+            return redirect(f"/devices/{obj.id}/edit")
         credential_filter = models.Credential.device_id == obj.id
         if service_ids:
             credential_filter = or_(credential_filter, models.Credential.service_id.in_(service_ids))
         related_credentials = db.query(models.Credential).filter(credential_filter).all()
-        for credential in related_credentials:
-            db.query(models.TagLink).filter_by(object_type="credential", object_id=credential.id).delete()
-            db.delete(credential)
-        for service_id in service_ids:
-            db.query(models.TagLink).filter_by(object_type="service", object_id=service_id).delete()
-            db.query(models.Note).filter_by(object_type="service", object_id=service_id).delete()
-            for command in db.query(models.Command).filter_by(applies_to_type="service", applies_to_id=service_id).all():
-                db.query(models.TagLink).filter_by(object_type="command", object_id=command.id).delete()
-                db.delete(command)
+        if remove_credentials:
+            for credential in related_credentials:
+                db.query(models.TagLink).filter_by(object_type="credential", object_id=credential.id).delete()
+                db.delete(credential)
+        else:
+            for credential in related_credentials:
+                credential.device_id = None
+                if credential.service_id in service_ids:
+                    credential.service_id = None
+                note = public_notes(credential.notes)
+                credential.notes = f"{note}\nUnlinked when device {obj.name} was deleted.".strip()
+        if remove_services:
+            for service_id in service_ids:
+                db.query(models.TagLink).filter_by(object_type="service", object_id=service_id).delete()
+                db.query(models.Note).filter_by(object_type="service", object_id=service_id).delete()
+                for command in db.query(models.Command).filter_by(applies_to_type="service", applies_to_id=service_id).all():
+                    db.query(models.TagLink).filter_by(object_type="command", object_id=command.id).delete()
+                    db.delete(command)
         for port in list(obj.ports):
             db.query(models.TagLink).filter_by(object_type="port", object_id=port.id).delete()
             db.delete(port)
@@ -2992,7 +3114,21 @@ def delete_object(
         models.TagLink.object_id == object_id,
     ).delete()
     db.delete(obj)
-    db.add(models.AuditLog(user_id=user.id, action=f"{object_type}_deleted", object_type=object_type, object_id=object_id))
+    delete_details = {}
+    if object_type == "device":
+        delete_details = {
+            "delete_services": delete_services,
+            "delete_credentials": delete_credentials,
+        }
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action=f"{object_type}_deleted",
+            object_type=object_type,
+            object_id=object_id,
+            details_json=delete_details,
+        )
+    )
     db.commit()
     flash(request, f"{object_type.title()} deleted.", "success")
     return redirect(return_to)
@@ -3439,9 +3575,30 @@ def tags_page(
         elif link.object_type == "quick_note":
             obj = db.get(models.Note, link.object_id)
             if obj:
-                href, label = "/notes", obj.title or "Quick note"
+                href, label = f"/notes/{obj.id}", obj.title or "Quick note"
+        elif link.object_type == "note":
+            obj = db.get(models.Note, link.object_id)
+            if obj:
+                href, label = f"/notes/{obj.id}", obj.title or "Note"
         grouped.setdefault(link.tag_id, []).append({"kind": kind, "href": href, "label": label})
-    return render(request, "tags.html", {"tags": tags, "grouped": grouped}, user=user)
+    tag_cards: list[dict[str, Any]] = []
+    kind_order = ["Device", "Service", "Credential", "Command", "Port", "Url", "Note", "Quick Note"]
+    for tag in tags:
+        by_kind: dict[str, list[dict[str, str]]] = {}
+        for item in grouped.get(tag.id, []):
+            by_kind.setdefault(item["kind"], []).append(item)
+        sorted_groups = [
+            {"kind": kind, "items": sorted(by_kind[kind], key=lambda row: row["label"].lower())}
+            for kind in kind_order
+            if kind in by_kind
+        ]
+        sorted_groups.extend(
+            {"kind": kind, "items": sorted(items, key=lambda row: row["label"].lower())}
+            for kind, items in sorted(by_kind.items())
+            if kind not in kind_order
+        )
+        tag_cards.append({"tag": tag, "count": len(grouped.get(tag.id, [])), "groups": sorted_groups})
+    return render(request, "tags.html", {"tags": tags, "grouped": grouped, "tag_cards": tag_cards}, user=user)
 
 
 @app.post("/ports/add")
@@ -3670,7 +3827,34 @@ def notes_page(
         like = f"%{q}%"
         query = query.filter(or_(models.Note.title.ilike(like), models.Note.body.ilike(like), models.Note.source.ilike(like)))
     notes = query.order_by(models.Note.updated_at.desc()).limit(200).all()
-    return render(request, "notes.html", {"notes": notes, "q": q, "tags": tag_map(db, "quick_note")}, user=user)
+    note_tags = tag_map(db, "quick_note")
+    for note_id, values in tag_map(db, "note").items():
+        note_tags.setdefault(note_id, []).extend(values)
+    return render(request, "notes.html", {"notes": notes, "q": q, "tags": note_tags}, user=user)
+
+
+@app.get("/notes/{note_id}", response_class=HTMLResponse)
+def note_detail_page(
+    request: Request,
+    note_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    note = db.get(models.Note, note_id)
+    if not note:
+        raise HTTPException(404, "Note not found.")
+    target, href = _note_target_label(db, note)
+    return render(
+        request,
+        "note_detail.html",
+        {
+            "note": note,
+            "target": target,
+            "target_href": href,
+            "tag_text": ", ".join(tags_for(db, "quick_note" if note.object_type == "quick_note" else "note", note.id)),
+        },
+        user=user,
+    )
 
 
 @app.post("/notes/{note_id}/tags")
@@ -3687,11 +3871,12 @@ def note_tags_update(
     note = db.get(models.Note, note_id)
     if not note:
         raise HTTPException(404, "Note not found.")
-    set_tags(db, note.object_type, note.id, tags)
-    db.add(models.AuditLog(user_id=user.id, action="note_tags_updated", object_type=note.object_type, object_id=note.id))
+    tag_object_type = "quick_note" if note.object_type == "quick_note" else "note"
+    set_tags(db, tag_object_type, note.id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="note_tags_updated", object_type=tag_object_type, object_id=note.id))
     db.commit()
     flash(request, "Note tags saved.", "success")
-    return redirect("/notes")
+    return redirect(request.headers.get("referer") or "/notes")
 
 
 @app.get("/smart-paste", response_class=HTMLResponse)
@@ -3844,7 +4029,7 @@ async def smart_paste_apply(
     apply_device = bool(form.get("apply_device"))
     has_selected_items = any(
         form.getlist(name)
-        for name in ["services", "ports", "urls", "commands", "credentials", "tokens"]
+        for name in ["services", "ports", "urls", "commands", "credentials", "tokens", "delete_missing_services"]
     ) or bool(form.get("apply_hardware")) or apply_device
     if not has_selected_items:
         record.status = "reviewed"
@@ -3854,7 +4039,7 @@ async def smart_paste_apply(
         return redirect("/smart-paste")
     device_bound_selected = any(
         form.getlist(name)
-        for name in ["services", "ports", "urls", "credentials", "service_credentials", "service_urls"]
+        for name in ["services", "ports", "urls", "credentials", "service_credentials", "service_urls", "delete_missing_services"]
     ) or bool(form.get("apply_hardware"))
     if target_raw == "new" and device_bound_selected and not apply_device:
         flash(
@@ -4194,9 +4379,43 @@ async def smart_paste_apply(
         )
     for index_raw in form.getlist("tokens"):
         _create_token_credential_from_import(db, user, form, parsed, str(index_raw), record, device)
+    deleted_missing_services = 0
+    for service_id_raw in form.getlist("delete_missing_services"):
+        if not str(service_id_raw).isdigit():
+            continue
+        service = db.get(models.Service, int(service_id_raw))
+        if not service or service.device_id != device.id:
+            continue
+        details = {
+            "source": f"smart_paste:{record.id}",
+            "reason": "not_seen_in_latest_docker_paste",
+            "name": service.name,
+            "credentials": len(service.credentials),
+            "ports": len(service.ports),
+            "urls": len(service.urls),
+        }
+        _delete_service_tree(db, service)
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="service_deleted",
+                object_type="service",
+                object_id=int(service_id_raw),
+                details_json=details,
+            )
+        )
+        deleted_missing_services += 1
     record.status = "applied"
     merge_tags(db, "device", device.id, _infer_tags_for_device(device))
-    db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id))
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="smart_paste_applied",
+            object_type="import",
+            object_id=record.id,
+            details_json={"deleted_missing_services": deleted_missing_services} if deleted_missing_services else {},
+        )
+    )
     db.commit()
     flash(request, f"Smart Paste applied to {device.name}. Original text was preserved as a note.", "success")
     return redirect(f"/devices/{device.id}")
@@ -4249,7 +4468,6 @@ def suggestions_page(
         {
             "suggestions": visible_suggestions(db),
             "tag_ideas": TAG_IDEAS,
-            "roadmap_ideas": ROADMAP_IDEAS,
             "fill_candidates": fill_candidates[:40],
         },
         user=user,

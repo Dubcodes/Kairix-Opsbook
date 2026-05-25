@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}{{ note.title or "Note" }} · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="page-head">
+  <div>
+    <p class="eyebrow">Saved note</p>
+    <h1>{{ note.title or "Note" }}</h1>
+    <p>
+      {{ note.source }} · {{ note.updated_at|dt }}
+      {% if target_href %} · <a href="{{ target_href }}">{{ target }}</a>{% elif target %} · {{ target }}{% endif %}
+    </p>
+  </div>
+  <a class="button secondary" href="/notes">Back to Notes</a>
+</section>
+
+<section class="panel">
+  <pre>{{ note.body }}</pre>
+  <div class="form-actions">
+    {% if note.object_type == "quick_note" %}
+      <form method="post" action="/smart-paste">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input type="hidden" name="source_type" value="quick_note">
+        <textarea name="raw_text" hidden>{{ note.body }}</textarea>
+        <button class="secondary" type="submit">Bring to Smart Paste</button>
+      </form>
+    {% endif %}
+    <form method="post" action="/delete/note/{{ note.id }}" data-confirm-delete="Delete this note?">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <button class="ghost" type="submit">Delete</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>Tags</h2>
+  <form method="post" action="/notes/{{ note.id }}/tags" class="inline-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input name="tags" value="{{ tag_text }}" placeholder="docker, later, moxxie" spellcheck="true">
+    <button type="submit">Save Tags</button>
+  </form>
+</section>
+{% endblock %}

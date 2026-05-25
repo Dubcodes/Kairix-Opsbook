@@ -12,36 +12,18 @@
   <input type="search" name="q" value="{{ q }}" placeholder="Search notes..." spellcheck="true">
   <button type="submit">Search</button>
 </form>
-<section class="list">
+<section class="note-grid">
   {% for note in notes %}
-    <article class="note-block">
-      <div class="section-title">
-        <div>
-          <strong>{{ note.title or "Note" }}</strong>
-          <small>{{ note.source }} · {{ note.updated_at|dt }}</small>
-          {% if note.object_type == "quick_note" %}
-            <div class="tags">{% for tag in tags.get(note.id, []) %}<span>{{ tag }}</span>{% endfor %}</div>
-            <form method="post" action="/notes/{{ note.id }}/tags" class="inline-mini">
-              <input type="hidden" name="csrf" value="{{ csrf }}">
-              <input name="tags" value="{{ tags.get(note.id, [])|join(', ') }}" placeholder="tags" spellcheck="true">
-              <button class="ghost" type="submit">Save Tags</button>
-            </form>
-          {% endif %}
-        </div>
-        <form method="post" action="/delete/note/{{ note.id }}" data-confirm-delete="Delete this note?">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <button class="ghost" type="submit">Delete</button>
-        </form>
+    <article class="note-card clickable-card" data-card-href="/notes/{{ note.id }}">
+      <div class="note-card-head">
+        <strong>{{ note.title or "Note" }}</strong>
+        <small>{{ note.updated_at|dt }}</small>
       </div>
-      <pre>{{ note.body }}</pre>
-      {% if note.object_type == "quick_note" %}
-        <form method="post" action="/smart-paste" class="form-actions">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <input type="hidden" name="source_type" value="quick_note">
-          <textarea name="raw_text" hidden>{{ note.body }}</textarea>
-          <button class="secondary" type="submit">Bring to Smart Paste</button>
-        </form>
-      {% endif %}
+      <p>{{ note.body[:260] }}{% if note.body|length > 260 %}...{% endif %}</p>
+      <div class="note-card-foot">
+        <small>{{ note.source }}</small>
+        <div class="tags">{% for tag in tags.get(note.id, []) %}<span>{{ tag }}</span>{% endfor %}</div>
+      </div>
     </article>
   {% else %}
     <p class="empty">No notes yet.</p>

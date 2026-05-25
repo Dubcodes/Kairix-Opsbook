@@ -105,6 +105,26 @@
         </div>
       {% else %}<p class="empty">No services detected.</p>{% endfor %}
     </section>
+    {% if parsed.missing_services %}
+      <section class="span-2">
+        <h2>Not Seen In Latest Docker Paste</h2>
+        <p class="muted">These existing Opsbook services were not present in the pasted Docker container list. Leave unchecked unless you know they were removed.</p>
+        {% for item in parsed.missing_services %}
+          <div class="review-item missing-review">
+            <label class="check-row">
+              <input type="checkbox" name="delete_missing_services" value="{{ item.id }}">
+              Suggest delete <small>not selected</small>
+              {% if item.credential_count %}<small class="inline-note">{{ item.credential_count }} linked credential{% if item.credential_count != 1 %}s{% endif %}</small>{% endif %}
+            </label>
+            <div>
+              <strong>{{ item.name }}</strong>
+              <span>{{ item.group }}{% if item.compose_path %} · {{ item.compose_path }}{% endif %}</span>
+              {% if item.port_count or item.url_count %}<small>{{ item.port_count }} port(s) · {{ item.url_count }} URL(s)</small>{% endif %}
+            </div>
+          </div>
+        {% endfor %}
+      </section>
+    {% endif %}
     <section>
       <h2>Loose Ports</h2>
       <p class="muted">These were detected as listening ports but were not matched to a Docker service.</p>

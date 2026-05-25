@@ -279,6 +279,29 @@
   });
   document.addEventListener("scroll", removeTooltip, true);
   document.addEventListener("submit", (event) => {
+    const favoriteForm = event.target.closest("[data-favorite-form]");
+    if (favoriteForm) {
+      event.preventDefault();
+      const button = favoriteForm.querySelector(".favorite-star");
+      const formData = new FormData(favoriteForm);
+      const nextActive = formData.get("action") === "show";
+      fetch(favoriteForm.action, {
+        method: "POST",
+        body: formData,
+        credentials: "same-origin"
+      })
+        .then((response) => {
+          if (!response.ok) throw new Error("Favorite update failed");
+          if (button) {
+            button.classList.toggle("active", nextActive);
+            button.value = nextActive ? "hide" : "show";
+            button.setAttribute("title", nextActive ? "Remove from favorites" : "Add to favorites");
+            button.setAttribute("aria-label", nextActive ? "Remove from favorites" : "Add to favorites");
+          }
+        })
+        .catch(() => window.alert("Favorite update failed."));
+      return;
+    }
     const form = event.target.closest("[data-confirm-delete]");
     if (!form) return;
     const message = form.getAttribute("data-confirm-delete") || "Delete this item?";

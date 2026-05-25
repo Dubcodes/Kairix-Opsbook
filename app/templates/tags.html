@@ -7,22 +7,35 @@
     <h1>Tags</h1>
   </div>
 </section>
+
 <section class="panel">
-  <div class="list">
-    {% for tag in tags %}
-      <details class="list-row static tag-list-row">
+  <div class="section-title">
+    <div>
+      <h2>Tag Index</h2>
+      <p class="muted">Open a tag to see the devices, services, credentials, commands, ports, URLs, and notes using it.</p>
+    </div>
+  </div>
+  <div class="tag-index">
+    {% for card in tag_cards %}
+      <details class="tag-section">
         <summary>
-          <strong>#{{ tag.name }}</strong>
-          <span>{{ grouped.get(tag.id, [])|length }} linked item(s)</span>
+          <span><strong>#{{ card.tag.name }}</strong><small>{{ card.count }} linked item{% if card.count != 1 %}s{% endif %}</small></span>
         </summary>
-        <div class="list compact">
-          {% for link in grouped.get(tag.id, []) %}
-            <a class="list-row" href="{{ link.href }}"><strong>{{ link.kind }}</strong><span>{{ link.label }}</span></a>
+        <div class="tag-section-body">
+          {% for group in card.groups %}
+            <div class="tag-kind-group">
+              <h3>{{ group.kind }}</h3>
+              <div class="list compact">
+                {% for item in group.items %}
+                  <a class="list-row" href="{{ item.href }}"><strong>{{ item.label }}</strong><span>{{ group.kind }}</span></a>
+                {% endfor %}
+              </div>
+            </div>
           {% endfor %}
         </div>
       </details>
     {% else %}
-      <p class="empty">No used tags yet. Tags will appear after you attach them to devices, services, credentials, commands, ports, or notes.</p>
+      <p class="empty">No used tags yet. Tags will appear after you attach them to devices, services, credentials, commands, ports, URLs, or notes.</p>
     {% endfor %}
   </div>
 </section>

@@ -551,6 +551,37 @@ code {
   padding: 12px;
 }
 .note-block small { display: block; color: var(--muted); margin: 3px 0 8px; }
+.note-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+.note-card {
+  min-height: 150px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  background: var(--surface);
+  color: var(--ink);
+}
+.note-card:hover { border-color: var(--accent); }
+.note-card-head,
+.note-card-foot {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+.note-card p {
+  margin: 0;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.note-card small { color: var(--muted); }
 
 .command-grid {
   display: grid;
@@ -620,6 +651,10 @@ code {
   padding: 9px;
   background: var(--surface-soft);
   margin-bottom: 8px;
+}
+.missing-review {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--line));
+  background: color-mix(in srgb, var(--red) 8%, var(--surface-soft));
 }
 
 .nested-review {
@@ -973,6 +1008,63 @@ input[type="color"] {
   gap: 6px;
   border-top: 1px solid var(--line);
   padding: 7px;
+}
+
+.tag-index {
+  display: grid;
+  gap: 8px;
+}
+
+.tag-section {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+  overflow: hidden;
+}
+
+.tag-section > summary {
+  cursor: pointer;
+  padding: 10px 12px;
+}
+
+.tag-section > summary::marker,
+.history-row > summary::marker {
+  content: "";
+}
+
+.tag-section small,
+.history-row small {
+  display: block;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.tag-section-body {
+  display: grid;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding: 10px;
+  background: var(--surface);
+}
+
+.tag-kind-group h3 {
+  margin-top: 0;
+  color: var(--muted);
+  font-size: 13px;
+  text-transform: uppercase;
+}
+
+.history-row {
+  display: block;
+}
+
+.history-row > summary {
+  cursor: pointer;
+}
+
+.compact-details {
+  grid-template-columns: max-content 1fr;
+  margin-top: 10px;
 }
 
 .service-summary {
