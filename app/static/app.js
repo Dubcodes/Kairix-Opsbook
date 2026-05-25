@@ -63,6 +63,21 @@
     }, 750);
   }
 
+  function hydrateLocalTimes() {
+    document.querySelectorAll("time[data-utc]").forEach((node) => {
+      const value = node.getAttribute("data-utc");
+      if (!value) return;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return;
+      const format = node.getAttribute("data-format");
+      const options = format === "time"
+        ? {hour: "2-digit", minute: "2-digit"}
+        : {year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"};
+      node.textContent = new Intl.DateTimeFormat(undefined, options).format(date);
+      node.setAttribute("title", date.toLocaleString());
+    });
+  }
+
   function findCopySource(button) {
     const mode = button.getAttribute("data-copy-target");
     if (mode === "prev") {
@@ -266,6 +281,7 @@
     window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", setThemeButtonLabel);
   }
   setThemeButtonLabel();
+  hydrateLocalTimes();
 
   const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
   if (timeoutMeta) {

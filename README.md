@@ -18,6 +18,7 @@ It is designed to be fast like notes, structured like inventory, and safe like a
 - Copy-friendly command library with starter Linux, Docker, Docker Compose, Git, networking, and recovery commands.
 - Smart Paste import with review-before-apply for notes, SSH output, Docker output, URLs, ports, paths, commands, service login blocks, and GitHub token pages.
 - Service validation checks documented URLs and ports with a simple TCP connection and records the last result.
+- Background device pings with browser-local time display, plus optional login-time device/service refresh checks.
 - Suggestions for missing backup notes, duplicate ports, low-security admin credentials, and missing purpose fields.
 - Emergency encrypted backup export, human-readable runbook HTML export, and encrypted import.
 - Standby/read-only instance mode for backup servers.
@@ -101,6 +102,8 @@ If you paste Cloudflare or TryCloudflare logs, any detected URLs are reviewed li
 Device pages include a **Validate** button near the services list. It checks each service's documented local/public URL and linked ports with a TCP connection, then shows a small green/red/grey dot next to the service URL.
 
 This is not a full uptime monitor and it does not run commands on the server. It is a quick "is something listening here?" check to catch stale URLs, wrong ports, or services that are probably down.
+
+Settings can also run device pings and service validation in the background after login. Times shown in the browser are converted to the viewer's local timezone.
 
 ## Emergency Export And Import
 

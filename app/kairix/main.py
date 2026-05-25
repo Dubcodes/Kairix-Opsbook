@@ -44,6 +44,7 @@ from .seeds import seed_initial_data
 from .suggestions import TAG_IDEAS, dismiss_suggestion, visible_suggestions
 from .utils import (
     format_dt,
+    iso_dt,
     merge_tags,
     render_template_vars,
     set_tags,
@@ -79,6 +80,7 @@ async def security_headers(request: Request, call_next):
 
 templates = Jinja2Templates(directory="templates")
 templates.env.filters["dt"] = format_dt
+templates.env.filters["iso"] = iso_dt
 templates.env.globals["render_vars"] = render_template_vars
 templates.env.globals["settings"] = settings
 
@@ -117,6 +119,8 @@ THEME_DEFAULTS = {
     "compact_forms": "on",
     "session_timeout_minutes": "20",
     "ping_interval_minutes": "60",
+    "ping_on_login": "on",
+    "validate_services_on_login": "on",
     "ping_failures_before_warning": "3",
     "ping_green_ms": "3",
     "ping_orange_ms": "10",
@@ -133,13 +137,17 @@ def startup() -> None:
         seed_initial_data(db)
         _normalize_unknown_states(db)
         db.commit()
-    if not PING_THREAD_STARTED:
+    if not PING_THREAD_STARTED and not settings.read_only:
         PING_THREAD_STARTED = True
         threading.Thread(target=_ping_loop, name="kairix-ping-loop", daemon=True).start()
 
 
 def redirect(url: str) -> RedirectResponse:
     return RedirectResponse(url, status_code=status.HTTP_303_SEE_OTHER)
+
+
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def flash(request: Request, message: str, level: str = "info") -> None:
@@ -207,6 +215,13 @@ def int_setting(db: Session, key: str, default: int, *, minimum: int = 1, maximu
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(maximum, value))
+
+
+def bool_setting(db: Session, key: str, default: bool = False) -> bool:
+    raw = get_app_settings(db).get(key)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _normalize_unknown_states(db: Session) -> None:
@@ -386,9 +401,20 @@ def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
     latest = _latest_audit(db, "device", device.id, "device_ping")
     interval = int_setting(db, "ping_interval_minutes", 60, minimum=5, maximum=999)
     if not latest:
-        return {"state": "unknown", "label": "No ping yet", "latency_ms": None, "next_at": "Not scheduled yet"}
+        return {
+            "state": "unknown",
+            "label": "No ping yet",
+            "latency_ms": None,
+            "next_at": "Not scheduled yet",
+            "next_at_iso": "",
+            "last_at": "",
+            "last_at_iso": "",
+            "overdue": False,
+        }
     details = latest.details_json or {}
-    next_at = latest.created_at + timedelta(minutes=interval)
+    latest_at = _utc(latest.created_at)
+    next_at = latest_at + timedelta(minutes=interval)
+    overdue = next_at <= now_utc()
     if details.get("ok"):
         latency = float(details.get("latency_ms") or 0)
         green = int_setting(db, "ping_green_ms", 3, minimum=1, maximum=999)
@@ -398,7 +424,16 @@ def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
     else:
         state = "down"
         label = f"No reply ({int(details.get('failures') or 1)} failed check(s))"
-    return {"state": state, "label": label, "latency_ms": details.get("latency_ms"), "next_at": format_dt(next_at)}
+    return {
+        "state": state,
+        "label": label,
+        "latency_ms": details.get("latency_ms"),
+        "next_at": "due now" if overdue else format_dt(next_at),
+        "next_at_iso": iso_dt(next_at),
+        "last_at": format_dt(latest_at),
+        "last_at_iso": iso_dt(latest_at),
+        "overdue": overdue,
+    }
 
 
 def _service_validation_status(db: Session, service: models.Service) -> dict[str, str]:
@@ -486,9 +521,10 @@ def _dashboard_ping_overview(db: Session) -> list[dict[str, str]]:
             items.append({"name": device.name, "state": "unknown", "label": "no ping"})
             continue
         details = latest.details_json or {}
-        if details.get("ok") and latest.created_at >= cutoff:
+        latest_at = _utc(latest.created_at)
+        if details.get("ok") and latest_at >= cutoff:
             status = _device_ping_status(db, device)
-            items.append({"name": device.name, "state": status["state"], "label": latest.created_at.strftime("%H:%M")})
+            items.append({"name": device.name, "state": status["state"], "label": format_dt(latest_at), "when_iso": iso_dt(latest_at)})
         elif details.get("ok"):
             items.append({"name": device.name, "state": "unknown", "label": "older than 12h"})
         else:
@@ -528,6 +564,9 @@ def _ping_device(db: Session, device: models.Device) -> dict[str, Any]:
 def _ping_loop() -> None:
     while True:
         try:
+            if settings.read_only:
+                time.sleep(60)
+                continue
             with SessionLocal() as db:
                 interval = int_setting(db, "ping_interval_minutes", 60, minimum=5, maximum=999)
                 cutoff = now_utc() - timedelta(minutes=interval)
@@ -536,13 +575,35 @@ def _ping_loop() -> None:
                     if not (device.primary_ip or device.hostname):
                         continue
                     latest = _latest_audit(db, "device", device.id, "device_ping")
-                    if latest and latest.created_at > cutoff:
+                    if latest and _utc(latest.created_at) > cutoff:
                         continue
                     _ping_device(db, device)
                 db.commit()
         except Exception:
             pass
         time.sleep(60)
+
+
+def _run_login_checks(user_id: int | None = None) -> None:
+    if settings.read_only:
+        return
+    try:
+        with SessionLocal() as db:
+            if bool_setting(db, "ping_on_login", True):
+                for device in _device_order_query(db).all():
+                    if device.primary_ip or device.hostname:
+                        _ping_device(db, device)
+                db.commit()
+            if bool_setting(db, "validate_services_on_login", True):
+                for service in _service_order_query(db).all():
+                    _validate_service(db, service, user_id)
+                db.commit()
+    except Exception:
+        pass
+
+
+def _start_login_checks(user_id: int | None = None) -> None:
+    threading.Thread(target=_run_login_checks, args=(user_id,), name="kairix-login-checks", daemon=True).start()
 
 
 IMPORT_MODELS = {
@@ -938,11 +999,26 @@ def _create_token_credential_from_import(
 def _quick_credentials_for_device(db: Session, device: models.Device) -> list[models.Credential]:
     order = _id_list(get_app_settings(db).get(f"quick_credential_order:{device.id}", ""))
     hidden = set(_id_list(get_app_settings(db).get(f"quick_credential_hidden:{device.id}", "")))
-    credentials = [credential for credential in device.credentials if credential.id not in hidden]
+    if not order:
+        return []
+    credentials = [credential for credential in device.credentials if credential.id in order and credential.id not in hidden]
     by_id = {credential.id: credential for credential in credentials}
     ordered = [by_id.pop(credential_id) for credential_id in order if credential_id in by_id]
     ordered.extend(sorted(by_id.values(), key=lambda item: item.label.lower()))
     return ordered
+
+
+def _favorite_credential_ids_for_device(db: Session, device_id: int) -> set[int]:
+    order = set(_id_list(get_app_settings(db).get(f"quick_credential_order:{device_id}", "")))
+    hidden = set(_id_list(get_app_settings(db).get(f"quick_credential_hidden:{device_id}", "")))
+    return order - hidden
+
+
+def _favorite_credential_ids(db: Session) -> set[int]:
+    ids: set[int] = set()
+    for device in db.query(models.Device).all():
+        ids.update(_favorite_credential_ids_for_device(db, device.id))
+    return ids
 
 
 def _delete_service_tree(db: Session, service: models.Service) -> None:
@@ -1415,6 +1491,7 @@ def login(
     request.session["last_seen"] = now_utc().isoformat()
     request.session["session_timeout_minutes"] = int_setting(db, "session_timeout_minutes", 20, minimum=1, maximum=999)
     csrf_token(request)
+    _start_login_checks(user.id)
     flash(request, f"Welcome back, {user.display_name or user.username}.", "success")
     return redirect("/")
 
@@ -1455,6 +1532,7 @@ def login_2fa(
     request.session["last_seen"] = now_utc().isoformat()
     request.session["session_timeout_minutes"] = int_setting(db, "session_timeout_minutes", 20, minimum=1, maximum=999)
     csrf_token(request)
+    _start_login_checks(user.id)
     flash(request, f"Welcome back, {user.display_name or user.username}.", "success")
     return redirect("/")
 
@@ -1776,10 +1854,8 @@ def device_quick_credentials_update(
     order_key = f"quick_credential_order:{device.id}"
     hidden_key = f"quick_credential_hidden:{device.id}"
     current = _id_list(get_app_settings(db).get(order_key, ""))
-    all_ids = [item.id for item in _quick_credentials_for_device(db, device)]
-    for existing_id in all_ids:
-        if existing_id not in current:
-            current.append(existing_id)
+    if action == "show" and credential.id not in current:
+        current.append(credential.id)
     if credential.id not in current:
         current.append(credential.id)
     index = current.index(credential.id)
@@ -1790,6 +1866,7 @@ def device_quick_credentials_update(
     elif action == "hide":
         hidden = set(_id_list(get_app_settings(db).get(hidden_key, "")))
         hidden.add(credential.id)
+        current = [item for item in current if item != credential.id]
         set_app_setting(db, hidden_key, ",".join(str(item) for item in sorted(hidden)))
     elif action == "show":
         hidden = set(_id_list(get_app_settings(db).get(hidden_key, "")))
@@ -1806,7 +1883,7 @@ def device_quick_credentials_update(
         )
     )
     db.commit()
-    return redirect(f"/devices/{device.id}")
+    return redirect(request.headers.get("referer") or f"/devices/{device.id}")
 
 
 @app.get("/devices/{device_id}/edit", response_class=HTMLResponse)
@@ -2223,7 +2300,13 @@ def credentials_page(
     return render(
         request,
         "credentials.html",
-        {"credentials": credentials, "credential_groups": groups, "q": q, "tags": tag_map(db, "credential")},
+        {
+            "credentials": credentials,
+            "credential_groups": groups,
+            "q": q,
+            "tags": tag_map(db, "credential"),
+            "favorite_ids": _favorite_credential_ids(db),
+        },
         user=user,
     )
 
@@ -2267,6 +2350,12 @@ def credential_new_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     selected_service = db.get(models.Service, service_id) if service_id else None
+    selected_device = db.get(models.Device, device_id) if device_id else selected_service.device if selected_service else None
+    inherited_tags = []
+    if selected_device:
+        inherited_tags.extend(tags_for(db, "device", selected_device.id))
+    if selected_service:
+        inherited_tags.extend(tags_for(db, "service", selected_service.id))
     return render(
         request,
         "credential_form.html",
@@ -2274,11 +2363,12 @@ def credential_new_page(
             "credential": None,
             "devices": _device_order_query(db).all(),
             "services": _service_order_query(db).all(),
-            "device_id": device_id,
-            "service_id": service_id,
+            "device_id": selected_device.id if selected_device else device_id,
+            "service_id": selected_service.id if selected_service else service_id,
             "service_name_prefill": selected_service.name if selected_service else "",
+            "login_url_prefill": (selected_service.local_url or selected_service.public_url) if selected_service else "",
             "secret_type_prefill": secret_type,
-            "tag_text": "",
+            "tag_text": ", ".join(dict.fromkeys(inherited_tags)),
         },
         user=user,
     )
@@ -2345,6 +2435,10 @@ def credential_create(
     ):
         flash(request, "That credential already appears to exist. Edit the existing one if it needs changes.", "warning")
         return redirect("/credentials")
+    resolved_service = db.get(models.Service, resolved_service_id) if resolved_service_id else None
+    resolved_device = db.get(models.Device, resolved_device_id) if resolved_device_id else None
+    if not login_url and resolved_service:
+        login_url = resolved_service.local_url or resolved_service.public_url or ""
     credential = models.Credential(
         label=label.strip(),
         username=username.strip(),
@@ -2360,7 +2454,12 @@ def credential_create(
     )
     db.add(credential)
     db.flush()
-    tag_text = ", ".join(filter(None, [tags, _auto_tags_for_label(label)]))
+    inherited_tags: list[str] = []
+    if resolved_device:
+        inherited_tags.extend(tags_for(db, "device", resolved_device.id))
+    if resolved_service:
+        inherited_tags.extend(tags_for(db, "service", resolved_service.id))
+    tag_text = ", ".join(filter(None, [tags, ", ".join(inherited_tags), _auto_tags_for_label(f"{label} {resolved_service.name if resolved_service else ''}")]))
     set_tags(db, "credential", credential.id, tag_text)
     db.add(models.AuditLog(user_id=user.id, action="credential_created", object_type="credential", object_id=credential.id))
     db.commit()
@@ -3740,6 +3839,8 @@ def suggestions_dismiss(
     db.commit()
     flash(request, "Suggestion dismissed.", "success")
     referer = request.headers.get("referer") or "/suggestions"
+    if "/suggestions" in referer and "#" not in referer:
+        referer = f"{referer}#active-suggestions"
     return redirect(referer)
 
 
@@ -3790,7 +3891,7 @@ async def settings_save(
         if key == "theme_mode":
             continue
         value = str(form.get(key, THEME_DEFAULTS[key])).strip()
-        if key == "compact_forms":
+        if key in {"compact_forms", "ping_on_login", "validate_services_on_login"}:
             value = "on" if form.get(key) == "on" else "off"
         if key == "dashboard_recent_limit":
             try:

@@ -558,6 +558,16 @@ code {
   cursor: help;
 }
 
+.favorite-star {
+  color: var(--muted);
+}
+
+.favorite-star.active {
+  color: #f5b301;
+  border-color: color-mix(in srgb, #f5b301 50%, var(--line));
+  background: color-mix(in srgb, #f5b301 12%, transparent);
+}
+
 .status-dot {
   display: inline-block;
   width: 8px;

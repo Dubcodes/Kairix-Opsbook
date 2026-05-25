@@ -60,7 +60,44 @@ def dismiss_suggestion(db: Session, suggestion_id: str) -> None:
 
 def visible_suggestions(db: Session) -> list[dict[str, str]]:
     dismissed = dismissed_suggestion_ids(db)
-    return [item for item in build_suggestions(db) if item["id"] not in dismissed]
+    return _group_repeated_suggestions(
+        [item for item in build_suggestions(db) if item["id"] not in dismissed],
+        dismissed,
+    )
+
+
+def _group_repeated_suggestions(items: list[dict[str, str]], dismissed: set[str]) -> list[dict[str, str]]:
+    grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
+    passthrough: list[dict[str, str]] = []
+    for item in items:
+        group_id = item.get("group_id", "")
+        if group_id:
+            grouped[group_id].append(item)
+        else:
+            passthrough.append(item)
+    result = list(passthrough)
+    severity_rank = {"info": 0, "warning": 1, "danger": 2}
+    for group_id, members in grouped.items():
+        if group_id in dismissed:
+            continue
+        if len(members) < 4:
+            result.extend(members)
+            continue
+        names = [member.get("subject", member["title"]) for member in members]
+        sample = ", ".join(names[:8])
+        if len(names) > 8:
+            sample += f", and {len(names) - 8} more"
+        result.append(
+            {
+                "id": group_id,
+                "severity": max((member["severity"] for member in members), key=lambda item: severity_rank.get(item, 0)),
+                "title": members[0].get("group_title", f"{len(members)} related suggestions"),
+                "body": f"{sample}.",
+                "target": members[0].get("group_target", members[0]["target"]),
+                "count": str(len(members)),
+            }
+        )
+    return sorted(result, key=lambda item: (severity_rank.get(item["severity"], 0) * -1, item["title"].lower()))
 
 
 def build_suggestions(db: Session) -> list[dict[str, str]]:
@@ -166,6 +203,10 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "title": f"{service.name} has no backup notes",
                     "body": "Document what data matters, where it is stored, and the restore command.",
                     "target": f"/services/{service.id}",
+                    "subject": service.name,
+                    "group_id": f"group:device:{service.device_id}:missing-backup",
+                    "group_title": f"{service.device.name}: services missing backup notes",
+                    "group_target": f"/devices/{service.device_id}?tab=services",
                 }
             )
         if not service.purpose.strip():
@@ -176,6 +217,10 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "title": f"{service.name} is missing a purpose",
                     "body": "A one-line purpose makes search and emergency runbooks much easier.",
                     "target": f"/services/{service.id}",
+                    "subject": service.name,
+                    "group_id": f"group:device:{service.device_id}:missing-purpose",
+                    "group_title": f"{service.device.name}: services missing a purpose",
+                    "group_target": f"/devices/{service.device_id}?tab=services",
                 }
             )
         if any(word in (service.status_manual or "").lower() for word in ["needs", "attention", "broken", "offline"]):

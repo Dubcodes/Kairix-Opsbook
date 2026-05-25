@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 from sqlalchemy import select
@@ -103,6 +103,14 @@ def format_dt(value: datetime | None) -> str:
     if not value:
         return "Never"
     return value.strftime("%Y-%m-%d %H:%M")
+
+
+def iso_dt(value: datetime | None) -> str:
+    if not value:
+        return ""
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat()
 
 
 def render_template_vars(template: str, *, device: models.Device | None = None, service: models.Service | None = None) -> str:

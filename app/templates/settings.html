@@ -30,6 +30,14 @@
     <input name="ping_interval_minutes" type="number" min="5" max="999" value="{{ app_settings.ping_interval_minutes or '60' }}">
     <small>Devices with an IP/hostname are checked in the background.</small>
   </label>
+  <label class="check-row">
+    <input type="checkbox" name="ping_on_login" {% if app_settings.ping_on_login != "off" %}checked{% endif %}>
+    Ping devices after login <span class="hint" title="Runs in the background after a successful login so stale ping data gets refreshed without slowing the login page.">?</span>
+  </label>
+  <label class="check-row">
+    <input type="checkbox" name="validate_services_on_login" {% if app_settings.validate_services_on_login != "off" %}checked{% endif %}>
+    Validate services after login <span class="hint" title="Runs a background TCP check against documented service URLs and ports after login. Turn this off if you have many slow or remote services.">?</span>
+  </label>
   <label>Ping failures before warning
     <input name="ping_failures_before_warning" type="number" min="1" max="10" value="{{ app_settings.ping_failures_before_warning or '3' }}">
   </label>

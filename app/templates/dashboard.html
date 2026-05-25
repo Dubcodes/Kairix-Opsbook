@@ -30,6 +30,7 @@
         <article class="list-row static severity-{{ suggestion.severity }}">
           <a href="{{ suggestion.target }}">
             <strong>{{ suggestion.title }}</strong>
+            {% if suggestion.count %}<small>{{ suggestion.count }} items grouped</small>{% endif %}
             <span>{{ suggestion.body }}</span>
           </a>
           <form method="post" action="/suggestions/dismiss">
@@ -49,7 +50,7 @@
     <div>
       {% for item in ping_overview %}
         <a href="/devices?q={{ item.name }}" class="ping-pill ping-pill-{{ item.state }}">
-          <span class="ping-dot ping-{{ item.state }}"></span>{{ item.name }} <small>{{ item.label }}</small>
+          <span class="ping-dot ping-{{ item.state }}"></span>{{ item.name }} <small>{% if item.when_iso %}<time data-utc="{{ item.when_iso }}" data-format="time">{{ item.label }}</time>{% else %}{{ item.label }}{% endif %}</small>
         </a>
       {% endfor %}
     </div>

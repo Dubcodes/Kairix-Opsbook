@@ -8,7 +8,7 @@
   </div>
 </section>
 
-<details class="panel collapsible-panel" open>
+<details class="panel collapsible-panel" open id="active-suggestions">
   <summary>
     <span><strong>Active Warnings & Suggestions</strong><small>{{ suggestions|length }} item(s)</small></span>
   </summary>
@@ -17,6 +17,7 @@
     <article class="device-row static severity-{{ suggestion.severity }}">
       <a href="{{ suggestion.target }}">
         <strong>{{ suggestion.title }}</strong>
+        {% if suggestion.count %}<small>{{ suggestion.count }} items grouped</small>{% endif %}
         <span>{{ suggestion.body }}</span>
       </a>
       <form method="post" action="/suggestions/dismiss">
