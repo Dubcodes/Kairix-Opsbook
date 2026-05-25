@@ -272,7 +272,7 @@
     }
   });
   document.addEventListener("pointerover", (event) => {
-    const target = event.target.closest("button[title], a[title], .hint[title]");
+    const target = event.target.closest("button[title], a[title], .hint[title], .ping-dot[title], .status-dot[title]");
     if (target) scheduleTooltip(target);
   });
   document.addEventListener("pointerout", (event) => {

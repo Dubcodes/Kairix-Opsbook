@@ -27,10 +27,11 @@
           <input type="hidden" name="action" value="{{ suggestion.action }}">
           <input type="hidden" name="object_type" value="{{ suggestion.object_type }}">
           <input type="hidden" name="object_id" value="{{ suggestion.object_id }}">
+          {% if suggestion.mute_event_id %}<input type="hidden" name="mute_event_id" value="{{ suggestion.mute_event_id }}">{% endif %}
           {% if suggestion.placeholder %}
             <input name="value" value="" placeholder="{{ suggestion.placeholder }}" spellcheck="true">
           {% endif %}
-          <button class="secondary" type="submit">{% if suggestion.placeholder %}Apply{% else %}Clean Up{% endif %}</button>
+          <button class="secondary" type="submit">{% if suggestion.action == 'mute-ping' %}Scheduled{% elif suggestion.placeholder %}Apply{% else %}Clean Up{% endif %}</button>
         </form>
       {% endif %}
       <form method="post" action="/suggestions/dismiss">
@@ -42,6 +43,24 @@
   {% else %}
     <p class="empty">No suggestions yet. That usually means the opsbook is either clean or still freshly empty.</p>
   {% endfor %}
+  </section>
+</details>
+
+<details class="panel collapsible-panel">
+  <summary>
+    <span><strong>Quick Fill</strong><small>Fields worth filling when you have a few minutes</small></span>
+  </summary>
+  <section class="list compact">
+    {% for item in fill_candidates %}
+      <a class="list-row" href="{{ item.href }}">
+        <div>
+          <strong>{{ item.type }} · {{ item.name }}</strong>
+          <span>Missing: {{ item.missing|join(', ') }}{% if item.suggested %} · suggested: {{ item.suggested }}{% endif %}</span>
+        </div>
+      </a>
+    {% else %}
+      <p class="empty">Nothing obvious needs filling right now.</p>
+    {% endfor %}
   </section>
 </details>
 

@@ -1,0 +1,230 @@
+Kairix Opsbook demo Smart Paste examples
+========================================
+
+This file contains fake demo data for screenshots, videos, and Smart Paste testing.
+All passwords, tokens, hostnames, URLs, and IPs here are fictional examples.
+
+
+Demo 1 - messy Docker host inventory
+------------------------------------
+
+login as: labadmin
+labadmin@192.168.56.42's password:
+Linux emberdock 6.1.0-48-amd64 #1 SMP Debian 12 x86_64
+
+=== HOST ===
+ Static hostname: emberdock
+       Chassis: desktop
+Operating System: Debian GNU/Linux 12 (bookworm)
+          Kernel: Linux 6.1.0-48-amd64
+ Hardware Vendor: MinisForum
+  Hardware Model: NAB6 Lite
+
+=== CPU ===
+Model name: Intel(R) Core(TM) i5-12450H
+CPU(s): 12
+
+=== MEMORY ===
+               total        used        free      shared  buff/cache   available
+Mem:            31Gi       6.2Gi        14Gi       620Mi        11Gi        24Gi
+Swap:          4.0Gi          0B       4.0Gi
+
+=== DISKS ===
+NAME        SIZE TYPE MOUNTPOINT FSTYPE
+nvme0n1   953.9G disk
+├─nvme0n1p1 512M part /boot/efi vfat
+└─nvme0n1p2 953G part / ext4
+sda        3.6T disk /srv/storage ext4
+
+=== IP ADDRESSES ===
+eno1 UP 192.168.56.42/24
+docker0 UP 172.17.0.1/16
+
+=== DOCKER CONTAINERS ===
+NAMES                 IMAGE                                      STATUS                  PORTS
+portainer             portainer/portainer-ce:latest              Up 9 days                0.0.0.0:9443->9443/tcp, 0.0.0.0:8000->8000/tcp
+homeassistant         ghcr.io/home-assistant/home-assistant:stable Up 2 days              0.0.0.0:8123->8123/tcp
+frigate               ghcr.io/blakeblackshear/frigate:stable     Up 2 days (healthy)      0.0.0.0:5000->5000/tcp, 0.0.0.0:8554->8554/tcp
+mqtt                  eclipse-mosquitto:2                        Up 2 days                0.0.0.0:1883->1883/tcp
+vaultwarden           vaultwarden/server:latest                  Up 9 days (healthy)      0.0.0.0:8230->80/tcp
+immich_server         ghcr.io/immich-app/immich-server:v2        Up 4 days                0.0.0.0:2283->2283/tcp
+immich_postgres       ghcr.io/immich-app/postgres:14             Up 4 days                5432/tcp
+immich_redis          valkey/valkey:8                            Up 4 days                6379/tcp
+
+=== DOCKER COMPOSE PROJECTS ===
+NAME              STATUS       CONFIG FILES
+portainer         running(1)   /srv/docker/compose/portainer/compose.yaml
+homeassistant     running(1)   /srv/docker/compose/homeassistant/compose.yaml
+frigate-stack     running(2)   /srv/docker/compose/frigate/compose.yaml
+vaultwarden       running(1)   /srv/docker/compose/vaultwarden/compose.yaml
+immich            running(3)   /srv/docker/compose/immich/compose.yaml
+
+=== LISTENING PORTS ===
+tcp LISTEN 0 4096 0.0.0.0:22
+tcp LISTEN 0 4096 0.0.0.0:9443
+tcp LISTEN 0 4096 0.0.0.0:8000
+tcp LISTEN 0 4096 0.0.0.0:8123
+tcp LISTEN 0 4096 0.0.0.0:5000
+tcp LISTEN 0 4096 0.0.0.0:8554
+tcp LISTEN 0 4096 0.0.0.0:1883
+tcp LISTEN 0 4096 0.0.0.0:8230
+tcp LISTEN 0 4096 0.0.0.0:2283
+
+
+Demo 2 - Google Keep style rough notes
+--------------------------------------
+
+EmberDock.local
+root
+demo-root-password-CHANGE-ME
+
+labadmin
+demo-labadmin-password-CHANGE-ME
+
+Portainer
+https://192.168.56.42:9443/
+admin
+demo-portainer-password-CHANGE-ME
+
+Home Assistant
+http://192.168.56.42:8123/
+owner
+demo-homeassistant-password-CHANGE-ME
+
+Vaultwarden
+http://192.168.56.42:8230/
+admin token
+demo-vaultwarden-admin-token-CHANGE-ME
+
+Main folders:
+/srv/docker/compose
+/srv/docker/appdata
+/srv/storage/media
+/srv/storage/backups
+
+SMB shares:
+\\emberdock\media
+\\emberdock\backups
+
+Update Docker app:
+cd /srv/docker/compose/SERVICE-NAME
+docker compose pull
+docker compose up -d
+docker compose logs -f
+
+Install low memory protection:
+sudo apt update
+sudo apt install -y earlyoom
+sudo systemctl enable --now earlyoom
+
+
+Demo 3 - work app with one database and multiple temporary tunnels
+------------------------------------------------------------------
+
+People Check-In System - work event app
+Runs on server: PortainServer
+IP: 192.168.56.55
+Stack: people-system
+
+people-app-north
+local port 8090 -> 8000
+temporary URL https://north-demo.trycloudflare.com
+
+people-app-south
+local port 8091 -> 8000
+temporary URL https://south-demo.trycloudflare.com
+
+people-app-central
+local port 8092 -> 8000
+temporary URL https://central-demo.trycloudflare.com
+
+people-db
+postgres:15
+host port 5433
+database user people_app
+database password demo-people-db-password-CHANGE-ME
+
+Admin login:
+https://north-demo.trycloudflare.com/admin
+admin
+demo-people-admin-password-CHANGE-ME
+
+Restart people stack:
+cd /srv/docker/compose/people-system
+docker compose up -d
+docker compose logs -f people-app-north
+
+Backup notes:
+Database dump goes to /srv/storage/backups/people-system
+Restore with pg_restore into people-db.
+
+
+Demo 4 - token/API paste
+------------------------
+
+Settings
+Developer Settings
+Fine-grained personal access tokens
+
+@DemoUser
+Kairix Opsbook demo deploy token
+Never used
+Expires on Sun, Jun 21 2026
+Make sure to copy your personal access token now as you will not be able to see this again.
+
+github_pat_[DEMO_TOKEN_PLACEHOLDER_NOT_A_REAL_TOKEN]
+
+@DemoUser
+Home Assistant long-lived token
+Expires on Tue, Dec 15 2026
+
+home_assistant_demo_token_PLACEHOLDER_NOT_A_REAL_TOKEN
+
+
+Demo 5 - Raspberry Pi media/torrent box notes
+---------------------------------------------
+
+The Pi Docker Torrenting setup - headless Pi OS 64-bit
+
+Pocker
+192.168.56.203
+Raspberry Pi 5
+8GB RAM
+USB SSD mounted at /storage
+
+pi
+demo-pi-password-CHANGE-ME
+
+Docker
+admin
+demo-docker-admin-password-CHANGE-ME
+
+Gluetun VPN
+compose path /srv/docker/compose/gluetun/compose.yaml
+
+Qbittorrent 8080
+http://192.168.56.203:8080/
+admin
+demo-qbittorrent-password-CHANGE-ME
+
+Sonarr http://192.168.56.203:8989/
+admin
+demo-sonarr-password-CHANGE-ME
+
+Radarr http://192.168.56.203:7878/
+admin
+demo-radarr-password-CHANGE-ME
+
+/storage/TV Programs
+/storage/Movies
+/storage/Downloads
+
+Trackside recorder
+live log view
+tail -f /mnt/ssd/trackside_recordings/trackside_ffmpeg.log
+
+view list of available files
+ls -lh /mnt/ssd/trackside_recordings
+
+edit the loop record file
+sudo nano /usr/local/bin/trackside_record_loop.sh

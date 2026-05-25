@@ -7,6 +7,16 @@
     <h1>History</h1>
   </div>
 </section>
+<form class="filter-bar compact-filter" method="get">
+  <select name="kind">
+    <option value="" {% if not kind %}selected{% endif %}>All history</option>
+    <option value="ping" {% if kind == 'ping' %}selected{% endif %}>Pings & validation</option>
+    <option value="credentials" {% if kind == 'credentials' %}selected{% endif %}>Credentials</option>
+    <option value="smart-paste" {% if kind == 'smart-paste' %}selected{% endif %}>Smart Paste</option>
+  </select>
+  <button type="submit">Filter</button>
+  {% if kind %}<a class="button secondary" href="/history">Clear</a>{% endif %}
+</form>
 <section class="panel">
   <div class="list">
     {% for item in logs %}

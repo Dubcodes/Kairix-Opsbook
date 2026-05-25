@@ -58,10 +58,40 @@ def dismiss_suggestion(db: Session, suggestion_id: str) -> None:
         db.add(models.AppSetting(key="dismissed_suggestions", value=value))
 
 
+def muted_ping_failures(db: Session) -> dict[str, str]:
+    row = db.query(models.AppSetting).filter_by(key="muted_ping_failures").first()
+    if not row or not row.value:
+        return {}
+    try:
+        value = json.loads(row.value)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(value, dict):
+        return {}
+    return {str(key): str(item) for key, item in value.items()}
+
+
+def mute_ping_failure(db: Session, suggestion_id: str, event_id: str) -> None:
+    muted = muted_ping_failures(db)
+    muted[suggestion_id] = str(event_id)
+    value = json.dumps(muted, sort_keys=True)
+    row = db.query(models.AppSetting).filter_by(key="muted_ping_failures").first()
+    if row:
+        row.value = value
+    else:
+        db.add(models.AppSetting(key="muted_ping_failures", value=value))
+
+
 def visible_suggestions(db: Session) -> list[dict[str, str]]:
     dismissed = dismissed_suggestion_ids(db)
+    muted = muted_ping_failures(db)
     return _group_repeated_suggestions(
-        [item for item in build_suggestions(db) if item["id"] not in dismissed],
+        [
+            item
+            for item in build_suggestions(db)
+            if item["id"] not in dismissed
+            and not (item.get("mute_event_id") and muted.get(item["id"]) == str(item["mute_event_id"]))
+        ],
         dismissed,
     )
 
@@ -168,6 +198,10 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "title": f"{device.name} has not replied to ping",
                     "body": "Opsbook has seen repeated ping failures. Check power, network, IP address, or whether ping is blocked.",
                     "target": f"/devices/{device.id}",
+                    "action": "mute-ping",
+                    "object_type": "device",
+                    "object_id": str(device.id),
+                    "mute_event_id": str(latest_ping.id),
                 }
             )
     devices_by_ip: dict[str, list[models.Device]] = defaultdict(list)
@@ -210,7 +244,7 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "subject": service.name,
                     "group_id": f"group:device:{service.device_id}:missing-backup",
                     "group_title": f"{service.device.name}: services missing backup notes",
-                    "group_target": f"/devices/{service.device_id}?tab=services",
+                    "group_target": f"/devices/{service.device_id}?tab=services&highlight=missing-backup",
                     "action": "service-backup",
                     "object_type": "service",
                     "object_id": str(service.id),
@@ -228,7 +262,7 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "subject": service.name,
                     "group_id": f"group:device:{service.device_id}:missing-purpose",
                     "group_title": f"{service.device.name}: services missing a purpose",
-                    "group_target": f"/devices/{service.device_id}?tab=services",
+                    "group_target": f"/devices/{service.device_id}?tab=services&highlight=missing-purpose",
                     "action": "service-purpose",
                     "object_type": "service",
                     "object_id": str(service.id),
@@ -255,6 +289,37 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     "target": f"/services/{service.id}",
                 }
             )
+        latest_validation = (
+            db.query(models.AuditLog)
+            .filter(
+                models.AuditLog.object_type == "service",
+                models.AuditLog.object_id == service.id,
+                models.AuditLog.action == "service_validate",
+            )
+            .order_by(models.AuditLog.created_at.desc())
+            .first()
+        )
+        if latest_validation:
+            details = latest_validation.details_json or {}
+            if int(details.get("checked") or 0) and (not details.get("ok") or details.get("partial")):
+                targets = details.get("targets") or []
+                target_label = ""
+                if targets and isinstance(targets, list):
+                    failed = [target for target in targets if isinstance(target, dict) and not target.get("ok")]
+                    target_label = str(((failed[0] if failed else targets[0]) or {}).get("label") or "")
+                suggestions.append(
+                    {
+                        "id": f"service:{service.id}:validation-failing",
+                        "severity": "warning",
+                        "title": f"{service.name} has a validation warning",
+                        "body": f"Last TCP check {'partially failed' if details.get('partial') else 'failed'}{f' for {target_label}' if target_label else ''}. Confirm the URL, port, service state, or mark it scheduled.",
+                        "target": f"/services/{service.id}",
+                        "action": "mute-ping",
+                        "object_type": "service",
+                        "object_id": str(service.id),
+                        "mute_event_id": str(latest_validation.id),
+                    }
+                )
     ports: dict[tuple[int, int, str], list[models.Port]] = defaultdict(list)
     for port in db.query(models.Port).all():
         ports[(port.device_id, port.host_port, port.protocol)].append(port)

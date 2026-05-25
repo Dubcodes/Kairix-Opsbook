@@ -49,7 +49,7 @@
     <strong>Device pings</strong>
     <div>
       {% for item in ping_overview %}
-        <a href="/devices?q={{ item.name }}" class="ping-pill ping-pill-{{ item.state }}">
+        <a href="/devices?q={{ item.name }}" class="ping-pill ping-pill-{{ item.state }}" title="Last device ping for {{ item.name }}: {{ item.label }}">
           <span class="ping-dot ping-{{ item.state }}"></span>{{ item.name }} <small>{% if item.when_iso %}<time data-utc="{{ item.when_iso }}" data-format="time">{{ item.label }}</time>{% else %}{{ item.label }}{% endif %}</small>
         </a>
       {% endfor %}

@@ -41,7 +41,7 @@ from .security import (
     verify_password,
 )
 from .seeds import seed_initial_data
-from .suggestions import TAG_IDEAS, dismiss_suggestion, visible_suggestions
+from .suggestions import TAG_IDEAS, dismiss_suggestion, mute_ping_failure, visible_suggestions
 from .utils import (
     format_dt,
     iso_dt,
@@ -485,15 +485,22 @@ def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
 def _service_validation_status(db: Session, service: models.Service) -> dict[str, str]:
     latest = _latest_audit(db, "service", service.id, "service_validate")
     if not latest:
-        return {"state": "unknown", "label": "Not checked", "checked_at": ""}
+        return {"state": "unknown", "label": "Not checked", "checked_at": "", "checked_at_iso": ""}
     details = latest.details_json or {}
     if not int(details.get("checked") or 0):
-        return {"state": "unknown", "label": "No URL or port documented", "checked_at": format_dt(latest.created_at)}
+        return {"state": "unknown", "label": "No URL or port documented", "checked_at": format_dt(latest.created_at), "checked_at_iso": iso_dt(latest.created_at)}
     ok = bool(details.get("ok"))
+    partial = bool(details.get("partial"))
+    targets = details.get("targets") or []
+    target_labels = [str(item.get("label") or f"{item.get('host')}:{item.get('port')}") for item in targets if isinstance(item, dict)]
+    target_summary = ", ".join(target_labels[:3])
+    if len(target_labels) > 3:
+        target_summary += f", and {len(target_labels) - 3} more"
     return {
-        "state": "good" if ok else "bad",
-        "label": "Reachable" if ok else "No response",
+        "state": "slow" if partial else "good" if ok else "bad",
+        "label": ("Partial response" if partial else "Reachable" if ok else "No response") + (f" via TCP check: {target_summary}" if target_summary else ""),
         "checked_at": format_dt(latest.created_at),
+        "checked_at_iso": iso_dt(latest.created_at),
     }
 
 
@@ -542,7 +549,8 @@ def _validate_service(db: Session, service: models.Service, user_id: int | None 
         result.update({"label": label, "host": host, "port": port})
         results.append(result)
     details = {
-        "ok": any(item["ok"] for item in results),
+        "ok": bool(results) and all(item["ok"] for item in results),
+        "partial": any(item["ok"] for item in results) and any(not item["ok"] for item in results),
         "targets": results,
         "checked": len(results),
     }
@@ -576,6 +584,23 @@ def _dashboard_ping_overview(db: Session) -> list[dict[str, str]]:
         else:
             items.append({"name": device.name, "state": "down", "label": "no reply"})
     return items
+
+
+def _failed_ping_summary(db: Session) -> dict[str, int]:
+    devices_failed = 0
+    services_failed = 0
+    for device in _device_order_query(db).all():
+        latest = _latest_audit(db, "device", device.id, "device_ping")
+        if latest and not (latest.details_json or {}).get("ok"):
+            devices_failed += 1
+    for service in _service_order_query(db).all():
+        latest = _latest_audit(db, "service", service.id, "service_validate")
+        if not latest:
+            continue
+        details = latest.details_json or {}
+        if int(details.get("checked") or 0) and (not details.get("ok") or details.get("partial")):
+            services_failed += 1
+    return {"devices": devices_failed, "services": services_failed, "total": devices_failed + services_failed}
 
 
 def _ping_device(db: Session, device: models.Device) -> dict[str, Any]:
@@ -1231,6 +1256,7 @@ AUDIT_ACTION_LABELS = {
     "service_status_changed": "Service state changed",
     "service_validate": "Service validation checked",
     "services_validated": "Services validated",
+    "ping_warning_scheduled": "Ping warning marked scheduled",
     "smart_paste_parsed": "Smart Paste reviewed",
     "smart_paste_applied": "Smart Paste applied",
     "quick_note_saved": "Quick note saved",
@@ -1543,7 +1569,7 @@ def setup_owner(
 def login_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     if user_count(db) == 0:
         return redirect("/setup")
-    return render(request, "login.html")
+    return render(request, "login.html", {"failed_ping_summary": _failed_ping_summary(db)})
 
 
 @app.post("/login")
@@ -1800,6 +1826,7 @@ def device_detail(
     device_id: int,
     tab: str = "overview",
     favorites: str = "",
+    highlight: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -1858,6 +1885,7 @@ def device_detail(
             "validation_status": validation_status,
             "validation_log": _latest_audit(db, "device", device.id, "services_validated"),
             "auto_purpose": auto_purpose,
+            "highlight": highlight,
         },
         user=user,
     )
@@ -1900,7 +1928,7 @@ def device_validate_services(
         details = _validate_service(db, service, user.id)
         if details["checked"]:
             checked += 1
-        if details["ok"]:
+        if details["ok"] or details.get("partial"):
             reachable += 1
     db.add(
         models.AuditLog(
@@ -2252,7 +2280,8 @@ def service_validate_now(
         raise HTTPException(404, "Service not found.")
     details = _validate_service(db, service, user.id)
     db.commit()
-    flash(request, f"{service.name} is {'reachable' if details['ok'] else 'not responding'}.", "success" if details["ok"] else "warning")
+    status_text = "partially reachable" if details.get("partial") else "reachable" if details["ok"] else "not responding"
+    flash(request, f"{service.name} is {status_text}.", "success" if details["ok"] else "warning")
     return redirect(request.headers.get("referer") or f"/services/{service.id}")
 
 
@@ -3928,10 +3957,45 @@ def suggestions_page(
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    fill_candidates: list[dict[str, Any]] = []
+    for device in _device_order_query(db).limit(20).all():
+        missing = []
+        if not device.purpose.strip():
+            missing.append("purpose")
+        if not tags_for(db, "device", device.id):
+            missing.append("tags")
+        if missing:
+            fill_candidates.append(
+                {
+                    "type": "Device",
+                    "name": device.name,
+                    "href": f"/devices/{device.id}/edit?focus={missing[0]}",
+                    "missing": missing,
+                    "suggested": _device_auto_purpose(device) or _infer_tags_for_device(device),
+                }
+            )
+    for service in _service_order_query(db).limit(40).all():
+        missing = []
+        if not service.purpose.strip():
+            missing.append("purpose")
+        if not service.backup_path and "backup" not in service.notes.lower():
+            missing.append("backup")
+        if not tags_for(db, "service", service.id):
+            missing.append("tags")
+        if missing:
+            fill_candidates.append(
+                {
+                    "type": "Service",
+                    "name": service.name,
+                    "href": f"/services/{service.id}/edit?focus={'backup_path' if missing[0] == 'backup' else missing[0]}",
+                    "missing": missing,
+                    "suggested": _infer_tags_for_service(service),
+                }
+            )
     return render(
         request,
         "suggestions.html",
-        {"suggestions": visible_suggestions(db), "tag_ideas": TAG_IDEAS},
+        {"suggestions": visible_suggestions(db), "tag_ideas": TAG_IDEAS, "fill_candidates": fill_candidates[:40]},
         user=user,
     )
 
@@ -3945,12 +4009,30 @@ def suggestions_apply(
     object_type: str = Form(...),
     object_id: int = Form(...),
     value: str = Form(""),
+    mute_event_id: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
     cleaned = value.strip()
+    if action == "mute-ping":
+        if not mute_event_id:
+            flash(request, "That ping warning could not be marked scheduled.", "warning")
+            return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
+        mute_ping_failure(db, suggestion_id, mute_event_id)
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="ping_warning_scheduled",
+                object_type=object_type,
+                object_id=object_id,
+                details_json={"id": suggestion_id, "event_id": mute_event_id},
+            )
+        )
+        db.commit()
+        flash(request, "Ping warning marked as scheduled for this failed check.", "success")
+        return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
     if action == "duplicate-port-cleanup" and object_type == "port":
         match = re.match(r"device:(\d+):port:(\d+):([^:]+):duplicate", suggestion_id)
         if not match:
@@ -4499,12 +4581,20 @@ def export_download(
 @app.get("/history", response_class=HTMLResponse)
 def history_page(
     request: Request,
+    kind: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    logs = db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(200).all()
+    query = db.query(models.AuditLog)
+    if kind == "ping":
+        query = query.filter(models.AuditLog.action.in_(["device_ping", "service_validate", "services_validated", "ping_warning_scheduled"]))
+    elif kind == "credentials":
+        query = query.filter(models.AuditLog.action.ilike("credential_%"))
+    elif kind == "smart-paste":
+        query = query.filter(models.AuditLog.action.ilike("smart_paste_%"))
+    logs = query.order_by(models.AuditLog.created_at.desc()).limit(200).all()
     human_logs = [_human_audit_log(db, item) for item in logs]
-    return render(request, "history.html", {"logs": human_logs}, user=user)
+    return render(request, "history.html", {"logs": human_logs, "kind": kind}, user=user)
 
 
 @app.get("/raw/{object_type}/{object_id}", response_class=HTMLResponse)

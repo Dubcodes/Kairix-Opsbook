@@ -33,7 +33,7 @@
       <dd>
         <form method="post" action="/devices/{{ device.id }}/ping" class="inline-mini ping-line">
           <input type="hidden" name="csrf" value="{{ csrf }}">
-          <span class="ping-dot ping-{{ ping_status.state }}"></span>
+          <span class="ping-dot ping-{{ ping_status.state }}" title="Ping: {{ ping_status.label }}{% if ping_status.last_at_iso %} · last {{ ping_status.last_at }}{% endif %}{% if ping_status.next_at_iso %} · next {{ ping_status.next_at }}{% endif %}"></span>
           <span>{{ ping_status.label }}{% if ping_status.last_at_iso %} · last <time data-utc="{{ ping_status.last_at_iso }}">{{ ping_status.last_at }}</time>{% endif %} · next {% if ping_status.overdue %}due now{% elif ping_status.next_at_iso %}<time data-utc="{{ ping_status.next_at_iso }}">{{ ping_status.next_at }}</time>{% else %}{{ ping_status.next_at }}{% endif %}</span>
           <button class="secondary small-button" type="submit">Check now</button>
         </form>
@@ -192,7 +192,16 @@
   <section class="list">
     {% for service in device.services %}
       {% set service_status = validation_status.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
-      <a class="list-row" href="/services/{{ service.id }}"><strong>{{ service.name }}{% if service_tokens(service) %}<span class="token-indicator" title="This service has linked tokens or API keys">◇</span>{% endif %}</strong><span><span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}</span></a>
+      {% set needs_backup = not service.backup_path and "backup" not in service.notes.lower() %}
+      {% set needs_purpose = not service.purpose.strip() %}
+      <a class="list-row {% if (highlight == 'missing-backup' and needs_backup) or (highlight == 'missing-purpose' and needs_purpose) %}item-highlight{% endif %}" href="/services/{{ service.id }}">
+        <strong>{{ service.name }}{% if service_tokens(service) %}<span class="token-indicator" title="This service has linked tokens or API keys">◇</span>{% endif %}</strong>
+        <span>
+          <span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}
+          {% if highlight == 'missing-backup' and needs_backup %}<small class="inline-note">missing backup notes</small>{% endif %}
+          {% if highlight == 'missing-purpose' and needs_purpose %}<small class="inline-note">missing purpose</small>{% endif %}
+        </span>
+      </a>
     {% else %}<p class="empty">No services documented on this device yet.</p>{% endfor %}
   </section>
 {% elif tab == "credentials" %}
