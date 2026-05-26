@@ -1,10 +1,11 @@
 {% extends "base.html" %}
+{% from "partials/status_macros.html" import device_ping_dot %}
 {% block title %}{{ device.name }} · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
   <div>
     <p class="eyebrow">Device record</p>
-    <h1>{{ device.name }}</h1>
+    <h1>{{ device_ping_dot(device, device_ping_statuses) }}{{ device.name }}</h1>
     <p>{{ device.primary_ip or "No IP" }} · {{ device.hostname or "No hostname" }} · {{ device.os_name or "OS unknown" }}</p>
     <div class="tags">{% for tag in tag_list %}<span>{{ tag }}</span>{% endfor %}</div>
   </div>
@@ -244,20 +245,73 @@
   </section>
 {% elif tab == "network" %}
   <section class="panel">
-    <h2>Network</h2>
+    <div class="section-title">
+      <h2>Network</h2>
+      <form method="post" action="/devices/{{ device.id }}/ping">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <button class="secondary small-button" type="submit">Ping Device</button>
+      </form>
+    </div>
     <dl class="details">
       {% if device.primary_ip %}<dt>IP address</dt><dd>{{ device.primary_ip }}</dd>{% endif %}
       {% if device.hostname %}<dt>Hostname</dt><dd>{{ device.hostname }}</dd>{% endif %}
+      <dt>Ping</dt>
+      <dd>
+        <span class="ping-dot ping-{{ ping_status.state }}" title="Ping: {{ ping_status.label }}{% if ping_status.last_at_iso %} · last {{ ping_status.last_at }}{% endif %}"></span>
+        {{ ping_status.label }}{% if ping_status.last_at_iso %} · last <time data-utc="{{ ping_status.last_at_iso }}">{{ ping_status.last_at }}</time>{% endif %}
+      </dd>
     </dl>
     <h3>Ports</h3>
-    <div class="list compact">{% for port in device.ports %}<div class="list-row static"><strong>{{ port.host_port }}/{{ port.protocol }}</strong><span>{{ port.purpose or port.notes }}</span></div>{% else %}<p class="empty">No ports documented.</p>{% endfor %}</div>
+    <div class="list compact">
+      {% for port in device.ports %}
+        <div class="list-row static clickable-card" data-card-href="/ports/{{ port.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">
+          <a class="row-main" href="/ports/{{ port.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">
+            <strong>{{ port.host_port }}/{{ port.protocol }}</strong>
+            <span>{% if port.service %}{{ port.service.name }} · {% endif %}{{ port.purpose or port.notes or "No purpose documented" }}</span>
+          </a>
+          <div class="actions compact-actions">
+            <a class="button secondary small-button" href="/ports/{{ port.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">Edit</a>
+          </div>
+        </div>
+      {% else %}
+        <p class="empty">No ports documented.</p>
+      {% endfor %}
+    </div>
     <h3>URLs</h3>
-    <div class="list compact">{% for url in device.urls %}<a class="list-row" href="{{ url.url }}" target="_blank"><strong>{{ url.label or url.url_type }}</strong><span>{{ url.url }}</span></a>{% else %}<p class="empty">No URLs documented.</p>{% endfor %}</div>
+    <div class="list compact">
+      {% for url in device.urls %}
+        <div class="list-row static clickable-card" data-card-href="/urls/{{ url.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">
+          <a class="row-main" href="{{ url.url }}" target="_blank"><strong>{{ url.label or url.url_type }}</strong><span>{{ url.url }}</span></a>
+          <div class="actions compact-actions">
+            <a class="button secondary small-button" href="{{ url.url }}" target="_blank">Open</a>
+            <a class="button secondary small-button" href="/urls/{{ url.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">Edit</a>
+          </div>
+        </div>
+      {% else %}
+        <p class="empty">No URLs documented.</p>
+      {% endfor %}
+    </div>
   </section>
 {% elif tab == "backups" %}
   <section class="panel">
-    <h2>Backups</h2>
-    <p class="empty">Use service backup fields and notes to document what data matters, where backups are stored, and how to restore them.</p>
+    <div class="section-title">
+      <h2>Backup & Recovery</h2>
+      <a class="button" href="/devices/{{ device.id }}?tab=services&highlight=missing-backup">Review Services</a>
+    </div>
+    <div class="list">
+      {% for group in service_groups %}
+        <h2 class="list-heading">{{ group.name }}</h2>
+        {% for service in group.services %}
+          {% set needs_backup = not service.backup_path and "backup" not in service.notes.lower() %}
+          <a class="list-row {% if needs_backup %}item-highlight{% endif %}" href="/services/{{ service.id }}?tab=backups">
+            <strong>{{ service.name }}</strong>
+            <span>{% if service.backup_path %}{{ service.backup_path }}{% elif "backup" in service.notes.lower() %}Backup notes in service notes{% else %}Needs backup notes{% endif %}</span>
+          </a>
+        {% endfor %}
+      {% else %}
+        <p class="empty">No services documented on this device yet.</p>
+      {% endfor %}
+    </div>
   </section>
 {% elif tab == "notes" %}
   <section class="panel">
@@ -275,7 +329,26 @@
 {% elif tab == "history" %}
   <section class="panel">
     <h2>History</h2>
-    <div class="list">{% for item in history %}<div class="list-row static"><strong>{{ item.action }}</strong><span>{{ item.created_at|dt }}</span></div>{% else %}<p class="empty">No history for this device yet.</p>{% endfor %}</div>
+    <div class="list">
+      {% for item in history %}
+        <details class="list-row static history-row">
+          <summary>
+            <span>
+              <strong>{{ item.title }}</strong>
+              <small>{% if item.href %}<a href="{{ item.href }}">{{ item.target }}</a>{% else %}{{ item.target }}{% endif %} · {{ item.when }}</small>
+              {% if item.details %}<small>{{ item.details }}</small>{% endif %}
+            </span>
+          </summary>
+          <dl class="details compact-details">
+            <dt>Action</dt><dd>{{ item.action }}</dd>
+            {% if item.object_type %}<dt>Object</dt><dd>{{ item.object_type }}{% if item.object_id %} #{{ item.object_id }}{% endif %}</dd>{% endif %}
+          </dl>
+          {% if item.raw %}<pre>{{ item.raw }}</pre>{% endif %}
+        </details>
+      {% else %}
+        <p class="empty">No history for this device yet.</p>
+      {% endfor %}
+    </div>
   </section>
 {% endif %}
 {% endblock %}

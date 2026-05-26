@@ -1,0 +1,22 @@
+{% macro device_ping_dot(device, ping_statuses) -%}
+  {%- set ping = ping_statuses.get(device.id) if device and ping_statuses else none -%}
+  {%- if ping -%}
+    <span class="ping-dot ping-{{ ping.state }}" title="Ping: {{ ping.label }}{% if ping.last_at_iso %} · last {{ ping.last_at }}{% endif %}{% if ping.next_at_iso %} · next {{ ping.next_at }}{% endif %}"></span>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro device_link(device, ping_statuses) -%}
+  {%- if device -%}
+    <span class="device-with-ping">{{ device_ping_dot(device, ping_statuses) }}<a href="/devices/{{ device.id }}">{{ device.name }}</a></span>
+  {%- else -%}
+    Unlinked
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro device_label(device, ping_statuses) -%}
+  {%- if device -%}
+    <span class="device-with-ping">{{ device_ping_dot(device, ping_statuses) }}{{ device.name }}</span>
+  {%- else -%}
+    Unlinked
+  {%- endif -%}
+{%- endmacro %}

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/status_macros.html" import device_label %}
 {% block title %}Tokens & APIs · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
@@ -14,16 +15,17 @@
 </form>
 <section class="list">
   {% for token in tokens %}
-    {% set context_name = token.service.name if token.service else token.device.name if token.device else "Unlinked" %}
+    {% set context_device = token.service.device if token.service and token.service.device else token.device %}
+    {% set context_name = token.service.name if token.service else "" %}
     <div class="device-row clickable-card" data-credential-row data-card-href="/credentials/{{ token.id }}">
       <a class="row-main" href="/credentials/{{ token.id }}">
         <strong>{{ token.label }}</strong>
-        <span><b>{{ context_name }}</b> · {{ token.username or "No account" }} · {{ token.security_level|title }} security{% if token.expires_at %} · expires {{ token.expires_at|date_input }}{% endif %}</span>
+        <span><b>{% if context_name %}{{ context_name }}{% elif context_device %}{{ device_label(context_device, device_ping_statuses) }}{% else %}Unlinked{% endif %}</b> · {{ token.username or "No account" }} · {{ token.security_level|title }} security{% if token.expires_at %} · expires {{ token.expires_at|date_input }}{% endif %}</span>
         <div class="tags">{% for tag in tags.get(token.id, []) %}<span>{{ tag }}</span>{% endfor %}</div>
       </a>
       <div class="actions compact-actions">
         <button class="secondary small-button" type="button" data-copy-credential="{{ token.id }}" title="Copy this token after its security check">Copy</button>
-        <a class="button secondary small-button" href="/credentials/{{ token.id }}/edit" title="Edit token details, expiry, service link, or security level">Edit</a>
+        <a class="button secondary small-button" href="/credentials/{{ token.id }}/edit?return_to=/tokens{% if service_id %}%3Fservice_id={{ service_id }}{% endif %}" title="Edit token details, expiry, service link, or security level">Edit</a>
         <form method="post" action="/delete/credential/{{ token.id }}" data-confirm-delete="Delete this token?">
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <button class="ghost small-button" type="submit" title="Delete this token">Delete</button>

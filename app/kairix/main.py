@@ -22,7 +22,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Respon
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -704,6 +704,14 @@ def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
         "last_at_iso": iso_dt(latest_at),
         "overdue": overdue,
     }
+
+
+def _device_ping_status_map(db: Session, devices: list[models.Device | None]) -> dict[int, dict[str, Any]]:
+    statuses: dict[int, dict[str, Any]] = {}
+    for device in devices:
+        if device and device.id not in statuses:
+            statuses[device.id] = _device_ping_status(db, device)
+    return statuses
 
 
 def _service_validation_status(db: Session, service: models.Service) -> dict[str, str]:
@@ -1547,6 +1555,19 @@ AUDIT_ACTION_LABELS = {
     "service_status_changed": "Service state changed",
     "service_validate": "Service validation checked",
     "services_validated": "Services validated",
+    "command_created": "Command added",
+    "command_edited": "Command updated",
+    "command_deleted": "Command deleted",
+    "port_added": "Port added",
+    "port_edited": "Port updated",
+    "port_deleted": "Port deleted",
+    "url_added": "URL added",
+    "url_edited": "URL updated",
+    "url_deleted": "URL deleted",
+    "note_added": "Note added",
+    "note_deleted": "Note deleted",
+    "note_tags_updated": "Note tags updated",
+    "quick_credentials_updated": "Favorite credentials updated",
     "ping_warning_scheduled": "Ping warning marked scheduled",
     "smart_paste_parsed": "Smart Paste reviewed",
     "smart_paste_applied": "Smart Paste applied",
@@ -1575,7 +1596,14 @@ def _safe_audit_details(details: dict[str, Any] | None) -> str:
             continue
         if value in (None, "", [], {}):
             continue
-        parts.append(f"{key.replace('_', ' ')}: {value}")
+        if isinstance(value, list):
+            value = f"{len(value)} item(s)"
+        elif isinstance(value, dict):
+            value = json.dumps(value, sort_keys=True, default=str)
+        text_value = str(value)
+        if len(text_value) > 120:
+            text_value = f"{text_value[:117]}..."
+        parts.append(f"{key.replace('_', ' ')}: {text_value}")
     return " · ".join(parts[:4])
 
 
@@ -1586,7 +1614,19 @@ def _audit_target_label(db: Session, log: models.AuditLog) -> tuple[str, str]:
         "credential": (models.Credential, "label", "credentials"),
         "command": (models.Command, "name", "commands"),
         "note": (models.Note, "title", "notes"),
+        "url": (models.Url, "label", "urls"),
     }
+    if log.object_type == "port" and log.object_id:
+        port = db.get(models.Port, log.object_id)
+        if port:
+            label = f"{port.host_port}/{port.protocol}"
+            if port.service:
+                label = f"{label} · {port.service.name}"
+            return label, f"/ports/{port.id}/edit"
+    if log.object_type == "url" and log.object_id:
+        url = db.get(models.Url, log.object_id)
+        if url:
+            return url.label or url.url or f"URL #{url.id}", f"/urls/{url.id}/edit"
     model_info = model_map.get(log.object_type)
     if model_info and log.object_id:
         model, label_attr, path = model_info
@@ -1712,6 +1752,94 @@ def _delete_redirect_target(request: Request, object_type: str, object_id: int) 
         "note": "/notes",
     }
     return referer or defaults.get(object_type, "/")
+
+
+def _safe_return_to(value: str, fallback: str) -> str:
+    clean = (value or "").strip()
+    if clean.startswith("/") and not clean.startswith("//"):
+        return clean
+    return fallback
+
+
+def _service_history(db: Session, service: models.Service, *, limit: int = 50) -> list[dict[str, str]]:
+    filters = [
+        and_(models.AuditLog.object_type == "service", models.AuditLog.object_id == service.id),
+    ]
+    credential_ids = [credential.id for credential in service.credentials]
+    port_ids = [port.id for port in service.ports]
+    url_ids = [url.id for url in service.urls]
+    note_ids = [
+        note_id
+        for (note_id,) in db.query(models.Note.id)
+        .filter(models.Note.object_type == "service", models.Note.object_id == service.id)
+        .all()
+    ]
+    command_ids = [
+        command_id
+        for (command_id,) in db.query(models.Command.id)
+        .filter(models.Command.applies_to_type == "service", models.Command.applies_to_id == service.id)
+        .all()
+    ]
+    if credential_ids:
+        filters.append(and_(models.AuditLog.object_type == "credential", models.AuditLog.object_id.in_(credential_ids)))
+    if port_ids:
+        filters.append(and_(models.AuditLog.object_type == "port", models.AuditLog.object_id.in_(port_ids)))
+    if url_ids:
+        filters.append(and_(models.AuditLog.object_type == "url", models.AuditLog.object_id.in_(url_ids)))
+    if note_ids:
+        filters.append(and_(models.AuditLog.object_type.in_(["note", "quick_note"]), models.AuditLog.object_id.in_(note_ids)))
+    if command_ids:
+        filters.append(and_(models.AuditLog.object_type == "command", models.AuditLog.object_id.in_(command_ids)))
+    logs = (
+        db.query(models.AuditLog)
+        .filter(or_(*filters))
+        .order_by(models.AuditLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_human_audit_log(db, log) for log in logs]
+
+
+def _device_history(db: Session, device: models.Device, *, limit: int = 50) -> list[dict[str, str]]:
+    filters = [
+        and_(models.AuditLog.object_type == "device", models.AuditLog.object_id == device.id),
+    ]
+    service_ids = [service.id for service in device.services]
+    credential_ids = [credential.id for credential in device.credentials]
+    port_ids = [port.id for port in device.ports]
+    url_ids = [url.id for url in device.urls]
+    note_ids = [
+        note_id
+        for (note_id,) in db.query(models.Note.id)
+        .filter(models.Note.object_type == "device", models.Note.object_id == device.id)
+        .all()
+    ]
+    command_ids = [
+        command_id
+        for (command_id,) in db.query(models.Command.id)
+        .filter(models.Command.applies_to_type == "device", models.Command.applies_to_id == device.id)
+        .all()
+    ]
+    if service_ids:
+        filters.append(and_(models.AuditLog.object_type == "service", models.AuditLog.object_id.in_(service_ids)))
+    if credential_ids:
+        filters.append(and_(models.AuditLog.object_type == "credential", models.AuditLog.object_id.in_(credential_ids)))
+    if port_ids:
+        filters.append(and_(models.AuditLog.object_type == "port", models.AuditLog.object_id.in_(port_ids)))
+    if url_ids:
+        filters.append(and_(models.AuditLog.object_type == "url", models.AuditLog.object_id.in_(url_ids)))
+    if note_ids:
+        filters.append(and_(models.AuditLog.object_type.in_(["note", "quick_note"]), models.AuditLog.object_id.in_(note_ids)))
+    if command_ids:
+        filters.append(and_(models.AuditLog.object_type == "command", models.AuditLog.object_id.in_(command_ids)))
+    logs = (
+        db.query(models.AuditLog)
+        .filter(or_(*filters))
+        .order_by(models.AuditLog.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return [_human_audit_log(db, log) for log in logs]
 
 
 def require_user(request: Request, db: Session = Depends(get_db)) -> models.User:
@@ -2018,6 +2146,10 @@ def dashboard(
             "devices": devices,
             "services": services,
             "service_statuses": {service.id: _service_validation_status(db, service) for service in services},
+            "device_ping_statuses": _device_ping_status_map(
+                db,
+                list(devices) + [service.device for service in services],
+            ),
             "recent_logs": recent_logs,
             "suggestions": suggestions,
             "ping_overview": _dashboard_ping_overview(db),
@@ -2088,6 +2220,7 @@ def devices_page(
             "credential_counts": credential_counts,
             "command_counts": command_counts,
             "ping_statuses": {device.id: _device_ping_status(db, device) for device in devices},
+            "device_ping_statuses": _device_ping_status_map(db, list(devices)),
         },
         user=user,
     )
@@ -2182,13 +2315,6 @@ def device_detail(
         .order_by(models.Command.category, models.Command.name)
         .all()
     )
-    history = (
-        db.query(models.AuditLog)
-        .filter(models.AuditLog.object_type == "device", models.AuditLog.object_id == device.id)
-        .order_by(models.AuditLog.created_at.desc())
-        .limit(25)
-        .all()
-    )
     notes = (
         db.query(models.Note)
         .filter(models.Note.object_type == "device", models.Note.object_id == device.id)
@@ -2211,7 +2337,7 @@ def device_detail(
             "device": device,
             "tab": tab,
             "commands": commands,
-            "history": history,
+            "history": _device_history(db, device),
             "notes": notes,
             "tag_list": tags_for(db, "device", device.id),
             "service_groups": service_groups,
@@ -2223,6 +2349,7 @@ def device_detail(
             "validation_log": _latest_audit(db, "device", device.id, "services_validated"),
             "auto_purpose": auto_purpose,
             "highlight": highlight,
+            "device_ping_statuses": _device_ping_status_map(db, [device]),
         },
         user=user,
     )
@@ -2243,7 +2370,7 @@ def device_ping_now(
     result = _ping_device(db, device)
     db.commit()
     flash(request, f"Ping checked: {'reply received' if result.get('ok') else 'no reply'}.", "success" if result.get("ok") else "warning")
-    return redirect(f"/devices/{device.id}")
+    return redirect(request.headers.get("referer") or f"/devices/{device.id}")
 
 
 @app.post("/devices/{device_id}/validate-services")
@@ -2462,6 +2589,7 @@ def services_page(
             "q": q,
             "tags": tag_map(db, "service"),
             "validation_statuses": {service.id: _service_validation_status(db, service) for service in services},
+            "device_ping_statuses": _device_ping_status_map(db, [service.device for service in services]),
         },
         user=user,
     )
@@ -2584,13 +2712,6 @@ def service_detail(
         .order_by(models.Command.category, models.Command.name)
         .all()
     )
-    history = (
-        db.query(models.AuditLog)
-        .filter(models.AuditLog.object_type == "service", models.AuditLog.object_id == service.id)
-        .order_by(models.AuditLog.created_at.desc())
-        .limit(25)
-        .all()
-    )
     notes = (
         db.query(models.Note)
         .filter(models.Note.object_type == "service", models.Note.object_id == service.id)
@@ -2604,11 +2725,14 @@ def service_detail(
             "service": service,
             "tab": tab,
             "commands": commands,
-            "history": history,
+            "history": _service_history(db, service),
             "notes": notes,
             "tag_list": tags_for(db, "service", service.id),
             "status_log": _latest_audit(db, "service", service.id, "service_status_changed"),
             "validation_status": _service_validation_status(db, service),
+            "device_ping_statuses": _device_ping_status_map(db, [service.device]),
+            "device_ping_status": _device_ping_status(db, service.device),
+            "backup_ready": bool(service.backup_path or "backup" in (service.notes or "").lower()),
             "token_credentials": _service_tokens(service),
             "login_credentials": _service_login_credentials(service),
         },
@@ -2774,6 +2898,13 @@ def credentials_page(
             "q": q,
             "tags": tag_map(db, "credential"),
             "favorite_ids": _favorite_credential_ids(db),
+            "device_ping_statuses": _device_ping_status_map(
+                db,
+                [
+                    credential.service.device if credential.service and credential.service.device else credential.device
+                    for credential in credentials
+                ],
+            ),
         },
         user=user,
     )
@@ -2803,7 +2934,19 @@ def tokens_page(
     return render(
         request,
         "tokens.html",
-        {"tokens": tokens, "q": q, "service_id": service_id, "tags": tag_map(db, "credential")},
+        {
+            "tokens": tokens,
+            "q": q,
+            "service_id": service_id,
+            "tags": tag_map(db, "credential"),
+            "device_ping_statuses": _device_ping_status_map(
+                db,
+                [
+                    token.service.device if token.service and token.service.device else token.device
+                    for token in tokens
+                ],
+            ),
+        },
         user=user,
     )
 
@@ -2858,6 +3001,10 @@ def credential_detail_page(
         {
             "credential": credential,
             "tag_list": tags_for(db, "credential", credential.id),
+            "device_ping_statuses": _device_ping_status_map(
+                db,
+                [credential.service.device if credential.service and credential.service.device else credential.device],
+            ),
         },
         user=user,
     )
@@ -2932,6 +3079,8 @@ def credential_create(
     db.add(models.AuditLog(user_id=user.id, action="credential_created", object_type="credential", object_id=credential.id))
     db.commit()
     flash(request, "Credential stored encrypted at rest.", "success")
+    if secret_type == "API token":
+        return redirect("/tokens")
     return redirect("/credentials")
 
 
@@ -2939,6 +3088,7 @@ def credential_create(
 def credential_edit_page(
     request: Request,
     credential_id: int,
+    return_to: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -2956,6 +3106,7 @@ def credential_edit_page(
             "service_id": credential.service_id,
             "service_name_prefill": credential.service.name if credential.service else "",
             "tag_text": ", ".join(tags_for(db, "credential", credential.id)),
+            "return_to": _safe_return_to(return_to, f"/credentials/{credential.id}"),
         },
         user=user,
     )
@@ -2979,6 +3130,7 @@ def credential_update(
     notes: str = Form(""),
     active: str = Form("on"),
     tags: str = Form(""),
+    return_to: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3025,7 +3177,7 @@ def credential_update(
     db.add(models.AuditLog(user_id=user.id, action="credential_edited", object_type="credential", object_id=credential.id))
     db.commit()
     flash(request, "Credential saved.", "success")
-    return redirect("/credentials")
+    return redirect(_safe_return_to(return_to, f"/credentials/{credential.id}"))
 
 
 @app.post("/delete/{object_type}/{object_id}")
@@ -3522,6 +3674,7 @@ def ports_page(
             "urls": db.query(models.Url).order_by(models.Url.url).all(),
             "devices": _device_order_query(db).all(),
             "services": _service_order_query(db).all(),
+            "device_ping_statuses": _device_ping_status_map(db, _device_order_query(db).all()),
         },
         user=user,
     )
@@ -3534,32 +3687,32 @@ def tags_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     links = db.query(models.TagLink).all()
-    used_tag_ids = {link.tag_id for link in links}
-    tags = (
-        db.query(models.Tag)
-        .filter(models.Tag.id.in_(used_tag_ids))
-        .order_by(models.Tag.name)
-        .all()
-        if used_tag_ids
-        else []
-    )
-    grouped: dict[int, list[dict[str, str]]] = {}
+    grouped: dict[int, list[dict[str, Any]]] = {}
+    related_devices: list[models.Device | None] = []
     for link in links:
         href = "#"
         label = f"#{link.object_id}"
+        subtitle = ""
+        related_device: models.Device | None = None
         kind = link.object_type.replace("_", " ").title()
         if link.object_type == "device":
             obj = db.get(models.Device, link.object_id)
             if obj:
                 href, label = f"/devices/{obj.id}", obj.name
+                related_device = obj
         elif link.object_type == "service":
             obj = db.get(models.Service, link.object_id)
             if obj:
                 href, label = f"/services/{obj.id}", obj.name
+                subtitle = obj.device.name if obj.device else ""
+                related_device = obj.device
         elif link.object_type == "credential":
             obj = db.get(models.Credential, link.object_id)
             if obj:
                 href, label = f"/credentials/{obj.id}", obj.label
+                context_device = obj.service.device if obj.service and obj.service.device else obj.device
+                subtitle = context_device.name if context_device else ""
+                related_device = context_device
         elif link.object_type == "command":
             obj = db.get(models.Command, link.object_id)
             if obj:
@@ -3567,11 +3720,16 @@ def tags_page(
         elif link.object_type == "port":
             obj = db.get(models.Port, link.object_id)
             if obj:
-                href, label = "/ports", f"{obj.host_port}/{obj.protocol}"
+                href, label = f"/ports/{obj.id}/edit?return_to=/tags", f"{obj.host_port}/{obj.protocol}"
+                subtitle = obj.device.name if obj.device else ""
+                related_device = obj.device
         elif link.object_type == "url":
             obj = db.get(models.Url, link.object_id)
             if obj:
-                href, label = "/ports", obj.label or obj.url
+                href, label = f"/urls/{obj.id}/edit?return_to=/tags", obj.label or obj.url
+                context_device = obj.service.device if obj.service and obj.service.device else obj.device
+                subtitle = context_device.name if context_device else ""
+                related_device = context_device
         elif link.object_type == "quick_note":
             obj = db.get(models.Note, link.object_id)
             if obj:
@@ -3580,11 +3738,26 @@ def tags_page(
             obj = db.get(models.Note, link.object_id)
             if obj:
                 href, label = f"/notes/{obj.id}", obj.title or "Note"
-        grouped.setdefault(link.tag_id, []).append({"kind": kind, "href": href, "label": label})
+        if href == "#":
+            continue
+        if related_device:
+            related_devices.append(related_device)
+        grouped.setdefault(link.tag_id, []).append(
+            {"kind": kind, "href": href, "label": label, "subtitle": subtitle, "device": related_device}
+        )
+    used_tag_ids = set(grouped)
+    tags = (
+        db.query(models.Tag)
+        .filter(models.Tag.id.in_(used_tag_ids))
+        .order_by(models.Tag.name)
+        .all()
+        if used_tag_ids
+        else []
+    )
     tag_cards: list[dict[str, Any]] = []
     kind_order = ["Device", "Service", "Credential", "Command", "Port", "Url", "Note", "Quick Note"]
     for tag in tags:
-        by_kind: dict[str, list[dict[str, str]]] = {}
+        by_kind: dict[str, list[dict[str, Any]]] = {}
         for item in grouped.get(tag.id, []):
             by_kind.setdefault(item["kind"], []).append(item)
         sorted_groups = [
@@ -3598,7 +3771,17 @@ def tags_page(
             if kind not in kind_order
         )
         tag_cards.append({"tag": tag, "count": len(grouped.get(tag.id, [])), "groups": sorted_groups})
-    return render(request, "tags.html", {"tags": tags, "grouped": grouped, "tag_cards": tag_cards}, user=user)
+    return render(
+        request,
+        "tags.html",
+        {
+            "tags": tags,
+            "grouped": grouped,
+            "tag_cards": tag_cards,
+            "device_ping_statuses": _device_ping_status_map(db, related_devices),
+        },
+        user=user,
+    )
 
 
 @app.post("/ports/add")
@@ -3659,23 +3842,33 @@ def add_url(
     label: str = Form(""),
     url: str = Form(...),
     url_type: str = Form("local"),
+    tags: str = Form(""),
     notes: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    db.add(
-        models.Url(
-            device_id=int(device_id) if device_id else None,
-            service_id=int(service_id) if service_id else None,
-            label=label,
-            url=url,
-            url_type=url_type,
-            notes=notes,
-        )
+    resolved_service_id = int(service_id) if service_id else None
+    resolved_device_id = int(device_id) if device_id else None
+    if resolved_service_id and not resolved_device_id:
+        service = db.get(models.Service, resolved_service_id)
+        if service:
+            resolved_device_id = service.device_id
+    row = models.Url(
+        device_id=resolved_device_id,
+        service_id=resolved_service_id,
+        label=label,
+        url=url,
+        url_type=url_type,
+        notes=notes,
     )
-    db.add(models.AuditLog(user_id=user.id, action="url_added", object_type="url"))
+    db.add(row)
+    db.flush()
+    set_tags(db, "url", row.id, tags)
+    if tags and row.device_id:
+        merge_tags(db, "device", row.device_id, tags)
+    db.add(models.AuditLog(user_id=user.id, action="url_added", object_type="url", object_id=row.id))
     db.commit()
     flash(request, "URL added.", "success")
     return redirect("/ports")
@@ -3685,6 +3878,7 @@ def add_url(
 def port_edit_page(
     request: Request,
     port_id: int,
+    return_to: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -3699,6 +3893,7 @@ def port_edit_page(
             "devices": _device_order_query(db).all(),
             "services": _service_order_query(db).all(),
             "tag_text": ", ".join(tags_for(db, "port", port.id)),
+            "return_to": _safe_return_to(return_to, "/ports"),
         },
         user=user,
     )
@@ -3717,6 +3912,7 @@ def port_update(
     purpose: str = Form(""),
     tags: str = Form(""),
     notes: str = Form(""),
+    return_to: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3738,13 +3934,14 @@ def port_update(
     db.add(models.AuditLog(user_id=user.id, action="port_edited", object_type="port", object_id=port.id))
     db.commit()
     flash(request, "Port saved.", "success")
-    return redirect("/ports")
+    return redirect(_safe_return_to(return_to, "/ports"))
 
 
 @app.get("/urls/{url_id}/edit", response_class=HTMLResponse)
 def url_edit_page(
     request: Request,
     url_id: int,
+    return_to: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -3758,6 +3955,8 @@ def url_edit_page(
             "url": url,
             "devices": _device_order_query(db).all(),
             "services": _service_order_query(db).all(),
+            "tag_text": ", ".join(tags_for(db, "url", url.id)),
+            "return_to": _safe_return_to(return_to, "/ports"),
         },
         user=user,
     )
@@ -3773,7 +3972,9 @@ def url_update(
     label: str = Form(""),
     url: str = Form(...),
     url_type: str = Form("local"),
+    tags: str = Form(""),
     notes: str = Form(""),
+    return_to: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -3782,16 +3983,25 @@ def url_update(
     row = db.get(models.Url, url_id)
     if not row:
         raise HTTPException(404, "URL not found.")
-    row.device_id = int(device_id) if device_id else None
-    row.service_id = int(service_id) if service_id else None
+    resolved_service_id = int(service_id) if service_id else None
+    resolved_device_id = int(device_id) if device_id else None
+    if resolved_service_id and not resolved_device_id:
+        service = db.get(models.Service, resolved_service_id)
+        if service:
+            resolved_device_id = service.device_id
+    row.device_id = resolved_device_id
+    row.service_id = resolved_service_id
     row.label = label
     row.url = url
     row.url_type = url_type
     row.notes = notes
+    set_tags(db, "url", row.id, tags)
+    if tags and row.device_id:
+        merge_tags(db, "device", row.device_id, tags)
     db.add(models.AuditLog(user_id=user.id, action="url_edited", object_type="url", object_id=row.id))
     db.commit()
     flash(request, "URL saved.", "success")
-    return redirect("/ports")
+    return redirect(_safe_return_to(return_to, "/ports"))
 
 
 @app.post("/notes/add")
@@ -5040,7 +5250,19 @@ def search_page(
             .limit(20)
             .all()
         )
-    return render(request, "search.html", {"q": q, "results": results}, user=user)
+    related_devices: list[models.Device | None] = list(results["devices"])
+    related_devices.extend(item.device for item in results["services"] if item.device)
+    related_devices.extend(item.device for item in results["ports"] if item.device)
+    related_devices.extend(
+        item.service.device if item.service and item.service.device else item.device
+        for item in results["credentials"]
+    )
+    return render(
+        request,
+        "search.html",
+        {"q": q, "results": results, "device_ping_statuses": _device_ping_status_map(db, related_devices)},
+        user=user,
+    )
 
 
 @app.get("/exports", response_class=HTMLResponse)

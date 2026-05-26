@@ -128,6 +128,45 @@
     setTimeout(() => { button.textContent = old; }, 1200);
   }
 
+  function requestMaskedChallenge(message) {
+    return new Promise((resolve) => {
+      const backdrop = document.createElement("div");
+      backdrop.className = "modal-backdrop";
+      backdrop.innerHTML = `
+        <form class="modal-panel compact-modal credential-challenge-modal">
+          <h2>${message || "Password or reveal PIN"}</h2>
+          <label>Password or reveal PIN <input name="challenge" type="password" autocomplete="current-password" required></label>
+          <div class="form-actions">
+            <button type="submit">Continue</button>
+            <button class="secondary" type="button" data-cancel-challenge>Cancel</button>
+          </div>
+        </form>`;
+      document.body.appendChild(backdrop);
+      const form = backdrop.querySelector("form");
+      const input = backdrop.querySelector("input");
+
+      function finish(value) {
+        document.removeEventListener("keydown", onKeydown, true);
+        backdrop.remove();
+        resolve(value);
+      }
+
+      function onKeydown(event) {
+        if (event.key === "Escape") finish("");
+      }
+
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        finish(input.value);
+      });
+      backdrop.addEventListener("click", (event) => {
+        if (event.target === backdrop || event.target.closest("[data-cancel-challenge]")) finish("");
+      });
+      document.addEventListener("keydown", onKeydown, true);
+      setTimeout(() => input.focus(), 0);
+    });
+  }
+
   async function revealCredential(button, options = {}) {
     const row = button.closest("[data-credential-row]");
     const output = row?.querySelector("[data-secret-output]");
@@ -147,7 +186,7 @@
     let response = await sendReveal();
     let data = await response.json();
     if (response.status === 403 && data.requires_challenge) {
-      challenge = window.prompt(data.message || "Password or reveal PIN") || "";
+      challenge = await requestMaskedChallenge(data.message || "Password or reveal PIN");
       if (!challenge) return;
       response = await sendReveal();
       data = await response.json();
@@ -267,6 +306,20 @@
       }
       setThemeButtonLabel();
     }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== "a") return;
+    const noteBody = document.querySelector("[data-note-body]");
+    if (!noteBody) return;
+    const active = document.activeElement;
+    if (active && active.closest("input, textarea, select, [contenteditable='true']")) return;
+    event.preventDefault();
+    noteBody.focus({preventScroll: true});
+    const range = document.createRange();
+    range.selectNodeContents(noteBody);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
   });
   document.addEventListener("pointerover", (event) => {
     const target = event.target.closest("button[title], a[title], .hint[title], .ping-dot[title], .status-dot[title]");

@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/status_macros.html" import device_label %}
 {% block title %}Tags · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
@@ -27,7 +28,10 @@
               <h3>{{ group.kind }}</h3>
               <div class="list compact">
                 {% for item in group.items %}
-                  <a class="list-row" href="{{ item.href }}"><strong>{{ item.label }}</strong><span>{{ group.kind }}</span></a>
+                  <a class="list-row" href="{{ item.href }}">
+                    <strong>{% if group.kind == "Device" and item.device %}{{ device_label(item.device, device_ping_statuses) }}{% else %}{{ item.label }}{% endif %}</strong>
+                    <span>{{ group.kind }}{% if item.device and group.kind != "Device" %} · {{ device_label(item.device, device_ping_statuses) }}{% elif item.subtitle %} · {{ item.subtitle }}{% endif %}</span>
+                  </a>
                 {% endfor %}
               </div>
             </div>

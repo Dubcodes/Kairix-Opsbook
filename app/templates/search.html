@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/status_macros.html" import device_label %}
 {% block title %}Search · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
@@ -19,9 +20,9 @@
         <div class="list">
           {% for item in items %}
             {% if group == "devices" %}
-              <a class="list-row" href="/devices/{{ item.id }}"><strong>{{ item.name }}</strong><span>{{ item.primary_ip }} · {{ item.purpose }}</span></a>
+              <a class="list-row" href="/devices/{{ item.id }}"><strong>{{ device_label(item, device_ping_statuses) }}</strong><span>{{ item.primary_ip }} · {{ item.purpose }}</span></a>
             {% elif group == "services" %}
-              <a class="list-row" href="/services/{{ item.id }}"><strong>{{ item.name }}</strong><span>{{ item.device.name }} · {{ item.local_url or item.compose_path }}</span></a>
+              <a class="list-row" href="/services/{{ item.id }}"><strong>{{ item.name }}</strong><span>{{ device_label(item.device, device_ping_statuses) }} · {{ item.local_url or item.compose_path }}</span></a>
             {% elif group == "credentials" %}
               <a class="list-row" href="/credentials/{{ item.id }}"><strong>{{ item.label }}</strong><span>{{ item.username }} · secret hidden</span></a>
             {% elif group == "commands" %}
@@ -29,7 +30,7 @@
             {% elif group == "urls" %}
               <a class="list-row" href="{{ item.url }}" target="_blank"><strong>{{ item.label or item.url_type }}</strong><span>{{ item.url }}</span></a>
             {% elif group == "ports" %}
-              <a class="list-row" href="/ports"><strong>{{ item.host_port }}/{{ item.protocol }}</strong><span>{{ item.device.name }}{% if item.service %} · {{ item.service.name }}{% endif %}</span></a>
+              <a class="list-row" href="/ports/{{ item.id }}/edit?return_to=/search%3Fq={{ q|urlencode }}"><strong>{{ item.host_port }}/{{ item.protocol }}</strong><span>{{ device_label(item.device, device_ping_statuses) }}{% if item.service %} · {{ item.service.name }}{% endif %}</span></a>
             {% elif group == "notes" %}
               <div class="list-row static"><strong>{{ item.title or "Note" }}</strong><span>{{ item.body[:180] }}</span></div>
             {% endif %}

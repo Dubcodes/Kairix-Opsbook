@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/status_macros.html" import device_label %}
 {% block title %}Dashboard · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
@@ -66,7 +67,7 @@
     <div class="list">
       {% for device in devices %}
         <a class="list-row" href="/devices/{{ device.id }}">
-          <strong>{{ device.name }}</strong>
+          <strong>{{ device_label(device, device_ping_statuses) }}</strong>
           <span>{{ device.primary_ip or "No IP yet" }} · {{ device.os_name or "OS unknown" }}</span>
         </a>
       {% else %}
@@ -84,7 +85,7 @@
         {% set service_status = service_statuses.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
         <a class="list-row" href="/services/{{ service.id }}">
           <strong><span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.name }}</strong>
-          <span>{{ service.device.name }} · {{ service.local_url or service.public_url or "No URL yet" }}</span>
+          <span>{{ device_label(service.device, device_ping_statuses) }} · {{ service.local_url or service.public_url or "No URL yet" }}</span>
         </a>
       {% else %}
         <p class="empty">No services yet.</p>

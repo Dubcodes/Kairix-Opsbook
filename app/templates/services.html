@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/status_macros.html" import device_label %}
 {% block title %}Services · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
@@ -14,7 +15,8 @@
 </form>
 <section class="list">
   {% for group_name, group_services in service_groups.items() %}
-    <h2 class="list-heading">{{ group_name }}</h2>
+    {% set group_device = group_services[0].device if group_services and group_services[0].device else none %}
+    <h2 class="list-heading">{{ device_label(group_device, device_ping_statuses) if group_device else group_name }}</h2>
     {% for service in group_services %}
       {% set service_status = validation_statuses.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
       <a class="device-row" href="/services/{{ service.id }}">

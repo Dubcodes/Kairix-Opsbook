@@ -14,7 +14,7 @@
 </section>
 
 <section class="panel">
-  <pre>{{ note.body }}</pre>
+  <pre data-note-body tabindex="0">{{ note.body }}</pre>
   <div class="form-actions">
     {% if note.object_type == "quick_note" %}
       <form method="post" action="/smart-paste">

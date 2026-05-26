@@ -362,6 +362,22 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   align-items: center;
   gap: 7px;
 }
+.device-with-ping {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+.device-with-ping .ping-dot,
+h1 > .ping-dot {
+  flex: 0 0 auto;
+  margin-right: 0;
+}
+h1 > .ping-dot {
+  width: 13px;
+  height: 13px;
+  margin-right: 9px;
+}
 .detail-tags {
   justify-content: flex-start;
   margin: 12px 0;
@@ -809,6 +825,10 @@ code {
 }
 .compact-modal {
   max-width: 420px;
+}
+.credential-challenge-modal {
+  display: grid;
+  gap: 12px;
 }
 
 input[type="color"] {
