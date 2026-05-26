@@ -27,7 +27,7 @@
             <div class="tag-kind-group">
               <h3>{{ group.kind }}</h3>
               <div class="list compact">
-                {% for item in group.items %}
+                {% for item in group["items"] %}
                   <a class="list-row" href="{{ item.href }}">
                     <strong>{% if group.kind == "Device" and item.device %}{{ device_label(item.device, device_ping_statuses) }}{% else %}{{ item.label }}{% endif %}</strong>
                     <span>{{ group.kind }}{% if item.device and group.kind != "Device" %} · {{ device_label(item.device, device_ping_statuses) }}{% elif item.subtitle %} · {{ item.subtitle }}{% endif %}</span>
