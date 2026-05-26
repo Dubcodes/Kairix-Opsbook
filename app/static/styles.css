@@ -369,14 +369,15 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   vertical-align: middle;
 }
 .device-with-ping .ping-dot,
+.row-title-with-status .ping-dot,
 h1 > .ping-dot {
   flex: 0 0 auto;
-  margin-right: 0;
+  margin-left: 0;
 }
 h1 > .ping-dot {
   width: 13px;
   height: 13px;
-  margin-right: 9px;
+  margin-left: 9px;
 }
 .detail-tags {
   justify-content: flex-start;
@@ -514,6 +515,8 @@ label small { color: var(--muted); font-weight: 500; }
   border-radius: 999px;
   background: var(--muted);
   display: inline-block;
+  margin-left: 6px;
+  vertical-align: middle;
 }
 .ping-good { background: var(--green); }
 .ping-slow { background: var(--amber); }
@@ -727,7 +730,7 @@ code {
   width: 8px;
   height: 8px;
   border-radius: 999px;
-  margin-right: 6px;
+  margin-left: 6px;
   vertical-align: middle;
   background: var(--muted);
   opacity: 0.55;

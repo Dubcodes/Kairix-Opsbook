@@ -7,7 +7,7 @@
 
 {% macro device_link(device, ping_statuses) -%}
   {%- if device -%}
-    <span class="device-with-ping">{{ device_ping_dot(device, ping_statuses) }}<a href="/devices/{{ device.id }}">{{ device.name }}</a></span>
+    <span class="device-with-ping"><a href="/devices/{{ device.id }}">{{ device.name }}</a>{{ device_ping_dot(device, ping_statuses) }}</span>
   {%- else -%}
     Unlinked
   {%- endif -%}
@@ -15,7 +15,7 @@
 
 {% macro device_label(device, ping_statuses) -%}
   {%- if device -%}
-    <span class="device-with-ping">{{ device_ping_dot(device, ping_statuses) }}{{ device.name }}</span>
+    <span class="device-with-ping">{{ device.name }}{{ device_ping_dot(device, ping_statuses) }}</span>
   {%- else -%}
     Unlinked
   {%- endif -%}

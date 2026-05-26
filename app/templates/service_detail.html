@@ -6,7 +6,7 @@
   <div>
     <p class="eyebrow">Service record</p>
     <h1>{{ service.name }}{% if token_credentials %}<a class="token-indicator" href="/tokens?service_id={{ service.id }}" title="This service has linked tokens or API keys">◇</a>{% endif %}</h1>
-    <p>{{ device_link(service.device, device_ping_statuses) }} · <span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span>{{ service.local_url or service.public_url or "No URL" }}</p>
+    <p>{{ device_link(service.device, device_ping_statuses) }} · {{ service.local_url or service.public_url or "No URL" }}<span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span></p>
     <div class="tags">{% for tag in tag_list %}<span>{{ tag }}</span>{% endfor %}</div>
   </div>
   <div class="actions">
@@ -32,8 +32,8 @@
     <dl class="details">
       {% if service.purpose %}<dt>Purpose</dt><dd>{{ service.purpose }}</dd>{% endif %}
       {% if service.status_manual %}<dt>Manual state</dt><dd>{{ service.status_manual }}{% if status_log %} · set {{ status_log.created_at|dt }}{% endif %}</dd>{% endif %}
-      {% if service.local_url %}<dt>Local URL</dt><dd><span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span><a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a></dd>{% endif %}
-      {% if service.public_url %}<dt>Public URL</dt><dd><span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span><a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a></dd>{% endif %}
+      {% if service.local_url %}<dt>Local URL</dt><dd><a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a><span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span></dd>{% endif %}
+      {% if service.public_url %}<dt>Public URL</dt><dd><a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a><span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span></dd>{% endif %}
       {% if service.repo_url %}<dt>Repo</dt><dd>{{ service.repo_url }}</dd>{% endif %}
       {% if validation_status.checked_at %}<dt>Validated</dt><dd>{{ validation_status.label }} · {{ validation_status.checked_at }}</dd>{% endif %}
     </dl>
@@ -146,13 +146,11 @@
       <dt>Device</dt><dd>{{ device_link(service.device, device_ping_statuses) }}</dd>
       <dt>Device ping</dt>
       <dd>
-        <span class="ping-dot ping-{{ device_ping_status.state }}" title="Ping: {{ device_ping_status.label }}{% if device_ping_status.last_at_iso %} · last {{ device_ping_status.last_at }}{% endif %}"></span>
-        {{ device_ping_status.label }}{% if device_ping_status.last_at_iso %} · last <time data-utc="{{ device_ping_status.last_at_iso }}">{{ device_ping_status.last_at }}</time>{% endif %}
+        {{ device_ping_status.label }}<span class="ping-dot ping-{{ device_ping_status.state }}" title="Ping: {{ device_ping_status.label }}{% if device_ping_status.last_at_iso %} · last {{ device_ping_status.last_at }}{% endif %}"></span>{% if device_ping_status.last_at_iso %} · last <time data-utc="{{ device_ping_status.last_at_iso }}">{{ device_ping_status.last_at }}</time>{% endif %}
       </dd>
       <dt>Service check</dt>
       <dd>
-        <span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span>
-        {{ validation_status.label }}{% if validation_status.checked_at_iso %} · checked <time data-utc="{{ validation_status.checked_at_iso }}">{{ validation_status.checked_at }}</time>{% endif %}
+        {{ validation_status.label }}<span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span>{% if validation_status.checked_at_iso %} · checked <time data-utc="{{ validation_status.checked_at_iso }}">{{ validation_status.checked_at }}</time>{% endif %}
       </dd>
     </dl>
   </section>

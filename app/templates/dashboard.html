@@ -51,7 +51,7 @@
     <div>
       {% for item in ping_overview %}
         <a href="/devices?q={{ item.name }}" class="ping-pill ping-pill-{{ item.state }}" title="Last device ping for {{ item.name }}: {{ item.label }}">
-          <span class="ping-dot ping-{{ item.state }}"></span>{{ item.name }} <small>{% if item.when_iso %}<time data-utc="{{ item.when_iso }}" data-format="time">{{ item.label }}</time>{% else %}{{ item.label }}{% endif %}</small>
+          {{ item.name }}<span class="ping-dot ping-{{ item.state }}"></span> <small>{% if item.when_iso %}<time data-utc="{{ item.when_iso }}" data-format="time">{{ item.label }}</time>{% else %}{{ item.label }}{% endif %}</small>
         </a>
       {% endfor %}
     </div>
@@ -84,7 +84,7 @@
       {% for service in services %}
         {% set service_status = service_statuses.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
         <a class="list-row" href="/services/{{ service.id }}">
-          <strong><span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.name }}</strong>
+          <strong>{{ service.name }}<span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span></strong>
           <span>{{ device_label(service.device, device_ping_statuses) }} · {{ service.local_url or service.public_url or "No URL yet" }}</span>
         </a>
       {% else %}

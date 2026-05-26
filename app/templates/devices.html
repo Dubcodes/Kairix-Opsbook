@@ -20,10 +20,10 @@
     <a class="device-row" href="/devices/{{ device.id }}">
       <div>
         <strong class="row-title-with-status">
+          {{ device.name }}
           {% if ping %}
             <span class="ping-dot ping-{{ ping.state }}" title="Ping: {{ ping.label }}{% if ping.last_at_iso %} · last {{ ping.last_at }}{% endif %}"></span>
           {% endif %}
-          {{ device.name }}
         </strong>
         <span>{{ device.primary_ip or "No IP" }} · {{ device.os_name or device.type }} · {{ service_counts.get(device.id, 0) }} services · {{ credential_counts.get(device.id, 0) }} credentials</span>
       </div>

@@ -5,7 +5,7 @@
 <section class="page-head">
   <div>
     <p class="eyebrow">Device record</p>
-    <h1>{{ device_ping_dot(device, device_ping_statuses) }}{{ device.name }}</h1>
+    <h1>{{ device.name }}{{ device_ping_dot(device, device_ping_statuses) }}</h1>
     <p>{{ device.primary_ip or "No IP" }} · {{ device.hostname or "No hostname" }} · {{ device.os_name or "OS unknown" }}</p>
     <div class="tags">{% for tag in tag_list %}<span>{{ tag }}</span>{% endfor %}</div>
   </div>
@@ -34,8 +34,7 @@
       <dd>
         <form method="post" action="/devices/{{ device.id }}/ping" class="inline-mini ping-line">
           <input type="hidden" name="csrf" value="{{ csrf }}">
-          <span class="ping-dot ping-{{ ping_status.state }}" title="Ping: {{ ping_status.label }}{% if ping_status.last_at_iso %} · last {{ ping_status.last_at }}{% endif %}{% if ping_status.next_at_iso %} · next {{ ping_status.next_at }}{% endif %}"></span>
-          <span>{{ ping_status.label }}{% if ping_status.last_at_iso %} · last <time data-utc="{{ ping_status.last_at_iso }}">{{ ping_status.last_at }}</time>{% endif %} · next {% if ping_status.overdue %}due now{% elif ping_status.next_at_iso %}<time data-utc="{{ ping_status.next_at_iso }}">{{ ping_status.next_at }}</time>{% else %}{{ ping_status.next_at }}{% endif %}</span>
+          <span>{{ ping_status.label }}<span class="ping-dot ping-{{ ping_status.state }}" title="Ping: {{ ping_status.label }}{% if ping_status.last_at_iso %} · last {{ ping_status.last_at }}{% endif %}{% if ping_status.next_at_iso %} · next {{ ping_status.next_at }}{% endif %}"></span>{% if ping_status.last_at_iso %} · last <time data-utc="{{ ping_status.last_at_iso }}">{{ ping_status.last_at }}</time>{% endif %} · next {% if ping_status.overdue %}due now{% elif ping_status.next_at_iso %}<time data-utc="{{ ping_status.next_at_iso }}">{{ ping_status.next_at }}</time>{% else %}{{ ping_status.next_at }}{% endif %}</span>
           <button class="secondary small-button" type="submit">Check now</button>
         </form>
       </dd>
@@ -130,7 +129,7 @@
         <details class="service-summary">
           <summary>
             {% set service_status = validation_status.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
-            <span><strong>{{ service.name }}{% if service_tokens(service) %}<a class="token-indicator" href="/tokens?service_id={{ service.id }}" title="This service has linked tokens or API keys">◇</a>{% endif %}</strong><small><span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path yet" }}</small></span>
+            <span><strong>{{ service.name }}{% if service_tokens(service) %}<a class="token-indicator" href="/tokens?service_id={{ service.id }}" title="This service has linked tokens or API keys">◇</a>{% endif %}</strong><small>{{ service.local_url or service.public_url or service.compose_path or "No URL/path yet" }}<span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span></small></span>
             <a href="/services/{{ service.id }}">Open</a>
           </summary>
           <div class="summary-grid">
@@ -200,7 +199,7 @@
         <a class="list-row {% if (highlight == 'missing-backup' and needs_backup) or (highlight == 'missing-purpose' and needs_purpose) %}item-highlight{% endif %}" href="/services/{{ service.id }}">
           <strong>{{ service.name }}{% if service_tokens(service) %}<span class="token-indicator" title="This service has linked tokens or API keys">◇</span>{% endif %}</strong>
           <span>
-            <span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}
+            {{ service.local_url or service.public_url or service.compose_path or "No URL/path" }}<span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span>
             {% if highlight == 'missing-backup' and needs_backup %}<small class="inline-note">missing backup notes</small>{% endif %}
             {% if highlight == 'missing-purpose' and needs_purpose %}<small class="inline-note">missing purpose</small>{% endif %}
           </span>
@@ -257,8 +256,7 @@
       {% if device.hostname %}<dt>Hostname</dt><dd>{{ device.hostname }}</dd>{% endif %}
       <dt>Ping</dt>
       <dd>
-        <span class="ping-dot ping-{{ ping_status.state }}" title="Ping: {{ ping_status.label }}{% if ping_status.last_at_iso %} · last {{ ping_status.last_at }}{% endif %}"></span>
-        {{ ping_status.label }}{% if ping_status.last_at_iso %} · last <time data-utc="{{ ping_status.last_at_iso }}">{{ ping_status.last_at }}</time>{% endif %}
+        {{ ping_status.label }}<span class="ping-dot ping-{{ ping_status.state }}" title="Ping: {{ ping_status.label }}{% if ping_status.last_at_iso %} · last {{ ping_status.last_at }}{% endif %}"></span>{% if ping_status.last_at_iso %} · last <time data-utc="{{ ping_status.last_at_iso }}">{{ ping_status.last_at }}</time>{% endif %}
       </dd>
     </dl>
     <h3>Ports</h3>
