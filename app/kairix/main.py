@@ -667,6 +667,59 @@ def _ensure_device_hardware(db: Session, device: models.Device) -> models.Device
     return hardware
 
 
+def _replace_text_value(value: str | None, old: str, new: str) -> tuple[str, bool]:
+    current = value or ""
+    if not old:
+        return current, False
+    boundary = r"0-9A-Fa-f:" if ":" in old else r"A-Za-z0-9."
+    pattern = re.compile(rf"(?<![{boundary}]){re.escape(old)}(?![{boundary}])")
+    updated, count = pattern.subn(lambda _match: new, current)
+    return updated, count > 0
+
+
+def _replace_device_ip_references(device: models.Device, old_ip: str, new_ip: str) -> dict[str, int]:
+    old_ip = old_ip.strip()
+    new_ip = new_ip.strip()
+    counts = {"services": 0, "urls": 0, "credentials": 0}
+    if not old_ip or not new_ip or old_ip == new_ip:
+        return counts
+
+    for service in list(device.services):
+        changed = False
+        for attr in ("local_url", "public_url"):
+            updated, did_change = _replace_text_value(getattr(service, attr), old_ip, new_ip)
+            if did_change:
+                setattr(service, attr, updated)
+                changed = True
+        if changed:
+            counts["services"] += 1
+
+    seen_url_ids: set[int] = set()
+    for url in list(device.urls) + [url for service in list(device.services) for url in list(service.urls)]:
+        if url.id in seen_url_ids:
+            continue
+        seen_url_ids.add(url.id)
+        updated, changed = _replace_text_value(url.url, old_ip, new_ip)
+        if changed:
+            url.url = updated
+            counts["urls"] += 1
+
+    seen_credential_ids: set[int] = set()
+    credentials = list(device.credentials)
+    for service in list(device.services):
+        credentials.extend(list(service.credentials))
+    for credential in credentials:
+        if credential.id in seen_credential_ids:
+            continue
+        seen_credential_ids.add(credential.id)
+        updated, changed = _replace_text_value(credential.login_url, old_ip, new_ip)
+        if changed:
+            credential.login_url = updated
+            counts["credentials"] += 1
+
+    return counts
+
+
 def _device_ping_status(db: Session, device: models.Device) -> dict[str, Any]:
     latest = _latest_audit(db, "device", device.id, "device_ping")
     interval = int_setting(db, "ping_interval_minutes", 60, minimum=5, maximum=999)
@@ -1547,6 +1600,7 @@ AUDIT_ACTION_LABELS = {
     "token_created": "Temporary token stored",
     "device_created": "Device added",
     "device_edited": "Device updated",
+    "device_ip_references_updated": "Device IP references updated",
     "device_deleted": "Device deleted",
     "device_ping": "Device ping checked",
     "service_created": "Service added",
@@ -2507,6 +2561,7 @@ def device_update(
     hw_gpu: str = Form(""),
     hw_storage: str = Form(""),
     tags: str = Form(""),
+    update_linked_ip_refs: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -2515,12 +2570,14 @@ def device_update(
     device = db.get(models.Device, device_id)
     if not device:
         raise HTTPException(404, "Device not found.")
+    old_primary_ip = (device.primary_ip or "").strip()
+    new_primary_ip = primary_ip.strip()
     device.name = name.strip()
     device.slug = unique_slug(db, models.Device, name, existing_id=device.id)
     device.type = type
     device.purpose = purpose
     device.hostname = hostname
-    device.primary_ip = primary_ip
+    device.primary_ip = new_primary_ip
     device.os_name = os_name
     device.os_version = os_version
     device.location = location
@@ -2535,6 +2592,23 @@ def device_update(
     hardware.storage_summary = hw_storage
     set_tags(db, "device", device.id, tags)
     merge_tags(db, "device", device.id, _infer_tags_for_device(device))
+    ip_reference_counts = {"services": 0, "urls": 0, "credentials": 0}
+    if update_linked_ip_refs == "on":
+        ip_reference_counts = _replace_device_ip_references(device, old_primary_ip, new_primary_ip)
+        if sum(ip_reference_counts.values()):
+            db.add(
+                models.AuditLog(
+                    user_id=user.id,
+                    action="device_ip_references_updated",
+                    object_type="device",
+                    object_id=device.id,
+                    details_json={
+                        "old_ip": old_primary_ip,
+                        "new_ip": new_primary_ip,
+                        "counts": ip_reference_counts,
+                    },
+                )
+            )
     if old_status != (status_manual or ""):
         db.add(
             models.AuditLog(
@@ -2547,7 +2621,20 @@ def device_update(
         )
     db.add(models.AuditLog(user_id=user.id, action="device_edited", object_type="device", object_id=device.id))
     db.commit()
-    flash(request, f"Device {device.name} saved.", "success")
+    updated_total = sum(ip_reference_counts.values())
+    if updated_total:
+        parts = [
+            f"{count} {label}"
+            for label, count in (
+                ("service record(s)", ip_reference_counts["services"]),
+                ("linked URL record(s)", ip_reference_counts["urls"]),
+                ("credential login URL(s)", ip_reference_counts["credentials"]),
+            )
+            if count
+        ]
+        flash(request, f"Device {device.name} saved. Updated {', '.join(parts)}.", "success")
+    else:
+        flash(request, f"Device {device.name} saved.", "success")
     return redirect(f"/devices/{device.id}")
 
 

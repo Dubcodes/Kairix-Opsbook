@@ -349,14 +349,26 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
 .list-row.static:hover, .device-row.static:hover { border-color: var(--line); }
 .clickable-card { cursor: pointer; }
 .list-row.static.clickable-card:hover, .device-row.static.clickable-card:hover { border-color: var(--accent); }
-.list-row span, .device-row span { display: block; color: var(--muted); margin-top: 3px; }
+.list-row > span,
+.device-row > span,
+.list-row > a > span,
+.device-row > a > span,
+.list-row > div:not(.tags) > span,
+.device-row > div:not(.tags) > span {
+  display: block;
+  color: var(--muted);
+  margin-top: 2px;
+  font-size: 13px;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
 .row-main {
   flex: 1;
   min-width: 0;
   color: var(--ink);
 }
 .row-main:hover { text-decoration: none; }
-.row-main span { display: block; color: var(--muted); margin-top: 2px; }
+.row-main > span { display: block; color: var(--muted); margin-top: 2px; font-size: 13px; line-height: 1.3; }
 .row-title-with-status {
   display: inline-flex;
   align-items: center;
@@ -460,6 +472,15 @@ label small { color: var(--muted); font-weight: 500; }
   font-weight: 600;
 }
 .check-row input { width: auto; }
+.ip-reference-note {
+  display: grid;
+  gap: 3px;
+  margin: -2px 0 2px;
+}
+.ip-reference-note small {
+  color: var(--muted);
+  font-weight: 500;
+}
 
 .webhook-scope-grid {
   display: flex;

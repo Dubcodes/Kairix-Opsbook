@@ -15,6 +15,12 @@
   <label>Type <span class="hint" title="Examples: Debian Docker host, Raspberry Pi, Windows PC, NAS, VM.">?</span><input name="type" value="{{ device.type if device else 'server' }}" spellcheck="true"></label>
   <label>Hostname <span class="hint" title="The network hostname, if known. Example: moxxie.local.">?</span><input name="hostname" value="{{ device.hostname if device else '' }}"></label>
   <label>Primary IP <span class="hint" title="Main LAN address. Example: 192.168.1.10.">?</span><input name="primary_ip" value="{{ device.primary_ip if device else '' }}"></label>
+  {% if device and device.primary_ip %}
+    <div class="span-2 form-note ip-reference-note">
+      <label class="check-row"><input type="checkbox" name="update_linked_ip_refs"> Also update linked records if this IP changes</label>
+      <small>Exact matches for {{ device.primary_ip }} in linked service URLs, URL records, and credential login URLs will be replaced with the new primary IP.</small>
+    </div>
+  {% endif %}
   <label>OS name <span class="hint" title="Example: Debian GNU/Linux 12, Ubuntu 24.04, Windows 11.">?</span><input name="os_name" value="{{ device.os_name if device else '' }}" spellcheck="true"></label>
   <label>OS version <input name="os_version" value="{{ device.os_version if device else '' }}"></label>
   <label>Location <input name="location" value="{{ device.location if device else '' }}" spellcheck="true"></label>
