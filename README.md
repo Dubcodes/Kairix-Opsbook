@@ -14,6 +14,24 @@ It is designed to be fast like notes, structured like inventory, and safe like a
 
 The dashboard gives you a quick view of warnings, device status, recent devices, recent services, and recent activity in one place.
 
+## Feature Walkthroughs
+
+### Warnings That Lead To Action
+
+<p align="center">
+  <img src="docs/images/warningpasswordsecuritylevel20260528.png" alt="Opsbook workflow showing a low-security password warning, opening the credential record, and changing the security level" width="900">
+</p>
+
+Opsbook can surface issues such as low-security credentials or failed service checks, then help you jump to the related record so you can review and fix the problem.
+
+### Controlled Reveal And Copy Access
+
+<p align="center">
+  <img src="docs/images/opsbookrevealkeyinfographic20260528.png" alt="Opsbook credential reveal workflow showing Reveal, Copy Secret, Copy and Go, and password or reveal PIN confirmation" width="900">
+</p>
+
+Credential actions such as reveal, copy, and Copy & Go can require confirmation with your password or a reveal PIN. The reveal PIN is useful for quicker repeated access without entering the full password every time.
+
 ## Features
 
 - FastAPI web app with a simple server-rendered UI.
