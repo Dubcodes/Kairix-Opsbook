@@ -209,6 +209,96 @@
     return data;
   }
 
+  function initLiveSearch() {
+    const inputs = document.querySelectorAll("form.global-search input[type='search'][name='q'], form.filter-bar input[type='search'][name='q']");
+    const hosts = [];
+
+    function hide(host) {
+      host.dropdown.hidden = true;
+      host.input.setAttribute("aria-expanded", "false");
+    }
+
+    function render(host, items, query) {
+      host.dropdown.replaceChildren();
+      if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "live-search-empty";
+        empty.textContent = `No quick matches for "${query}". Press Enter for the full search.`;
+        host.dropdown.appendChild(empty);
+      } else {
+        items.forEach((item) => {
+          const link = document.createElement("a");
+          link.className = "live-search-item";
+          link.href = item.url || "/search";
+          const badge = document.createElement("small");
+          badge.textContent = item.type || "Result";
+          const title = document.createElement("strong");
+          title.textContent = item.title || "Result";
+          const subtitle = document.createElement("span");
+          subtitle.textContent = item.subtitle || "";
+          link.append(badge, title, subtitle);
+          host.dropdown.appendChild(link);
+        });
+      }
+      host.dropdown.hidden = false;
+      host.input.setAttribute("aria-expanded", "true");
+    }
+
+    async function run(host) {
+      const query = host.input.value.trim();
+      host.requestId += 1;
+      const requestId = host.requestId;
+      clearTimeout(host.timer);
+      if (query.length < 2) {
+        hide(host);
+        return;
+      }
+      host.timer = setTimeout(async () => {
+        try {
+          const response = await fetch(`/search/live?q=${encodeURIComponent(query)}`, {credentials: "same-origin"});
+          if (!response.ok || requestId !== host.requestId) return;
+          const data = await response.json();
+          render(host, Array.isArray(data.items) ? data.items : [], query);
+        } catch {
+          hide(host);
+        }
+      }, 160);
+    }
+
+    inputs.forEach((input, index) => {
+      if (input.closest(".live-search-box")) return;
+      const wrapper = document.createElement("div");
+      wrapper.className = "live-search-box";
+      input.parentNode.insertBefore(wrapper, input);
+      wrapper.appendChild(input);
+
+      const dropdown = document.createElement("div");
+      dropdown.className = "live-search-results";
+      dropdown.hidden = true;
+      dropdown.id = `live-search-results-${index}`;
+      wrapper.appendChild(dropdown);
+
+      input.setAttribute("autocomplete", "off");
+      input.setAttribute("aria-autocomplete", "list");
+      input.setAttribute("aria-expanded", "false");
+      input.setAttribute("aria-controls", dropdown.id);
+
+      const host = {input, dropdown, wrapper, timer: 0, requestId: 0};
+      hosts.push(host);
+      input.addEventListener("input", () => run(host));
+      input.addEventListener("focus", () => run(host));
+      input.addEventListener("keydown", (event) => {
+        if (event.key === "Escape") hide(host);
+      });
+    });
+
+    document.addEventListener("pointerdown", (event) => {
+      hosts.forEach((host) => {
+        if (!host.wrapper.contains(event.target)) hide(host);
+      });
+    });
+  }
+
   document.addEventListener("click", (event) => {
     const quickNoteOpen = event.target.closest("[data-open-quick-note]");
     if (quickNoteOpen) {
@@ -368,6 +458,7 @@
   setThemeButtonLabel();
   hydrateLocalTimes();
   highlightFocusedField();
+  initLiveSearch();
 
   const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
   if (timeoutMeta) {

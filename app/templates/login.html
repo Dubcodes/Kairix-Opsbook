@@ -5,12 +5,10 @@
   <p class="eyebrow">Secure notes for servers and services</p>
   <h1>Log in to Opsbook</h1>
   {% if failed_ping_summary and failed_ping_summary.total %}
-    <a class="prelogin-status" href="/login" title="Log in, then open Services or Suggestions to find the affected checks. Services now show the same status dot as devices.">
+    <div class="prelogin-status" role="status" aria-live="polite" title="These checks are visible after login in Warnings & Suggestions, where they can be dismissed.">
       <span class="ping-dot ping-down"></span>
-      <strong>{{ failed_ping_summary.total }} ping warning{% if failed_ping_summary.total != 1 %}s{% endif %}</strong>
-      <span>{{ failed_ping_summary.devices }} device{% if failed_ping_summary.devices != 1 %}s{% endif %} · {{ failed_ping_summary.services }} service{% if failed_ping_summary.services != 1 %}s{% endif %}</span>
-      <small>Log in, then check Services or Suggestions.</small>
-    </a>
+      <span class="prelogin-status-text"><strong>{{ failed_ping_summary.total }} check warning{% if failed_ping_summary.total != 1 %}s{% endif %}</strong> · {{ failed_ping_summary.devices }} device{% if failed_ping_summary.devices != 1 %}s{% endif %}, {{ failed_ping_summary.services }} service{% if failed_ping_summary.services != 1 %}s{% endif %}</span>
+    </div>
   {% endif %}
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">

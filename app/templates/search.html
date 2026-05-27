@@ -32,7 +32,7 @@
             {% elif group == "ports" %}
               <a class="list-row" href="/ports/{{ item.id }}/edit?return_to=/search%3Fq={{ q|urlencode }}"><strong>{{ item.host_port }}/{{ item.protocol }}</strong><span>{{ device_label(item.device, device_ping_statuses) }}{% if item.service %} · {{ item.service.name }}{% endif %}</span></a>
             {% elif group == "notes" %}
-              <div class="list-row static"><strong>{{ item.title or "Note" }}</strong><span>{{ item.body[:180] }}</span></div>
+              <a class="list-row" href="/notes/{{ item.id }}"><strong>{{ item.title or "Note" }}</strong><span>{{ item.body[:180] }}</span></a>
             {% endif %}
           {% else %}
             <p class="empty">No matches.</p>

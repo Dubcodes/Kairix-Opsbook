@@ -872,20 +872,21 @@ def _dashboard_ping_overview(db: Session) -> list[dict[str, str]]:
 
 
 def _failed_ping_summary(db: Session) -> dict[str, int]:
-    devices_failed = 0
-    services_failed = 0
-    for device in _device_order_query(db).all():
-        latest = _latest_audit(db, "device", device.id, "device_ping")
-        if latest and not (latest.details_json or {}).get("ok"):
-            devices_failed += 1
-    for service in _service_order_query(db).all():
-        latest = _latest_audit(db, "service", service.id, "service_validate")
-        if not latest:
+    summary = {"devices": 0, "services": 0, "total": 0}
+    for suggestion in visible_suggestions(db):
+        if suggestion.get("action") != "mute-ping":
             continue
-        details = latest.details_json or {}
-        if int(details.get("checked") or 0) and not details.get("ok") and not details.get("partial"):
-            services_failed += 1
-    return {"devices": devices_failed, "services": services_failed, "total": devices_failed + services_failed}
+        object_type = suggestion.get("object_type") or suggestion["id"].split(":", 1)[0]
+        try:
+            count = int(suggestion.get("count") or 1)
+        except ValueError:
+            count = 1
+        if object_type == "device":
+            summary["devices"] += count
+        elif object_type == "service":
+            summary["services"] += count
+    summary["total"] = summary["devices"] + summary["services"]
+    return summary
 
 
 def _ping_device(db: Session, device: models.Device) -> dict[str, Any]:
@@ -1545,6 +1546,7 @@ AUDIT_ACTION_LABELS = {
     "note_tags_updated": "Note tags updated",
     "quick_credentials_updated": "Favorite credentials updated",
     "ping_warning_scheduled": "Ping warning marked scheduled",
+    "ping_warning_expected": "Check warning marked expected",
     "smart_paste_parsed": "Smart Paste reviewed",
     "smart_paste_applied": "Smart Paste applied",
     "quick_note_saved": "Quick note saved",
@@ -2143,7 +2145,8 @@ def dashboard(
     devices = _device_order_query(db).limit(recent_limit).all()
     services = _service_order_query(db).limit(recent_limit).all()
     recent_logs = db.query(models.AuditLog).order_by(models.AuditLog.created_at.desc()).limit(8).all()
-    suggestions = visible_suggestions(db)[:6]
+    active_suggestions = visible_suggestions(db)
+    suggestions = active_suggestions[:6]
     return render(
         request,
         "dashboard.html",
@@ -2157,6 +2160,7 @@ def dashboard(
             ),
             "recent_logs": recent_logs,
             "suggestions": suggestions,
+            "suggestion_count": len(active_suggestions),
             "ping_overview": _dashboard_ping_overview(db),
             "counts": {
                 "devices": db.query(models.Device).count(),
@@ -4734,20 +4738,20 @@ def suggestions_apply(
     cleaned = value.strip()
     if action == "mute-ping":
         if not mute_event_id:
-            flash(request, "That ping warning could not be marked scheduled.", "warning")
+            flash(request, "That check warning could not be marked expected.", "warning")
             return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
         mute_ping_failure(db, suggestion_id, mute_event_id)
         db.add(
             models.AuditLog(
                 user_id=user.id,
-                action="ping_warning_scheduled",
+                action="ping_warning_expected",
                 object_type=object_type,
                 object_id=object_id,
                 details_json={"id": suggestion_id, "event_id": mute_event_id},
             )
         )
         db.commit()
-        flash(request, "Ping warning marked as scheduled for this failed check.", "success")
+        flash(request, "Check warning marked expected for this failed check.", "success")
         return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
     if action == "duplicate-port-cleanup" and object_type == "port":
         match = re.match(r"device:(\d+):port:(\d+):([^:]+):duplicate", suggestion_id)
@@ -5205,16 +5209,11 @@ def maintenance_cleanup_smart_paste(
     return redirect("/settings")
 
 
-@app.get("/search", response_class=HTMLResponse)
-def search_page(
-    request: Request,
-    q: str = "",
-    user: models.User = Depends(require_user),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    like = f"%{q}%"
+def _search_results(db: Session, q: str, limit: int = 20) -> dict[str, list[Any]]:
+    clean = q.strip()
+    like = f"%{clean}%"
     results: dict[str, list[Any]] = {"devices": [], "services": [], "credentials": [], "commands": [], "urls": [], "ports": [], "notes": []}
-    if q:
+    if clean:
         results["devices"] = (
             db.query(models.Device)
             .filter(
@@ -5226,7 +5225,7 @@ def search_page(
                     models.Device.notes.ilike(like),
                 )
             )
-            .limit(20)
+            .limit(limit)
             .all()
         )
         results["services"] = (
@@ -5242,7 +5241,7 @@ def search_page(
                     models.Service.notes.ilike(like),
                 )
             )
-            .limit(20)
+            .limit(limit)
             .all()
         )
         results["credentials"] = (
@@ -5255,7 +5254,7 @@ def search_page(
                     models.Credential.notes.ilike(like),
                 )
             )
-            .limit(20)
+            .limit(limit)
             .all()
         )
         results["commands"] = (
@@ -5270,18 +5269,117 @@ def search_page(
                     models.Command.help_high.ilike(like),
                 )
             )
-            .limit(20)
+            .limit(limit)
             .all()
         )
-        results["urls"] = db.query(models.Url).filter(models.Url.url.ilike(like)).limit(20).all()
-        if q.isdigit():
-            results["ports"] = db.query(models.Port).filter(models.Port.host_port == int(q)).limit(20).all()
+        results["urls"] = (
+            db.query(models.Url)
+            .filter(
+                or_(
+                    models.Url.label.ilike(like),
+                    models.Url.url.ilike(like),
+                    models.Url.url_type.ilike(like),
+                    models.Url.notes.ilike(like),
+                )
+            )
+            .limit(limit)
+            .all()
+        )
+        port_filters = [
+            models.Port.protocol.ilike(like),
+            models.Port.purpose.ilike(like),
+            models.Port.notes.ilike(like),
+        ]
+        if clean.isdigit():
+            port_number = int(clean)
+            port_filters.extend([models.Port.host_port == port_number, models.Port.internal_port == port_number])
+        results["ports"] = db.query(models.Port).filter(or_(*port_filters)).limit(limit).all()
         results["notes"] = (
             db.query(models.Note)
             .filter(or_(models.Note.title.ilike(like), models.Note.body.ilike(like)))
-            .limit(20)
+            .limit(limit)
             .all()
         )
+    return results
+
+
+def _search_result_subtitle(*parts: Any) -> str:
+    return " · ".join(str(part).strip() for part in parts if str(part or "").strip())
+
+
+def _search_live_items(db: Session, results: dict[str, list[Any]], q: str) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+
+    def add(kind: str, title: str, subtitle: str, url: str) -> None:
+        items.append(
+            {
+                "type": kind,
+                "title": (title or "").strip() or kind,
+                "subtitle": subtitle,
+                "url": url,
+            }
+        )
+
+    for device in results["devices"]:
+        add("Device", device.name, _search_result_subtitle(device.primary_ip or device.hostname, device.purpose or device.type), f"/devices/{device.id}")
+    for service in results["services"]:
+        add(
+            "Service",
+            service.name,
+            _search_result_subtitle(service.device.name if service.device else "Unlinked", service.local_url or service.public_url or service.compose_path),
+            f"/services/{service.id}",
+        )
+    for credential in results["credentials"]:
+        context_device = _credential_context_device(credential)
+        add(
+            "Token" if credential.secret_type == "API token" else "Credential",
+            credential.label,
+            _search_result_subtitle(credential.service.name if credential.service else context_device.name if context_device else "Unlinked", credential.username, credential.secret_type),
+            f"/credentials/{credential.id}",
+        )
+    for command in results["commands"]:
+        add("Command", command.name, _search_result_subtitle(command.category, command.short_description), f"/commands/{command.id}/edit")
+    for url in results["urls"]:
+        context_device = url.service.device if url.service and url.service.device else url.device
+        add(
+            "URL",
+            url.label or url.url,
+            _search_result_subtitle(context_device.name if context_device else "", url.url_type, url.url),
+            f"/urls/{url.id}/edit?return_to=/search%3Fq={quote(q, safe='')}",
+        )
+    for port in results["ports"]:
+        add(
+            "Port",
+            f"{port.host_port}/{port.protocol}",
+            _search_result_subtitle(port.device.name if port.device else "", port.service.name if port.service else "", port.purpose),
+            f"/ports/{port.id}/edit?return_to=/search%3Fq={quote(q, safe='')}",
+        )
+    for note in results["notes"]:
+        target, _ = _note_target_label(db, note)
+        add("Note", note.title or "Note", _search_result_subtitle(target, note.source), f"/notes/{note.id}")
+    return items
+
+
+@app.get("/search/live")
+def search_live(
+    q: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    clean = q.strip()
+    if len(clean) < 2:
+        return JSONResponse({"items": []})
+    return JSONResponse({"items": _search_live_items(db, _search_results(db, clean, limit=6), clean)[:12]})
+
+
+@app.get("/search", response_class=HTMLResponse)
+def search_page(
+    request: Request,
+    q: str = "",
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    results = _search_results(db, q)
     related_devices: list[models.Device | None] = list(results["devices"])
     related_devices.extend(item.device for item in results["services"] if item.device)
     related_devices.extend(item.device for item in results["ports"] if item.device)
@@ -5395,7 +5493,20 @@ def history_page(
 ) -> HTMLResponse:
     query = db.query(models.AuditLog)
     if kind == "ping":
-        query = query.filter(models.AuditLog.action.in_(["device_ping", "service_validate", "services_validated", "ping_warning_scheduled", "webhook_sent", "webhook_failed", "webhook_test"]))
+        query = query.filter(
+            models.AuditLog.action.in_(
+                [
+                    "device_ping",
+                    "service_validate",
+                    "services_validated",
+                    "ping_warning_scheduled",
+                    "ping_warning_expected",
+                    "webhook_sent",
+                    "webhook_failed",
+                    "webhook_test",
+                ]
+            )
+        )
     elif kind == "credentials":
         query = query.filter(models.AuditLog.action.ilike("credential_%"))
     elif kind == "smart-paste":

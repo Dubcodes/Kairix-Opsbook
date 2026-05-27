@@ -128,6 +128,79 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
 .global-search { flex: 1; max-width: 720px; }
 .global-search input { width: 100%; }
 
+.live-search-box {
+  position: relative;
+  width: 100%;
+}
+
+.filter-bar .live-search-box {
+  flex: 2 1 360px;
+  min-width: 260px;
+}
+
+.filter-bar .live-search-box input {
+  flex: none;
+  min-width: 0;
+}
+
+.live-search-results {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  right: 0;
+  z-index: 1100;
+  display: grid;
+  gap: 4px;
+  max-height: min(420px, 70vh);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+
+.live-search-results[hidden] {
+  display: none;
+}
+
+.live-search-item,
+.live-search-empty {
+  display: grid;
+  gap: 2px;
+  border-radius: 6px;
+  padding: 8px 9px;
+}
+
+.live-search-item {
+  color: var(--ink);
+}
+
+.live-search-item:hover,
+.live-search-item:focus {
+  background: var(--surface-soft);
+  text-decoration: none;
+}
+
+.live-search-item small {
+  color: var(--accent-dark);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.live-search-item strong {
+  font-size: 14px;
+}
+
+.live-search-item span,
+.live-search-empty {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .sidebar {
   position: fixed;
   top: 64px;
@@ -1027,23 +1100,31 @@ input[type="color"] {
 }
 
 .prelogin-status {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 4px 8px;
+  display: flex;
+  gap: 8px;
   align-items: center;
+  justify-content: center;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-soft);
   color: var(--ink);
-  padding: 10px;
+  cursor: default;
+  padding: 9px 10px;
   margin: 10px 0 14px;
+  text-align: center;
 }
 
-.prelogin-status span:last-child,
-.prelogin-status small {
-  grid-column: 2;
+.prelogin-status .ping-dot {
+  flex: 0 0 auto;
+}
+
+.prelogin-status-text {
   color: var(--muted);
   font-size: 13px;
+}
+
+.prelogin-status-text strong {
+  color: var(--ink);
 }
 
 .service-accordion {
@@ -1216,6 +1297,7 @@ input[type="color"] {
   .stats-grid, .two-col, .form-grid, .quick-grid, .summary-grid { grid-template-columns: 1fr; }
   .span-2 { grid-column: auto; }
   .filter-bar { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .filter-bar .live-search-box,
   .filter-bar input,
   .filter-bar select {
     flex: 1 1 180px;

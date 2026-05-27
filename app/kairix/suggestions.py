@@ -193,9 +193,9 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
             suggestions.append(
                 {
                     "id": f"device:{device.id}:ping-failing",
-                    "severity": "warning",
-                    "title": f"{device.name} has not replied to ping",
-                    "body": "Opsbook has seen repeated ping failures. Check power, network, IP address, or whether ping is blocked.",
+                    "severity": "danger",
+                    "title": f"Device ping failing: {device.name}",
+                    "body": "Repeated ping checks are not getting a reply. If this is expected, dismiss it or mark the current failed check expected.",
                     "target": f"/devices/{device.id}",
                     "action": "mute-ping",
                     "object_type": "device",
@@ -309,9 +309,9 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                 suggestions.append(
                     {
                         "id": f"service:{service.id}:validation-failing",
-                        "severity": "warning",
-                        "title": f"{service.name} has a validation warning",
-                        "body": f"Last TCP check failed{f' for {target_label}' if target_label else ''}. Confirm the URL, port, service state, or mark it scheduled.",
+                        "severity": "danger",
+                        "title": f"Service check failing: {service.name}",
+                        "body": f"Last service reachability check failed{f' for {target_label}' if target_label else ''}. Confirm the URL, port, service state, or dismiss it if this service is intentionally offline.",
                         "target": f"/services/{service.id}",
                         "action": "mute-ping",
                         "object_type": "service",
