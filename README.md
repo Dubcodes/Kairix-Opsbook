@@ -4,6 +4,16 @@ Kairix Opsbook is a self-hosted operations notebook for servers, Docker stacks, 
 
 It is designed to be fast like notes, structured like inventory, and safe like a vault. The app focuses on documenting what exists, where it runs, how to log in, what commands to copy, and how to recover it later.
 
+## Screenshots
+
+### Dashboard Overview
+
+<p align="center">
+  <img src="docs/images/dashboardoverview20260528.png" alt="Opsbook dashboard overview showing warnings, device pings, recent devices, and recent services" width="900">
+</p>
+
+The dashboard gives you a quick view of warnings, device status, recent devices, recent services, and recent activity in one place.
+
 ## Features
 
 - FastAPI web app with a simple server-rendered UI.
