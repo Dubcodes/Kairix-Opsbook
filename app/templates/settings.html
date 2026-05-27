@@ -173,7 +173,7 @@
         </div>
         <div class="actions compact-actions">
           <button class="secondary small-button" type="button" data-copy-credential="{{ token.id }}">Copy</button>
-          <a class="button secondary small-button" href="/credentials/{{ token.id }}/edit">Edit</a>
+          <a class="button secondary small-button" href="/credentials/{{ token.id }}/edit?return_to=/settings">Edit</a>
           <form method="post" action="/delete/credential/{{ token.id }}" data-confirm-delete="Delete this token?">
             <input type="hidden" name="csrf" value="{{ csrf }}">
             <button class="ghost small-button" type="submit">Delete</button>

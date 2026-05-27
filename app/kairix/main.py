@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 from urllib.request import Request as UrlRequest, urlopen
 
 import pyotp
@@ -1011,84 +1011,6 @@ def _coerce_import_row(model: type[Any], row: dict[str, Any]) -> dict[str, Any]:
     return coerced
 
 
-def _auto_tags_for_label(label: str) -> str:
-    raw = label.lower().replace("_", " ").replace("-", " ")
-    words = [slugify(piece) for piece in raw.split()]
-    useful = [word for word in words if len(word) > 2]
-    known = {
-        "portainer",
-        "docker",
-        "cloudflare",
-        "home-assistant",
-        "grafana",
-        "postgres",
-        "github",
-        "ssh",
-        "admin",
-        "smb",
-        "samba",
-        "qbittorrent",
-        "torrent",
-        "sonarr",
-        "radarr",
-        "plex",
-        "media",
-        "gluetun",
-        "vpn",
-        "windows",
-        "raspberry-pi",
-        "opsbook",
-        "frigate",
-        "mqtt",
-        "mosquitto",
-        "omada",
-        "vaultwarden",
-        "bitwarden",
-        "filebrowser",
-        "syncthing",
-        "immich",
-        "nvr",
-        "camera",
-    }
-    aliases = {
-        "qbittorrent": ["qbittorrent", "torrent", "media"],
-        "sonarr": ["sonarr", "media"],
-        "radarr": ["radarr", "media"],
-        "plex": ["plex", "media"],
-        "immich": ["immich", "media", "photos"],
-        "frigate": ["frigate", "camera", "nvr"],
-        "nvr": ["nvr", "camera"],
-        "mqtt": ["mqtt", "iot"],
-        "mosquitto": ["mqtt", "iot"],
-        "omada": ["omada", "network"],
-        "vaultwarden": ["vaultwarden", "password-manager"],
-        "bitwarden": ["bitwarden", "password-manager"],
-        "filebrowser": ["filebrowser", "file-sharing"],
-        "syncthing": ["syncthing", "sync"],
-        "gluetun": ["gluetun", "vpn"],
-        "samba": ["smb", "file-sharing"],
-        "smb": ["smb", "file-sharing"],
-        "portainer": ["portainer", "docker"],
-        "opsbook": ["opsbook", "docker"],
-        "ssh": ["ssh", "remote-access"],
-    }
-    phrase_aliases = {
-        "home assistant": ["home-assistant", "smart-home"],
-        "raspberry pi": ["raspberry-pi", "linux"],
-        "cloudflare tunnel": ["cloudflare", "tunnel"],
-    }
-    tags: list[str] = []
-    for phrase, phrase_tags in phrase_aliases.items():
-        if phrase in raw:
-            tags.extend(phrase_tags)
-    for word in useful:
-        if word in aliases:
-            tags.extend(aliases[word])
-        elif word in known:
-            tags.append(word)
-    return ", ".join(dict.fromkeys(tags))
-
-
 def _walk_import_credentials(parsed: dict[str, Any]) -> list[dict[str, Any]]:
     credentials: list[dict[str, Any]] = []
     credentials.extend(parsed.get("credentials", []))
@@ -1812,7 +1734,36 @@ def _safe_return_to(value: str, fallback: str) -> str:
     clean = (value or "").strip()
     if clean.startswith("/") and not clean.startswith("//"):
         return clean
+    parsed = urlparse(clean)
+    if parsed.scheme in {"http", "https"} and parsed.netloc:
+        path = parsed.path or "/"
+        if path.startswith("/") and not path.startswith("//"):
+            return f"{path}?{parsed.query}" if parsed.query else path
     return fallback
+
+
+def _credential_form_url(
+    *,
+    device_id: str = "",
+    service_id: str = "",
+    secret_type: str = "",
+    return_to: str = "",
+) -> str:
+    params: list[str] = []
+    if device_id:
+        params.append(f"device_id={quote(device_id, safe='')}")
+    if service_id:
+        params.append(f"service_id={quote(service_id, safe='')}")
+    if secret_type:
+        params.append(f"secret_type={quote(secret_type, safe='')}")
+    if return_to:
+        params.append(f"return_to={quote(return_to, safe='')}")
+    return "/credentials/new" + (f"?{'&'.join(params)}" if params else "")
+
+
+def _credential_edit_url(credential_id: int, return_to: str) -> str:
+    clean_return = _safe_return_to(return_to, f"/credentials/{credential_id}")
+    return f"/credentials/{credential_id}/edit?return_to={quote(clean_return, safe='')}"
 
 
 def _service_history(db: Session, service: models.Service, *, limit: int = 50) -> list[dict[str, str]]:
@@ -2770,7 +2721,7 @@ def service_create(
     db.commit()
     flash(request, f"Service {service.name} created.", "success")
     if next_action == "add_credential":
-        return redirect(f"/credentials/new?device_id={service.device_id}&service_id={service.id}")
+        return redirect(f"/credentials/new?device_id={service.device_id}&service_id={service.id}&return_to=/services/{service.id}")
     return redirect(f"/services/{service.id}")
 
 
@@ -2943,7 +2894,7 @@ def service_update(
     db.commit()
     flash(request, f"Service {service.name} saved.", "success")
     if next_action == "add_credential":
-        return redirect(f"/credentials/new?device_id={service.device_id}&service_id={service.id}")
+        return redirect(f"/credentials/new?device_id={service.device_id}&service_id={service.id}&return_to=/services/{service.id}")
     return redirect(f"/services/{service.id}")
 
 
@@ -3044,16 +2995,14 @@ def credential_new_page(
     device_id: int | None = None,
     service_id: int | None = None,
     secret_type: str = "",
+    return_to: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     selected_service = db.get(models.Service, service_id) if service_id else None
     selected_device = db.get(models.Device, device_id) if device_id else selected_service.device if selected_service else None
-    inherited_tags = []
-    if selected_device:
-        inherited_tags.extend(tags_for(db, "device", selected_device.id))
-    if selected_service:
-        inherited_tags.extend(tags_for(db, "service", selected_service.id))
+    fallback = "/tokens" if secret_type == "API token" else "/credentials"
+    return_target = _safe_return_to(return_to, _safe_return_to(request.headers.get("referer", ""), fallback))
     return render(
         request,
         "credential_form.html",
@@ -3066,7 +3015,8 @@ def credential_new_page(
             "service_name_prefill": selected_service.name if selected_service else "",
             "login_url_prefill": (selected_service.local_url or selected_service.public_url) if selected_service else "",
             "secret_type_prefill": secret_type,
-            "tag_text": ", ".join(dict.fromkeys(inherited_tags)),
+            "tag_text": "",
+            "return_to": return_target,
         },
         user=user,
     )
@@ -3113,11 +3063,14 @@ def credential_create(
     expires_at: str = Form(""),
     notes: str = Form(""),
     tags: str = Form(""),
+    return_to: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
+    fallback = "/tokens" if secret_type == "API token" else "/credentials"
+    return_target = _safe_return_to(return_to, fallback)
     resolved_device_id, resolved_service_id, error = _resolve_service_for_credential(
         db,
         device_id=int(device_id) if device_id else None,
@@ -3127,7 +3080,14 @@ def credential_create(
     )
     if error:
         flash(request, error, "warning")
-        return redirect("/credentials/new")
+        return redirect(
+            _credential_form_url(
+                device_id=device_id,
+                service_id=service_id,
+                secret_type=secret_type,
+                return_to=return_target,
+            )
+        )
     if _duplicate_credential(
         db,
         device_id=resolved_device_id,
@@ -3136,9 +3096,8 @@ def credential_create(
         username=username,
     ):
         flash(request, "That credential already appears to exist. Edit the existing one if it needs changes.", "warning")
-        return redirect("/credentials")
+        return redirect(return_target)
     resolved_service = db.get(models.Service, resolved_service_id) if resolved_service_id else None
-    resolved_device = db.get(models.Device, resolved_device_id) if resolved_device_id else None
     if not login_url and resolved_service:
         login_url = resolved_service.local_url or resolved_service.public_url or ""
     credential = models.Credential(
@@ -3156,19 +3115,11 @@ def credential_create(
     )
     db.add(credential)
     db.flush()
-    inherited_tags: list[str] = []
-    if resolved_device:
-        inherited_tags.extend(tags_for(db, "device", resolved_device.id))
-    if resolved_service:
-        inherited_tags.extend(tags_for(db, "service", resolved_service.id))
-    tag_text = ", ".join(filter(None, [tags, ", ".join(inherited_tags), _auto_tags_for_label(f"{label} {resolved_service.name if resolved_service else ''}")]))
-    set_tags(db, "credential", credential.id, tag_text)
+    set_tags(db, "credential", credential.id, tags)
     db.add(models.AuditLog(user_id=user.id, action="credential_created", object_type="credential", object_id=credential.id))
     db.commit()
     flash(request, "Credential stored encrypted at rest.", "success")
-    if secret_type == "API token":
-        return redirect("/tokens")
-    return redirect("/credentials")
+    return redirect(return_target)
 
 
 @app.get("/credentials/{credential_id}/edit", response_class=HTMLResponse)
@@ -3182,6 +3133,7 @@ def credential_edit_page(
     credential = db.get(models.Credential, credential_id)
     if not credential:
         raise HTTPException(404, "Credential not found.")
+    return_target = _safe_return_to(return_to, _safe_return_to(request.headers.get("referer", ""), f"/credentials/{credential.id}"))
     return render(
         request,
         "credential_form.html",
@@ -3193,7 +3145,7 @@ def credential_edit_page(
             "service_id": credential.service_id,
             "service_name_prefill": credential.service.name if credential.service else "",
             "tag_text": ", ".join(tags_for(db, "credential", credential.id)),
-            "return_to": _safe_return_to(return_to, f"/credentials/{credential.id}"),
+            "return_to": return_target,
         },
         user=user,
     )
@@ -3235,7 +3187,7 @@ def credential_update(
     )
     if error:
         flash(request, error, "warning")
-        return redirect(f"/credentials/{credential.id}/edit")
+        return redirect(_credential_edit_url(credential.id, return_to))
     duplicate = _duplicate_credential(
         db,
         device_id=resolved_device_id,
@@ -3245,7 +3197,7 @@ def credential_update(
     )
     if duplicate and duplicate.id != credential.id:
         flash(request, "Another credential already uses that label and username in this scope.", "warning")
-        return redirect(f"/credentials/{credential.id}/edit")
+        return redirect(_credential_edit_url(credential.id, return_to))
     credential.label = label.strip()
     credential.username = username.strip()
     if secret:
@@ -3259,8 +3211,7 @@ def credential_update(
     credential.expires_at = _parse_optional_datetime(expires_at)
     credential.notes = notes
     credential.active = active == "on"
-    tag_text = ", ".join(filter(None, [tags, _auto_tags_for_label(label)]))
-    set_tags(db, "credential", credential.id, tag_text)
+    set_tags(db, "credential", credential.id, tags)
     db.add(models.AuditLog(user_id=user.id, action="credential_edited", object_type="credential", object_id=credential.id))
     db.commit()
     flash(request, "Credential saved.", "success")
@@ -4541,9 +4492,6 @@ async def smart_paste_apply(
             )
             db.add(credential)
             db.flush()
-            auto_tags = _auto_tags_for_label(f"{label} {service_name}")
-            if auto_tags:
-                set_tags(db, "credential", credential.id, auto_tags)
             db.add(
                 models.AuditLog(
                     user_id=user.id,
@@ -4662,9 +4610,6 @@ async def smart_paste_apply(
         )
         db.add(credential)
         db.flush()
-        auto_tags = _auto_tags_for_label(f"{label} {service_name}")
-        if auto_tags:
-            set_tags(db, "credential", credential.id, auto_tags)
         db.add(
             models.AuditLog(
                 user_id=user.id,

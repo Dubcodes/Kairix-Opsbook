@@ -85,7 +85,11 @@
         {% set service_status = service_statuses.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
         <a class="list-row" href="/services/{{ service.id }}">
           <strong>{{ service.name }}<span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span></strong>
-          <span>{{ device_label(service.device, device_ping_statuses) }} · {{ service.local_url or service.public_url or "No URL yet" }}</span>
+          {% set service_address = service.local_url or service.public_url or "No URL yet" %}
+          <span class="dashboard-service-meta" title="{{ service.device.name if service.device else 'Unlinked' }} · {{ service_address }}">
+            <span class="dashboard-service-device">{{ device_label(service.device, device_ping_statuses) if service.device else "Unlinked" }}</span>
+            <span class="dashboard-service-url">{{ service_address }}</span>
+          </span>
         </a>
       {% else %}
         <p class="empty">No services yet.</p>

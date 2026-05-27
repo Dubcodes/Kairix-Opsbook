@@ -38,7 +38,7 @@
   <div class="form-actions span-2">
     <button type="submit">Save changes</button>
     <button class="secondary" type="submit" name="next_action" value="add_credential">Save & add credential</button>
-    {% if service %}<a class="button secondary" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}">Add credential now</a>{% endif %}
+    {% if service %}<a class="button secondary" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}&return_to=/services/{{ service.id }}">Add credential now</a>{% endif %}
     {% if service %}<a class="button secondary" href="/services/{{ service.id }}">Cancel</a>{% endif %}
   </div>
 </form>

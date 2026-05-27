@@ -46,7 +46,7 @@
       <div class="section-title">
         <h2>Favorite Credentials</h2>
         <div class="actions compact-actions">
-          <a href="/credentials/new?device_id={{ device.id }}">Add</a>
+          <a href="/credentials/new?device_id={{ device.id }}&return_to=/devices/{{ device.id }}">Add</a>
           {% if favorite_edit %}
             <a href="/devices/{{ device.id }}">Done</a>
           {% else %}
@@ -208,7 +208,7 @@
     {% else %}<p class="empty">No services documented on this device yet.</p>{% endfor %}
   </section>
 {% elif tab == "credentials" %}
-  <section class="section-title"><h2>Credentials</h2><a class="button" href="/credentials/new?device_id={{ device.id }}">Add Credential</a></section>
+  <section class="section-title"><h2>Credentials</h2><a class="button" href="/credentials/new?device_id={{ device.id }}&return_to=/devices/{{ device.id }}%3Ftab=credentials">Add Credential</a></section>
   <section class="list">
     {% for credential in device.credentials %}
       <div class="list-row static clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
@@ -221,7 +221,7 @@
           {% if credential.login_url %}
             <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
           {% endif %}
-          <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit">Edit</a>
+          <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=credentials">Edit</a>
         </div>
       </div>
     {% else %}<p class="empty">No device credentials yet.</p>{% endfor %}

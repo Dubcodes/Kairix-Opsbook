@@ -42,7 +42,7 @@
   <section class="panel">
     <div class="section-title">
       <h2>Credentials</h2>
-      <a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}">Add Credential</a>
+      <a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}&return_to=/services/{{ service.id }}">Add Credential</a>
     </div>
     <div class="list compact">
       {% for credential in login_credentials %}
@@ -78,7 +78,7 @@
     </div>
   </section>
 {% elif tab == "creds" %}
-  <section class="section-title"><h2>Creds</h2><a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}" title="Add a password, token, or other secret for this service">Add Credential</a></section>
+  <section class="section-title"><h2>Creds</h2><a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}&return_to=/services/{{ service.id }}%3Ftab=creds" title="Add a password, token, or other secret for this service">Add Credential</a></section>
   <section class="list">
     {% for credential in login_credentials + token_credentials %}
       <div class="list-row static clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
@@ -91,7 +91,7 @@
           {% if credential.login_url %}
             <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
           {% endif %}
-          <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit">Edit</a>
+          <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit?return_to=/services/{{ service.id }}%3Ftab=creds">Edit</a>
         </div>
       </div>
     {% else %}

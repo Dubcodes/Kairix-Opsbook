@@ -374,6 +374,28 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   align-items: center;
   gap: 7px;
 }
+.list-row > .dashboard-service-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  width: 100%;
+  white-space: nowrap;
+}
+.dashboard-service-device {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+.dashboard-service-device .device-with-ping {
+  white-space: nowrap;
+}
+.dashboard-service-url {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .device-with-ping {
   display: inline-flex;
   align-items: center;
