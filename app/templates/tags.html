@@ -18,26 +18,32 @@
   </div>
   <div class="tag-index">
     {% for card in tag_cards %}
-      <details class="tag-section">
-        <summary>
-          <span><strong>#{{ card.tag.name }}</strong><small>{{ card.count }} linked item{% if card.count != 1 %}s{% endif %}</small></span>
-        </summary>
-        <div class="tag-section-body">
-          {% for group in card.groups %}
-            <div class="tag-kind-group">
-              <h3>{{ group.kind }}</h3>
-              <div class="list compact">
-                {% for item in group["items"] %}
-                  <a class="list-row" href="{{ item.href }}">
-                    <strong>{% if group.kind == "Device" and item.device %}{{ device_label(item.device, device_ping_statuses) }}{% else %}{{ item.label }}{% endif %}</strong>
-                    <span>{{ group.kind }}{% if item.device and group.kind != "Device" %} · {{ device_label(item.device, device_ping_statuses) }}{% elif item.subtitle %} · {{ item.subtitle }}{% endif %}</span>
-                  </a>
-                {% endfor %}
+      <div class="tag-section-wrap">
+        <details class="tag-section">
+          <summary>
+            <span><strong>#{{ card.tag.name }}</strong><small>{{ card.count }} linked item{% if card.count != 1 %}s{% endif %}</small></span>
+          </summary>
+          <div class="tag-section-body">
+            {% for group in card.groups %}
+              <div class="tag-kind-group">
+                <h3>{{ group.kind }}</h3>
+                <div class="list compact">
+                  {% for item in group["items"] %}
+                    <a class="list-row" href="{{ item.href }}">
+                      <strong>{% if group.kind == "Device" and item.device %}{{ device_label(item.device, device_ping_statuses) }}{% else %}{{ item.label }}{% endif %}</strong>
+                      <span>{{ group.kind }}{% if item.device and group.kind != "Device" %} · {{ device_label(item.device, device_ping_statuses) }}{% elif item.subtitle %} · {{ item.subtitle }}{% endif %}</span>
+                    </a>
+                  {% endfor %}
+                </div>
               </div>
-            </div>
-          {% endfor %}
-        </div>
-      </details>
+            {% endfor %}
+          </div>
+        </details>
+        <form class="tag-delete-form" method="post" action="/tags/{{ card.tag.id }}/delete" data-confirm-delete="Delete #{{ card.tag.name }} from every record?" data-confirm-password="Enter your account password to delete #{{ card.tag.name }} from all records." data-confirm-password-label="Account password">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="ghost small-button danger-ghost" type="submit" title="Delete #{{ card.tag.name }} from all records">Delete</button>
+        </form>
+      </div>
     {% else %}
       <p class="empty">No used tags yet. Tags will appear after you attach them to devices, services, credentials, commands, ports, URLs, or notes.</p>
     {% endfor %}

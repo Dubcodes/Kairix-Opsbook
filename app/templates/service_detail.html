@@ -32,8 +32,14 @@
     <dl class="details">
       {% if service.purpose %}<dt>Purpose</dt><dd>{{ service.purpose }}</dd>{% endif %}
       {% if service.status_manual %}<dt>Manual state</dt><dd>{{ service.status_manual }}{% if status_log %} · set {{ status_log.created_at|dt }}{% endif %}</dd>{% endif %}
-      {% if service.local_url %}<dt>Local URL</dt><dd><a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a><span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span></dd>{% endif %}
-      {% if service.public_url %}<dt>Public URL</dt><dd><a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a><span class="status-dot status-{{ validation_status.state }}" title="{{ validation_status.label }}{% if validation_status.checked_at %} · checked {{ validation_status.checked_at }}{% endif %}"></span></dd>{% endif %}
+      {% if service.local_url %}
+        {% set local_status = validation_targets.get("local_url", validation_status) %}
+        <dt>Local URL</dt><dd><a href="{{ service.local_url }}" target="_blank">{{ service.local_url }}</a><span class="status-dot status-{{ local_status.state }}" title="{{ local_status.title or local_status.label }}"></span></dd>
+      {% endif %}
+      {% if service.public_url %}
+        {% set public_status = validation_targets.get("public_url", validation_status) %}
+        <dt>Public URL</dt><dd><a href="{{ service.public_url }}" target="_blank">{{ service.public_url }}</a><span class="status-dot status-{{ public_status.state }}" title="{{ public_status.title or public_status.label }}"></span></dd>
+      {% endif %}
       {% if service.repo_url %}<dt>Repo</dt><dd>{{ service.repo_url }}</dd>{% endif %}
       {% if validation_status.checked_at %}<dt>Validated</dt><dd>{{ validation_status.label }} · {{ validation_status.checked_at }}</dd>{% endif %}
     </dl>

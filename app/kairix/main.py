@@ -789,20 +789,81 @@ def _service_validation_status(db: Session, service: models.Service) -> dict[str
     }
 
 
+def _url_tcp_target(raw_url: str) -> tuple[str, int] | None:
+    parsed = urlparse(raw_url or "")
+    if not parsed.hostname:
+        return None
+    default_port = 443 if parsed.scheme == "https" else 80
+    try:
+        return parsed.hostname, parsed.port or default_port
+    except ValueError:
+        return None
+
+
+def _service_url_validation_status(db: Session, service: models.Service, raw_url: str, label: str) -> dict[str, str]:
+    latest = _latest_audit(db, "service", service.id, "service_validate")
+    if not latest:
+        return {"state": "unknown", "label": f"{label} not checked", "checked_at": "", "checked_at_iso": "", "title": f"{label} has not been checked yet."}
+    checked_at = format_dt(latest.created_at)
+    checked_at_iso = iso_dt(latest.created_at)
+    details = latest.details_json or {}
+    targets = [item for item in details.get("targets") or [] if isinstance(item, dict)]
+    match = next((item for item in targets if item.get("label") == raw_url), None)
+    url_target = _url_tcp_target(raw_url)
+    if not match and url_target:
+        host, port = url_target
+        match = next(
+            (
+                item
+                for item in targets
+                if str(item.get("host") or "").lower() == host.lower()
+                and int(item.get("port") or 0) == port
+            ),
+            None,
+        )
+    if not match:
+        base = f"{label} was not part of the latest service check"
+        return {
+            "state": "unknown",
+            "label": base,
+            "checked_at": checked_at,
+            "checked_at_iso": checked_at_iso,
+            "title": f"{base}. Open the Ports tab or History tab for detailed validation logs.",
+        }
+    ok = bool(match.get("ok"))
+    error = str(match.get("error") or "").strip()
+    latency = match.get("latency_ms")
+    status_label = f"{label} reachable via TCP check" if ok else f"{label} did not respond to TCP check"
+    if ok and latency is not None:
+        status_label += f" in {latency} ms"
+    if error:
+        status_label += f": {error}"
+    return {
+        "state": "good" if ok else "slow",
+        "label": status_label,
+        "checked_at": checked_at,
+        "checked_at_iso": checked_at_iso,
+        "title": f"{status_label} · checked {checked_at}. Open the Ports tab or History tab for detailed validation logs.",
+    }
+
+
+def _service_url_validation_statuses(db: Session, service: models.Service) -> dict[str, dict[str, str]]:
+    return {
+        "local_url": _service_url_validation_status(db, service, service.local_url, "Local URL") if service.local_url else {},
+        "public_url": _service_url_validation_status(db, service, service.public_url, "Public URL") if service.public_url else {},
+    }
+
+
 def _service_validation_targets(service: models.Service) -> list[tuple[str, str, int]]:
     targets: list[tuple[str, str, int]] = []
     for raw_url in [service.local_url, service.public_url]:
         if not raw_url:
             continue
-        parsed = urlparse(raw_url)
-        if not parsed.hostname:
+        target = _url_tcp_target(raw_url)
+        if not target:
             continue
-        default_port = 443 if parsed.scheme == "https" else 80
-        try:
-            port = parsed.port or default_port
-        except ValueError:
-            continue
-        targets.append((raw_url, parsed.hostname, port))
+        host, port = target
+        targets.append((raw_url, host, port))
     host = (service.device.primary_ip or service.device.hostname or "").strip() if service.device else ""
     if host:
         for port in service.ports:
@@ -1544,6 +1605,7 @@ AUDIT_ACTION_LABELS = {
     "note_added": "Note added",
     "note_deleted": "Note deleted",
     "note_tags_updated": "Note tags updated",
+    "tag_deleted": "Tag deleted",
     "quick_credentials_updated": "Favorite credentials updated",
     "ping_warning_scheduled": "Ping warning marked scheduled",
     "ping_warning_expected": "Check warning marked expected",
@@ -2546,7 +2608,6 @@ def device_update(
     hardware.gpu = hw_gpu
     hardware.storage_summary = hw_storage
     set_tags(db, "device", device.id, tags)
-    merge_tags(db, "device", device.id, _infer_tags_for_device(device))
     ip_reference_counts = {"services": 0, "urls": 0, "credentials": 0}
     if update_linked_ip_refs == "on":
         ip_reference_counts = _replace_device_ip_references(device, old_primary_ip, new_primary_ip)
@@ -2772,6 +2833,7 @@ def service_detail(
             "tag_list": tags_for(db, "service", service.id),
             "status_log": _latest_audit(db, "service", service.id, "service_status_changed"),
             "validation_status": _service_validation_status(db, service),
+            "validation_targets": _service_url_validation_statuses(db, service),
             "device_ping_statuses": _device_ping_status_map(db, [service.device]),
             "device_ping_status": _device_ping_status(db, service.device),
             "backup_ready": bool(service.backup_path or "backup" in (service.notes or "").lower()),
@@ -3824,6 +3886,41 @@ def tags_page(
         },
         user=user,
     )
+
+
+@app.post("/tags/{tag_id}/delete")
+def tag_delete(
+    request: Request,
+    tag_id: int,
+    csrf: str = Form(...),
+    password: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    tag = db.get(models.Tag, tag_id)
+    if not tag:
+        raise HTTPException(404, "Tag not found.")
+    if not verify_password(password, user.password_hash):
+        flash(request, "Enter your account password to delete a tag from all records.", "danger")
+        return redirect("/tags")
+    link_count = db.query(models.TagLink).filter_by(tag_id=tag.id).count()
+    tag_name = tag.name
+    db.query(models.TagLink).filter_by(tag_id=tag.id).delete()
+    db.delete(tag)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="tag_deleted",
+            object_type="tag",
+            object_id=tag_id,
+            details_json={"name": tag_name, "links_removed": link_count},
+        )
+    )
+    db.commit()
+    flash(request, f"Deleted #{tag_name} from {link_count} linked item(s).", "success")
+    return redirect("/tags")
 
 
 @app.post("/ports/add")

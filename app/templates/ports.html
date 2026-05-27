@@ -10,8 +10,8 @@
 </section>
 
 <section class="two-col">
-  <div class="panel">
-    <h2>Add Port</h2>
+  <details class="panel collapsible-panel compact-add-panel">
+    <summary><span><strong>Add Port</strong><small>Document a device port when you need it.</small></span></summary>
     <form method="post" action="/ports/add" class="form-grid">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <label>Device <span class="hint" title="The machine where this port is open.">?</span><select name="device_id">{% for device in devices %}<option value="{{ device.id }}">{{ device.name }}</option>{% endfor %}</select></label>
@@ -24,9 +24,9 @@
       <label class="span-2">Notes <textarea name="notes" spellcheck="true"></textarea></label>
       <button type="submit">Add Port</button>
     </form>
-  </div>
-  <div class="panel">
-    <h2>Add URL</h2>
+  </details>
+  <details class="panel collapsible-panel compact-add-panel">
+    <summary><span><strong>Add URL</strong><small>Attach a local, public, or admin URL.</small></span></summary>
     <form method="post" action="/urls/add" class="form-grid">
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <label>Device <span class="hint" title="The device this URL points at or belongs to.">?</span><select name="device_id"><option value="">None</option>{% for device in devices %}<option value="{{ device.id }}">{{ device.name }}</option>{% endfor %}</select></label>
@@ -38,7 +38,7 @@
       <label class="span-2">Notes <textarea name="notes" spellcheck="true"></textarea></label>
       <button type="submit">Add URL</button>
     </form>
-  </div>
+  </details>
 </section>
 
 <section class="two-col">

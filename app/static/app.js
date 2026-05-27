@@ -128,14 +128,26 @@
     setTimeout(() => { button.textContent = old; }, 1200);
   }
 
-  function requestMaskedChallenge(message) {
+  function escapeHtml(value) {
+    return String(value || "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#039;"
+    }[char]));
+  }
+
+  function requestMaskedChallenge(message, options = {}) {
     return new Promise((resolve) => {
+      const label = options.label || "Password or reveal PIN";
+      const autocomplete = options.autocomplete || "current-password";
       const backdrop = document.createElement("div");
       backdrop.className = "modal-backdrop";
       backdrop.innerHTML = `
         <form class="modal-panel compact-modal credential-challenge-modal">
-          <h2>${message || "Password or reveal PIN"}</h2>
-          <label>Password or reveal PIN <input name="challenge" type="password" autocomplete="current-password" required></label>
+          <h2>${escapeHtml(message || label)}</h2>
+          <label>${escapeHtml(label)} <input name="challenge" type="password" autocomplete="${escapeHtml(autocomplete)}" required></label>
           <div class="form-actions">
             <button type="submit">Continue</button>
             <button class="secondary" type="button" data-cancel-challenge>Cancel</button>
@@ -421,7 +433,7 @@
     }
   });
   document.addEventListener("scroll", removeTooltip, true);
-  document.addEventListener("submit", (event) => {
+  document.addEventListener("submit", async (event) => {
     const favoriteForm = event.target.closest("[data-favorite-form]");
     if (favoriteForm) {
       event.preventDefault();
@@ -445,11 +457,40 @@
         .catch(() => window.alert("Favorite update failed."));
       return;
     }
-    const form = event.target.closest("[data-confirm-delete]");
+    const form = event.target.closest("form");
     if (!form) return;
-    const message = form.getAttribute("data-confirm-delete") || "Delete this item?";
-    if (!window.confirm(message)) {
-      event.preventDefault();
+    const message = form.getAttribute("data-confirm-delete");
+    if (message && form.dataset.confirmedDelete !== "true") {
+      if (!window.confirm(message || "Delete this item?")) {
+        event.preventDefault();
+        return;
+      }
+      form.dataset.confirmedDelete = "true";
+    }
+    const passwordMessage = form.getAttribute("data-confirm-password");
+    if (!passwordMessage || form.dataset.challengeReady === "true") return;
+    event.preventDefault();
+    const challenge = await requestMaskedChallenge(passwordMessage, {
+      label: form.getAttribute("data-confirm-password-label") || "Account password"
+    });
+    if (!challenge) {
+      delete form.dataset.confirmedDelete;
+      return;
+    }
+    let input = form.querySelector('input[name="password"][data-confirm-password-field]');
+    if (!input) {
+      input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "password";
+      input.setAttribute("data-confirm-password-field", "");
+      form.appendChild(input);
+    }
+    input.value = challenge;
+    form.dataset.challengeReady = "true";
+    if (typeof form.requestSubmit === "function") {
+      form.requestSubmit();
+    } else {
+      form.submit();
     }
   });
   if (window.matchMedia) {

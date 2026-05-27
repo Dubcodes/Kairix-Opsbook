@@ -268,6 +268,17 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   padding: 5px 8px;
   font-size: 13px;
 }
+
+.danger-ghost {
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+}
+
+.danger-ghost:hover {
+  color: var(--red);
+  border-color: color-mix(in srgb, var(--red) 45%, var(--line));
+}
 .topbar-links {
   display: flex;
   align-items: center;
@@ -1024,6 +1035,19 @@ input[type="color"] {
   margin-top: 3px;
 }
 
+.compact-add-panel {
+  align-self: start;
+  padding: 14px 16px;
+}
+
+.compact-add-panel > summary {
+  margin: 0;
+}
+
+.compact-add-panel form {
+  margin-top: 14px;
+}
+
 .suggestion-list {
   margin-top: 14px;
 }
@@ -1162,6 +1186,10 @@ input[type="color"] {
   gap: 8px;
 }
 
+.tag-section-wrap {
+  position: relative;
+}
+
 .tag-section {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -1171,7 +1199,19 @@ input[type="color"] {
 
 .tag-section > summary {
   cursor: pointer;
-  padding: 10px 12px;
+  padding: 10px 82px 10px 12px;
+}
+
+.tag-delete-form {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.tag-delete-form button {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 12px;
 }
 
 .tag-section > summary::marker,
