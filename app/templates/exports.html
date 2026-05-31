@@ -27,11 +27,22 @@
 </section>
 <section class="panel">
   <h2>Export files</h2>
+  <form method="post" action="/exports/delete-old" class="inline-mini" data-confirm-delete="Delete old export files?">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input name="older_than_days" type="number" min="1" max="99999" value="90" title="Delete exports older than this many days">
+    <button class="secondary small-button" type="submit">Delete Old Exports</button>
+  </form>
   <div class="list">
     {% for export in exports %}
       <div class="list-row static">
         <div><strong>{{ export.filename }}</strong><span>{{ export.export_type }} · {{ "encrypted" if export.encrypted else "plain HTML" }} · {{ export.created_at|dt }}</span></div>
-        <a class="button secondary" href="/exports/download/{{ export.filename }}">Download</a>
+        <div class="actions compact-actions">
+          <a class="button secondary" href="/exports/download/{{ export.filename }}">Download</a>
+          <form method="post" action="/exports/delete/{{ export.id }}" data-confirm-delete="Delete {{ export.filename }}?">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="ghost small-button danger-ghost" type="submit">Delete</button>
+          </form>
+        </div>
       </div>
     {% else %}
       <p class="empty">No exports created yet.</p>

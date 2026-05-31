@@ -17,10 +17,11 @@
   {% for token in tokens %}
     {% set context_device = token.service.device if token.service and token.service.device else token.device %}
     {% set context_name = token.service.name if token.service else "" %}
-    <div class="device-row clickable-card" data-credential-row data-card-href="/credentials/{{ token.id }}">
+    {% set expiry = token_expiry_status(token) %}
+    <div class="device-row clickable-card token-row token-{{ expiry.state }}" data-credential-row data-card-href="/credentials/{{ token.id }}">
       <a class="row-main" href="/credentials/{{ token.id }}">
         <strong>{{ token.label }}</strong>
-        <span><b>{% if context_name %}{{ context_name }}{% elif context_device %}{{ device_label(context_device, device_ping_statuses) }}{% else %}Unlinked{% endif %}</b> · {{ token.username or "No account" }} · {{ token.security_level|title }} security{% if token.expires_at %} · expires {{ token.expires_at|date_input }}{% endif %}</span>
+        <span><b>{% if context_name %}{{ context_name }}{% elif context_device %}{{ device_label(context_device, device_ping_statuses) }}{% else %}Unlinked{% endif %}</b> · {{ token.username or "No account" }} · {{ token.security_level|title }} security{% if token.expires_at %} · {{ expiry.label }}{% endif %}</span>
         <div class="tags">{% for tag in tags.get(token.id, []) %}<span>{{ tag }}</span>{% endfor %}</div>
       </a>
       <div class="actions compact-actions">

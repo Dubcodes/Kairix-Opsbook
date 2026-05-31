@@ -134,6 +134,7 @@ THEME_DEFAULTS = {
     "ping_failures_before_warning": "3",
     "ping_green_ms": "3",
     "ping_orange_ms": "10",
+    "history_retention_days": "90",
 }
 
 PING_THREAD_STARTED = False
@@ -154,6 +155,7 @@ def startup() -> None:
     with SessionLocal() as db:
         seed_initial_data(db)
         _normalize_unknown_states(db)
+        _prune_history(db)
         db.commit()
     if not PING_THREAD_STARTED and not settings.read_only:
         PING_THREAD_STARTED = True
@@ -504,6 +506,18 @@ def _token_credentials(db: Session) -> list[models.Credential]:
     return sorted(tokens, key=lambda item: (item.expires_at is None, item.expires_at or datetime.max.replace(tzinfo=timezone.utc), item.label.lower()))
 
 
+def _token_expiry_status(credential: models.Credential) -> dict[str, str]:
+    if not credential.expires_at:
+        return {"state": "ok", "label": "No expiry set"}
+    expiry = credential.expires_at if credential.expires_at.tzinfo else credential.expires_at.replace(tzinfo=timezone.utc)
+    now = now_utc()
+    if expiry < now:
+        return {"state": "expired", "label": f"Expired {format_dt(expiry)}"}
+    if expiry <= now + timedelta(days=7):
+        return {"state": "warning", "label": f"Expires soon: {format_dt(expiry)}"}
+    return {"state": "ok", "label": f"Expires {format_dt(expiry)}"}
+
+
 def _service_tokens(service: models.Service) -> list[models.Credential]:
     return [credential for credential in service.credentials if credential.secret_type == "API token"]
 
@@ -514,6 +528,7 @@ def _service_login_credentials(service: models.Service) -> list[models.Credentia
 
 templates.env.globals["service_tokens"] = _service_tokens
 templates.env.globals["service_login_credentials"] = _service_login_credentials
+templates.env.globals["token_expiry_status"] = _token_expiry_status
 
 
 def _parse_optional_datetime(value: str) -> datetime | None:
@@ -669,6 +684,21 @@ def _recovery_challenge_options(db: Session) -> tuple[list[int], list[dict[str, 
         }
         for service in options
     ]
+
+
+def _history_retention_days(db: Session) -> int:
+    return int_setting(db, "history_retention_days", 90, minimum=1, maximum=99999)
+
+
+def _prune_history(db: Session, days: int | None = None) -> int:
+    keep_days = days if days is not None else _history_retention_days(db)
+    cutoff = now_utc() - timedelta(days=max(1, keep_days))
+    deleted = (
+        db.query(models.AuditLog)
+        .filter(models.AuditLog.created_at < cutoff)
+        .delete(synchronize_session=False)
+    )
+    return int(deleted or 0)
 
 
 def _infer_tags_for_service(service: models.Service) -> str:
@@ -1039,6 +1069,17 @@ def _service_port_validation_statuses(db: Session, service: models.Service) -> d
     return statuses
 
 
+def _port_validation_status_map(db: Session, ports: list[models.Port]) -> dict[int, dict[str, str]]:
+    statuses: dict[int, dict[str, str]] = {}
+    seen_services: set[int] = set()
+    for port in ports:
+        if not port.service_id or port.service_id in seen_services or not port.service:
+            continue
+        seen_services.add(port.service_id)
+        statuses.update(_service_port_validation_statuses(db, port.service))
+    return statuses
+
+
 def _service_validation_targets(service: models.Service) -> list[tuple[str, str, int]]:
     targets: list[tuple[str, str, int]] = []
     for raw_url in [service.local_url, service.public_url]:
@@ -1352,7 +1393,7 @@ def _duplicate_credential(
 ) -> models.Credential | None:
     label_norm = label.strip().lower()
     username_norm = username.strip().lower()
-    query = db.query(models.Credential)
+    query = db.query(models.Credential).filter(models.Credential.secret_type != "API token")
     if service_id:
         query = query.filter(models.Credential.service_id == service_id)
     elif device_id:
@@ -1626,7 +1667,11 @@ def _quick_credentials_for_device(db: Session, device: models.Device) -> list[mo
     hidden = set(_id_list(get_app_settings(db).get(f"quick_credential_hidden:{device.id}", "")))
     if not order:
         return []
-    credentials = [credential for credential in device.credentials if credential.id in order and credential.id not in hidden]
+    credentials = [
+        credential
+        for credential in device.credentials
+        if credential.id in order and credential.id not in hidden and credential.secret_type != "API token"
+    ]
     by_id = {credential.id: credential for credential in credentials}
     ordered = [by_id.pop(credential_id) for credential_id in order if credential_id in by_id]
     ordered.extend(sorted(by_id.values(), key=lambda item: item.label.lower()))
@@ -1808,6 +1853,8 @@ AUDIT_ACTION_LABELS = {
     "quick_note_saved": "Quick note saved",
     "emergency_export_created": "Emergency export created",
     "emergency_export_imported": "Emergency backup imported",
+    "export_deleted": "Export deleted",
+    "old_exports_deleted": "Old exports deleted",
     "settings_updated": "Settings changed",
     "device_order_updated": "Device order changed",
     "webhook_settings_updated": "Webhook settings changed",
@@ -2002,6 +2049,18 @@ def _delete_redirect_target(request: Request, object_type: str, object_id: int) 
         "note": "/notes",
     }
     return referer or defaults.get(object_type, "/")
+
+
+def _note_return_target(note: models.Note) -> str:
+    if note.object_type == "device":
+        return f"/devices/{note.object_id}?tab=notes"
+    if note.object_type == "service":
+        return f"/services/{note.object_id}?tab=notes"
+    if note.object_type == "credential":
+        return f"/credentials/{note.object_id}"
+    if note.object_type == "command":
+        return f"/commands/{note.object_id}/edit"
+    return f"/notes/{note.id}"
 
 
 def _safe_return_to(value: str, fallback: str) -> str:
@@ -2763,6 +2822,7 @@ def device_detail(
             "ping_status": _device_ping_status(db, device),
             "status_log": _latest_audit(db, "device", device.id, "device_status_changed"),
             "validation_status": validation_status,
+            "port_validation_statuses": _port_validation_status_map(db, list(device.ports)),
             "validation_log": _latest_audit(db, "device", device.id, "services_validated"),
             "auto_purpose": auto_purpose,
             "quick_network_items": quick_network_items[:quick_network_limit],
@@ -2805,7 +2865,7 @@ def device_image_file(
     path = _stored_upload_path(DEVICE_IMAGE_DIR, image.stored_filename)
     if not path.exists() or not path.is_file():
         raise HTTPException(404, "Image file not found.")
-    return FileResponse(path, media_type=image.mime_type or "application/octet-stream", filename=image.original_filename)
+    return FileResponse(path, media_type=image.mime_type or "application/octet-stream")
 
 
 @app.post("/devices/{device_id}/images")
@@ -4263,15 +4323,18 @@ def ports_page(
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
+    ports = db.query(models.Port).order_by(models.Port.host_port).all()
+    devices = _device_order_query(db).all()
     return render(
         request,
         "ports.html",
         {
-            "ports": db.query(models.Port).order_by(models.Port.host_port).all(),
+            "ports": ports,
             "urls": db.query(models.Url).order_by(models.Url.url).all(),
-            "devices": _device_order_query(db).all(),
+            "devices": devices,
             "services": _service_order_query(db).all(),
-            "device_ping_statuses": _device_ping_status_map(db, _device_order_query(db).all()),
+            "device_ping_statuses": _device_ping_status_map(db, devices),
+            "port_validation_statuses": _port_validation_status_map(db, ports),
         },
         user=user,
     )
@@ -4662,16 +4725,28 @@ def add_note(
     title: str = Form(""),
     body: str = Form(...),
     source: str = Form("manual"),
+    return_to: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    db.add(models.Note(object_type=object_type, object_id=object_id, title=title, body=body, source=source))
-    db.add(models.AuditLog(user_id=user.id, action="note_added", object_type=object_type, object_id=object_id))
+    note = models.Note(object_type=object_type, object_id=object_id, title=title, body=body, source=source)
+    db.add(note)
+    db.flush()
+    note_audit_type = "quick_note" if object_type == "quick_note" else "note"
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="note_added",
+            object_type=note_audit_type,
+            object_id=note.id,
+            details_json={"linked_type": object_type, "linked_id": object_id},
+        )
+    )
     db.commit()
     flash(request, "Note added.", "success")
-    return redirect(f"/{object_type}s/{object_id}")
+    return redirect(_safe_return_to(return_to, _note_return_target(note)))
 
 
 @app.get("/notes", response_class=HTMLResponse)
@@ -4720,6 +4795,7 @@ def note_detail_page(
 def note_edit_page(
     request: Request,
     note_id: int,
+    return_to: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -4730,7 +4806,7 @@ def note_edit_page(
     return render(
         request,
         "note_form.html",
-        {"note": note, "target": target, "target_href": href},
+        {"note": note, "target": target, "target_href": href, "return_to": _safe_return_to(return_to, _note_return_target(note))},
         user=user,
     )
 
@@ -4742,6 +4818,7 @@ def note_update(
     csrf: str = Form(...),
     title: str = Form(""),
     body: str = Form(...),
+    return_to: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -4752,10 +4829,19 @@ def note_update(
         raise HTTPException(404, "Note not found.")
     note.title = title.strip()
     note.body = body
-    db.add(models.AuditLog(user_id=user.id, action="note_edited", object_type=note.object_type, object_id=note.id))
+    note_audit_type = "quick_note" if note.object_type == "quick_note" else "note"
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="note_edited",
+            object_type=note_audit_type,
+            object_id=note.id,
+            details_json={"linked_type": note.object_type, "linked_id": note.object_id},
+        )
+    )
     db.commit()
     flash(request, "Note saved.", "success")
-    return redirect(f"/notes/{note.id}")
+    return redirect(_safe_return_to(return_to, f"/notes/{note.id}"))
 
 
 @app.post("/notes/{note_id}/tags")
@@ -5704,17 +5790,23 @@ async def settings_save(
                 value = str(max(1, min(10, int(value))))
             except ValueError:
                 value = THEME_DEFAULTS[key]
+        if key == "history_retention_days":
+            try:
+                value = str(max(1, min(99999, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
         set_app_setting(db, key, value)
+    removed = _prune_history(db)
     db.add(
         models.AuditLog(
             user_id=user.id,
             action="settings_updated",
             object_type="app_settings",
-            details_json={"section": "theme"},
+            details_json={"section": "theme", "history_pruned": removed},
         )
     )
     db.commit()
-    flash(request, "Settings saved.", "success")
+    flash(request, f"Settings saved.{f' Deleted {removed} old history item(s).' if removed else ''}", "success")
     return redirect("/settings")
 
 
@@ -5830,18 +5922,18 @@ def settings_password_change(
     ensure_writable()
     if not verify_password(current_password, user.password_hash):
         flash(request, "Current password was incorrect.", "danger")
-        return redirect("/settings#account-security")
+        return redirect("/settings#password-security")
     if new_password != confirm_password:
         flash(request, "New passwords did not match.", "warning")
-        return redirect("/settings#account-security")
+        return redirect("/settings#password-security")
     if len(new_password) < 10:
         flash(request, "Use at least 10 characters for the new password.", "warning")
-        return redirect("/settings#account-security")
+        return redirect("/settings#password-security")
     user.password_hash = hash_password(new_password)
     db.add(models.AuditLog(user_id=user.id, action="password_changed", object_type="user", object_id=user.id))
     db.commit()
     flash(request, "Password changed.", "success")
-    return redirect("/settings#account-security")
+    return redirect("/settings#password-security")
 
 
 @app.post("/settings/security/reveal-pin")
@@ -5858,13 +5950,13 @@ def settings_reveal_pin_change(
     ensure_writable()
     if not verify_password(current_password, user.password_hash):
         flash(request, "Account password was incorrect.", "danger")
-        return redirect("/settings#account-security")
+        return redirect("/settings#password-security")
     if new_reveal_pin != confirm_reveal_pin:
         flash(request, "Reveal password or PIN values did not match.", "warning")
-        return redirect("/settings#account-security")
+        return redirect("/settings#password-security")
     if new_reveal_pin and len(new_reveal_pin) < 6:
         flash(request, "Use at least 6 characters for a reveal password or PIN.", "warning")
-        return redirect("/settings#account-security")
+        return redirect("/settings#password-security")
     user.secondary_password_hash = hash_password(new_reveal_pin) if new_reveal_pin else None
     db.add(
         models.AuditLog(
@@ -5876,7 +5968,7 @@ def settings_reveal_pin_change(
     )
     db.commit()
     flash(request, "Reveal password or PIN updated." if new_reveal_pin else "Reveal password or PIN removed.", "success")
-    return redirect("/settings#account-security")
+    return redirect("/settings#password-security")
 
 
 @app.post("/settings/security/recovery")
@@ -6384,6 +6476,76 @@ def export_download(
     if not path.exists() or not path.is_file():
         raise HTTPException(404, "Export file not found.")
     return FileResponse(path, filename=Path(filename).name)
+
+
+@app.post("/exports/delete/{export_id}")
+def export_delete(
+    request: Request,
+    export_id: int,
+    csrf: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    export = db.get(models.BackupExport, export_id)
+    if not export:
+        raise HTTPException(404, "Export not found.")
+    filename = export.filename
+    path = safe_export_path(filename)
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        flash(request, "Export file could not be removed from disk.", "warning")
+        return redirect("/exports")
+    db.delete(export)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="export_deleted",
+            object_type="backup_export",
+            object_id=export_id,
+            details_json={"filename": filename},
+        )
+    )
+    db.commit()
+    flash(request, f"Deleted export {filename}.", "success")
+    return redirect("/exports")
+
+
+@app.post("/exports/delete-old")
+def exports_delete_old(
+    request: Request,
+    csrf: str = Form(...),
+    older_than_days: int = Form(90),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    days = max(1, min(99999, int(older_than_days or 90)))
+    cutoff = now_utc() - timedelta(days=days)
+    exports = db.query(models.BackupExport).filter(models.BackupExport.created_at < cutoff).all()
+    deleted = 0
+    for export in exports:
+        path = safe_export_path(export.filename)
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+        db.delete(export)
+        deleted += 1
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="old_exports_deleted",
+            object_type="backup_export",
+            details_json={"older_than_days": days, "deleted": deleted},
+        )
+    )
+    db.commit()
+    flash(request, f"Deleted {deleted} export file(s) older than {days} day(s).", "success")
+    return redirect("/exports")
 
 
 @app.get("/history", response_class=HTMLResponse)

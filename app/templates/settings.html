@@ -130,6 +130,10 @@
   <label>Orange ping threshold ms
     <input name="ping_orange_ms" type="number" min="1" max="999" value="{{ app_settings.ping_orange_ms or '10' }}">
   </label>
+  <label>History retention days
+    <input name="history_retention_days" type="number" min="1" max="99999" value="{{ app_settings.history_retention_days or '90' }}">
+    <small>History older than this is deleted on startup and when settings are saved.</small>
+  </label>
 
   <h3 class="span-2">Light Mode</h3>
   <label>Background <input type="color" name="light_bg" value="{{ app_settings.light_bg }}"></label>
@@ -167,7 +171,7 @@
   </form>
 </details>
 
-<section class="panel" id="account-security">
+<section class="panel" id="password-security">
   <h2>Account Security</h2>
   <section class="two-col flush-grid">
     <form method="post" action="/settings/security/password" class="form-grid">
@@ -188,66 +192,70 @@
       <div class="form-actions span-2"><button type="submit">Update Reveal PIN</button></div>
     </form>
   </section>
-  <details class="collapsible-panel recovery-settings">
-    <summary>
-      <span><strong>Recovery Phrase</strong><small>{{ "Configured" if recovery_enabled else "Not configured" }} · use before removing 2FA access</small></span>
-    </summary>
-    <form method="post" action="/settings/security/recovery" class="form-grid">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label class="span-2">Account password <input name="current_password" type="password" required autocomplete="current-password"></label>
-      <label class="span-2">Recovery phrase
-        <input name="recovery_phrase" type="password" autocomplete="new-password" placeholder="{{ suggested_recovery_phrase }}">
-        <small>Use a long sentence with uppercase, lowercase, a number, and a special character.</small>
-      </label>
-      <label class="span-2">Confirm recovery phrase <input name="confirm_recovery_phrase" type="password" autocomplete="new-password"></label>
-      <label class="check-row span-2"><input type="checkbox" name="clear_recovery"> Remove recovery phrase</label>
-      <div class="form-actions span-2"><button type="submit">Save Recovery Phrase</button></div>
-    </form>
-  </details>
 </section>
 
-<section class="panel" id="two-factor">
-  <h2>Two-Factor Authentication</h2>
-  {% if not recovery_enabled %}
-    <p class="warning">Set a recovery phrase in Account Security before relying on 2FA.</p>
-  {% endif %}
-  {% if user.totp_enabled %}
-    <p class="muted">2FA is enabled for your login. Disabling it requires your password and a current authenticator code.</p>
-    <form method="post" action="/settings/2fa/disable" class="form-grid">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
-      <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
-      <div class="form-actions span-2"><button class="secondary" type="submit">Disable 2FA</button></div>
-    </form>
-  {% elif pending_totp_secret %}
-    <p class="muted">Scan this QR code with your authenticator app, then enter the 6-digit code. If two people need access, scan the same QR on both phones before enabling.</p>
-    <div class="qr-code">{{ pending_totp_qr_svg|safe }}</div>
-    <details class="collapsible-panel">
-      <summary><span><strong>Manual setup key</strong><small>Use this if scanning the QR code is not available.</small></span></summary>
-      <pre>{{ pending_totp_secret }}</pre>
-    </details>
-    <details class="collapsible-panel">
-      <summary><span><strong>Advanced setup URI</strong><small>Use this if your authenticator can import an otpauth URI.</small></span></summary>
-      <pre>{{ pending_totp_uri }}</pre>
-    </details>
-    <form method="post" action="/settings/2fa/verify" class="form-grid">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
-      <div class="form-actions"><button type="submit">Enable 2FA</button></div>
-    </form>
-    <form method="post" action="/settings/2fa/disable" class="inline-mini" data-confirm-delete="Cancel this pending 2FA setup?">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
-      <button class="ghost" type="submit">Cancel setup</button>
-    </form>
-  {% else %}
-    <p class="muted">2FA is optional. Enable it when you want login protection beyond your account password.</p>
-    <form method="post" action="/settings/2fa/start" class="form-grid">
-      <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label>Confirm password <input name="password" type="password" required autocomplete="current-password"></label>
-      <div class="form-actions"><button type="submit">Start 2FA setup</button></div>
-    </form>
-  {% endif %}
+<section class="panel" id="account-security">
+  <h2>Account Access</h2>
+  <section class="two-col flush-grid account-access-grid">
+    <div>
+      <h3>Recovery Phrase</h3>
+      <p class="{% if recovery_enabled %}muted{% else %}warning{% endif %}">{{ "Recovery phrase is configured." if recovery_enabled else "Set this before relying on 2FA." }}</p>
+      <form method="post" action="/settings/security/recovery" class="form-grid">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label class="span-2">Account password <input name="current_password" type="password" required autocomplete="current-password"></label>
+        <label class="span-2">Recovery phrase
+          <input name="recovery_phrase" type="password" autocomplete="new-password" placeholder="{{ suggested_recovery_phrase }}" data-recovery-phrase>
+          <small>Use a long sentence with uppercase, lowercase, a number, and a special character.</small>
+        </label>
+        <label class="span-2">Confirm recovery phrase <input name="confirm_recovery_phrase" type="password" autocomplete="new-password" data-recovery-confirm></label>
+        <label class="check-row span-2"><input type="checkbox" name="clear_recovery"> Remove recovery phrase</label>
+        <div class="form-actions span-2">
+          <button type="button" class="secondary" data-generate-recovery>Generate</button>
+          <button type="submit">Save Recovery Phrase</button>
+        </div>
+      </form>
+    </div>
+    <div id="two-factor">
+      <h3>Two-Factor Authentication</h3>
+      {% if user.totp_enabled %}
+        <p class="muted">2FA is enabled for your login. Disabling it requires your password and a current authenticator code.</p>
+        <form method="post" action="/settings/2fa/disable" class="form-grid">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+          <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+          <div class="form-actions span-2"><button class="secondary" type="submit">Disable 2FA</button></div>
+        </form>
+      {% elif pending_totp_secret %}
+        <p class="muted">Scan this QR code with your authenticator app, then enter the 6-digit code. If two people need access, scan the same QR on both phones before enabling.</p>
+        <div class="qr-code">{{ pending_totp_qr_svg|safe }}</div>
+        <details class="collapsible-panel">
+          <summary><span><strong>Manual setup key</strong><small>Use this if scanning the QR code is not available.</small></span></summary>
+          <pre>{{ pending_totp_secret }}</pre>
+        </details>
+        <details class="collapsible-panel">
+          <summary><span><strong>Advanced setup URI</strong><small>Use this if your authenticator can import an otpauth URI.</small></span></summary>
+          <pre>{{ pending_totp_uri }}</pre>
+        </details>
+        <form method="post" action="/settings/2fa/verify" class="form-grid">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+          <div class="form-actions"><button type="submit">Enable 2FA</button></div>
+        </form>
+        <form method="post" action="/settings/2fa/disable" class="inline-mini" data-confirm-delete="Cancel this pending 2FA setup?">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
+          <button class="ghost" type="submit">Cancel setup</button>
+        </form>
+      {% else %}
+        <p class="muted">2FA is optional. Enable it when you want login protection beyond your account password.</p>
+        <form method="post" action="/settings/2fa/start" class="form-grid">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label>Confirm password <input name="password" type="password" required autocomplete="current-password"></label>
+          <div class="form-actions"><button type="submit">Start 2FA setup</button></div>
+        </form>
+      {% endif %}
+    </div>
+  </section>
 </section>
 
 <section class="panel">

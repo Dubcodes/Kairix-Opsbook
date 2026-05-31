@@ -86,7 +86,7 @@
 {% elif tab == "creds" %}
   <section class="section-title"><h2>Creds</h2><a class="button" href="/credentials/new?service_id={{ service.id }}&device_id={{ service.device_id }}&return_to=/services/{{ service.id }}%3Ftab=creds" title="Add a password, token, or other secret for this service">Add Credential</a></section>
   <section class="list">
-    {% for credential in login_credentials + token_credentials %}
+    {% for credential in login_credentials %}
       <div class="list-row static clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
         <a class="row-main" href="/credentials/{{ credential.id }}">
           <strong>{{ credential.label }}</strong>
@@ -107,6 +107,12 @@
         <p class="empty">No service credentials yet.</p>
       {% endif %}
     {% endfor %}
+    {% if token_credentials %}
+      <a class="list-row" href="/tokens?service_id={{ service.id }}">
+        <strong>View Tokens & APIs</strong>
+        <span>{{ token_credentials|length }} token{% if token_credentials|length != 1 %}s{% endif %} kept on the Tokens page</span>
+      </a>
+    {% endif %}
   </section>
 {% elif tab == "docker" %}
   <section class="panel">
@@ -227,11 +233,30 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="object_type" value="service">
       <input type="hidden" name="object_id" value="{{ service.id }}">
+      <input type="hidden" name="return_to" value="/services/{{ service.id }}?tab=notes">
       <input name="title" placeholder="Title" spellcheck="true">
       <textarea name="body" placeholder="Add a note..." spellcheck="true" required></textarea>
       <button type="submit">Add Note</button>
     </form>
-    <div class="list">{% for note in notes %}<article class="note-block"><strong>{{ note.title or "Note" }}</strong><small>{{ note.source }} · {{ note.updated_at|dt }}</small><pre>{{ note.body }}</pre></article>{% else %}<p class="empty">No notes yet.</p>{% endfor %}</div>
+    <div class="list">
+      {% for note in notes %}
+        <article class="note-block">
+          <div class="section-title">
+            <div><strong>{{ note.title or "Note" }}</strong><small>{{ note.source }} · {{ note.updated_at|dt }}</small></div>
+            <div class="actions compact-actions">
+              <a class="button secondary small-button" href="/notes/{{ note.id }}/edit?return_to=/services/{{ service.id }}%3Ftab=notes">Edit</a>
+              <form method="post" action="/delete/note/{{ note.id }}" data-confirm-delete="Delete this note?">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <button class="ghost small-button danger-ghost" type="submit">Delete</button>
+              </form>
+            </div>
+          </div>
+          <pre>{{ note.body }}</pre>
+        </article>
+      {% else %}
+        <p class="empty">No notes yet.</p>
+      {% endfor %}
+    </div>
   </section>
 {% elif tab == "history" %}
   <section class="panel">

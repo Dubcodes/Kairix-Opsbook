@@ -205,7 +205,7 @@
 {% elif tab == "credentials" %}
   <section class="section-title"><h2>Credentials</h2><a class="button" href="/credentials/new?device_id={{ device.id }}&return_to=/devices/{{ device.id }}%3Ftab=credentials">Add Credential</a></section>
   <section class="list">
-    {% for credential in device.credentials %}
+    {% for credential in device.credentials if credential.secret_type != "API token" %}
       <div class="list-row static clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
         <a class="row-main" href="/credentials/{{ credential.id }}">
           <strong>{{ credential.label }}</strong>
@@ -257,9 +257,10 @@
     <h3>Ports</h3>
     <div class="list compact">
       {% for port in device.ports %}
+        {% set port_status = port_validation_statuses.get(port.id, {"state": "unknown", "title": "Port not checked"}) %}
         <div class="list-row static clickable-card" data-card-href="/ports/{{ port.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">
           <a class="row-main" href="/ports/{{ port.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">
-            <strong>{{ port.host_port }}/{{ port.protocol }}</strong>
+            <strong>{{ port.host_port }}/{{ port.protocol }}<span class="status-dot status-{{ port_status.state }}" title="{{ port_status.title or port_status.label }}"></span></strong>
             <span>{% if port.service %}{{ port.service.name }} · {% endif %}{{ port.purpose or port.notes or "No purpose documented" }}</span>
           </a>
           <div class="actions compact-actions">
@@ -268,6 +269,20 @@
         </div>
       {% else %}
         <p class="empty">No ports documented.</p>
+      {% endfor %}
+    </div>
+    <h3>Services</h3>
+    <div class="list compact">
+      {% for group in service_groups %}
+        {% for service in group.services %}
+          {% set service_status = validation_status.get(service.id, {"state": "unknown", "label": "Not checked", "checked_at": ""}) %}
+          <a class="list-row" href="/services/{{ service.id }}?tab=ports">
+            <strong>{{ service.name }}<span class="status-dot status-{{ service_status.state }}" title="{{ service_status.label }}{% if service_status.checked_at %} · checked {{ service_status.checked_at }}{% endif %}"></span></strong>
+            <span>{{ service.local_url or service.public_url or service.compose_path or "No URL/path documented" }}</span>
+          </a>
+        {% endfor %}
+      {% else %}
+        <p class="empty">No services documented.</p>
       {% endfor %}
     </div>
     <h3>URLs</h3>
@@ -321,25 +336,27 @@
       <label class="span-2">Image <input name="image_file" type="file" accept="image/*" required></label>
       <label class="span-2">Tags <input name="tags" placeholder="receipt, warranty, rack, serial" spellcheck="true"></label>
       <label>Notes <textarea name="notes" spellcheck="true"></textarea></label>
-      <label>OCR / Text <textarea name="ocr_text" placeholder="Optional text copied from the image." spellcheck="true"></textarea></label>
+      <label>Extracted text <textarea name="ocr_text" placeholder="Optional text copied from the image. Automatic OCR is not enabled in this build." spellcheck="true"></textarea></label>
+      <p class="muted span-2">Image text can be stored here for search. Full selectable OCR needs an OCR engine added to the stack first.</p>
       <div class="form-actions span-2"><button type="submit">Add Image</button></div>
     </form>
   </section>
   <section class="image-grid">
     {% for image in images %}
       <article class="panel image-card">
-        <a class="image-preview" href="/device-images/{{ image.id }}/file" target="_blank" title="Open image">
+        <button class="image-preview" type="button" data-image-preview="/device-images/{{ image.id }}/file" data-image-title="{{ image.name or image.original_filename }}" title="Open image">
           <img src="/device-images/{{ image.id }}/file" alt="{{ image.name or image.original_filename }}">
-        </a>
+        </button>
         <form method="post" action="/device-images/{{ image.id }}/edit" class="form-grid">
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <label>Name <input name="name" value="{{ image.name }}" spellcheck="true"></label>
           <label>Date <input name="image_date" type="date" value="{{ image.image_date|date_input }}"></label>
           <label class="span-2">Tags <input name="tags" value="{{ image_tags.get(image.id, [])|join(', ') }}" spellcheck="true"></label>
           <label>Notes <textarea name="notes" spellcheck="true">{{ image.notes }}</textarea></label>
-          <label>OCR / Text <textarea name="ocr_text" spellcheck="true">{{ image.ocr_text }}</textarea></label>
+          <label>Extracted text <textarea name="ocr_text" spellcheck="true">{{ image.ocr_text }}</textarea></label>
           <div class="form-actions span-2">
             <button class="secondary" type="submit">Save</button>
+            {% if image.ocr_text %}<button class="ghost small-button" type="button" data-copy-text="{{ image.ocr_text }}">Copy Text</button>{% endif %}
             <span class="muted">{{ image.original_filename }} · {{ image.size_bytes }} bytes</span>
           </div>
         </form>
@@ -359,6 +376,7 @@
       <input type="hidden" name="csrf" value="{{ csrf }}">
       <input type="hidden" name="object_type" value="device">
       <input type="hidden" name="object_id" value="{{ device.id }}">
+      <input type="hidden" name="return_to" value="/devices/{{ device.id }}?tab=notes">
       <input name="title" placeholder="Title" spellcheck="true">
       <textarea name="body" placeholder="Add a note..." spellcheck="true" required></textarea>
       <button type="submit">Add Note</button>
@@ -368,7 +386,13 @@
         <article class="note-block">
           <div class="section-title">
             <div><strong>{{ note.title or "Note" }}</strong><small>{{ note.source }} · {{ note.updated_at|dt }}</small></div>
-            <a class="button secondary small-button" href="/notes/{{ note.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=notes">Edit</a>
+            <div class="actions compact-actions">
+              <a class="button secondary small-button" href="/notes/{{ note.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=notes">Edit</a>
+              <form method="post" action="/delete/note/{{ note.id }}" data-confirm-delete="Delete this note?">
+                <input type="hidden" name="csrf" value="{{ csrf }}">
+                <button class="ghost small-button danger-ghost" type="submit">Delete</button>
+              </form>
+            </div>
           </div>
           <pre>{{ note.body }}</pre>
         </article>

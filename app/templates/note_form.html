@@ -10,16 +10,17 @@
       {% if target_href %} · <a href="{{ target_href }}">{{ target }}</a>{% elif target %} · {{ target }}{% endif %}
     </p>
   </div>
-  <a class="button secondary" href="/notes/{{ note.id }}">Cancel</a>
+  <a class="button secondary" href="{{ return_to or '/notes/' ~ note.id }}">Cancel</a>
 </section>
 
 <form method="post" class="panel form-grid wide">
   <input type="hidden" name="csrf" value="{{ csrf }}">
+  <input type="hidden" name="return_to" value="{{ return_to or '' }}">
   <label class="span-2">Title <input name="title" value="{{ note.title }}" spellcheck="true"></label>
   <label class="span-2">Note <textarea name="body" class="paste-box" required spellcheck="true">{{ note.body }}</textarea></label>
   <div class="form-actions span-2">
     <button type="submit">Save Note</button>
-    <a class="button secondary" href="/notes/{{ note.id }}">Cancel</a>
+    <a class="button secondary" href="{{ return_to or '/notes/' ~ note.id }}">Cancel</a>
   </div>
 </form>
 {% endblock %}

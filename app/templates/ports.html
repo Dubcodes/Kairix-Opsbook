@@ -46,9 +46,10 @@
     <h2>Ports</h2>
     <div class="list">
       {% for port in ports %}
+        {% set port_status = port_validation_statuses.get(port.id, {"state": "unknown", "title": "Port not checked"}) %}
         <div class="list-row static clickable-card" data-card-href="/ports/{{ port.id }}/edit?return_to=/ports">
           <a class="row-main" href="/ports/{{ port.id }}/edit?return_to=/ports">
-            <strong>{{ port.host_port }}/{{ port.protocol }}</strong>
+            <strong>{{ port.host_port }}/{{ port.protocol }}<span class="status-dot status-{{ port_status.state }}" title="{{ port_status.title or port_status.label }}"></span></strong>
             <span>{{ device_label(port.device, device_ping_statuses) }}{% if port.service %} · {{ port.service.name }}{% endif %}{% if port.purpose or port.notes %} · {{ port.purpose or port.notes }}{% endif %}</span>
           </a>
           <div class="actions compact-actions">

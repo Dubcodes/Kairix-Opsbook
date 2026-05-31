@@ -138,6 +138,69 @@
     }[char]));
   }
 
+  function generateRecoveryPhrase() {
+    const words = ["Anchor", "backup", "circuit", "docker", "lantern", "matrix", "opsbook", "primary", "signal", "stable", "vault", "warden"];
+    const randomValues = new Uint32Array(8);
+    if (window.crypto?.getRandomValues) {
+      window.crypto.getRandomValues(randomValues);
+    } else {
+      for (let index = 0; index < randomValues.length; index += 1) randomValues[index] = Math.floor(Math.random() * 1_000_000);
+    }
+    const chosen = Array.from(randomValues, (value, index) => {
+      const word = words[value % words.length];
+      return index === 0 ? word : word.toLowerCase();
+    });
+    const stamp = new Date().toISOString().replace(/[-:.TZ]/g, "").slice(0, 12);
+    const suffix = Array.from(randomValues.slice(0, 2), (value) => value.toString(16).slice(0, 4)).join("");
+    return `${chosen.join(" ")} ${stamp}-${suffix}!`;
+  }
+
+  function openImagePreview(src, title) {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop";
+    let zoom = 1;
+    backdrop.innerHTML = `
+      <div class="modal-panel image-modal-panel">
+        <div class="section-title">
+          <h2>${escapeHtml(title || "Image")}</h2>
+          <div class="actions compact-actions">
+            <button class="secondary small-button" type="button" data-image-zoom-out>Zoom Out</button>
+            <button class="secondary small-button" type="button" data-image-zoom-in>Zoom In</button>
+            <button class="ghost small-button" type="button" data-image-close>Close</button>
+          </div>
+        </div>
+        <div class="image-modal-stage"><img src="${escapeHtml(src)}" alt=""></div>
+      </div>`;
+    document.body.appendChild(backdrop);
+    const image = backdrop.querySelector("img");
+
+    function updateZoom() {
+      image.style.transform = `scale(${zoom})`;
+    }
+
+    backdrop.addEventListener("click", (event) => {
+      if (event.target === backdrop || event.target.closest("[data-image-close]")) {
+        backdrop.remove();
+        return;
+      }
+      if (event.target.closest("[data-image-zoom-in]")) {
+        zoom = Math.min(4, zoom + 0.25);
+        updateZoom();
+        return;
+      }
+      if (event.target.closest("[data-image-zoom-out]")) {
+        zoom = Math.max(0.5, zoom - 0.25);
+        updateZoom();
+      }
+    });
+    backdrop.addEventListener("wheel", (event) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      zoom = Math.max(0.5, Math.min(4, zoom + (event.deltaY < 0 ? 0.2 : -0.2)));
+      updateZoom();
+    }, {passive: false});
+  }
+
   function requestMaskedChallenge(message, options = {}) {
     return new Promise((resolve) => {
       const label = options.label || "Password or reveal PIN";
@@ -324,6 +387,30 @@
   }
 
   document.addEventListener("click", (event) => {
+    const recoveryGenerator = event.target.closest("[data-generate-recovery]");
+    if (recoveryGenerator) {
+      const phrase = generateRecoveryPhrase();
+      const form = recoveryGenerator.closest("form") || document;
+      const input = form.querySelector("[data-recovery-phrase]");
+      const confirm = form.querySelector("[data-recovery-confirm]");
+      if (input) {
+        input.value = phrase;
+        input.type = "text";
+        input.focus();
+      }
+      if (confirm) confirm.value = phrase;
+      return;
+    }
+
+    const imagePreview = event.target.closest("[data-image-preview]");
+    if (imagePreview) {
+      openImagePreview(
+        imagePreview.getAttribute("data-image-preview"),
+        imagePreview.getAttribute("data-image-title")
+      );
+      return;
+    }
+
     const quickNoteOpen = event.target.closest("[data-open-quick-note]");
     if (quickNoteOpen) {
       const modal = document.querySelector("[data-quick-note-modal]");

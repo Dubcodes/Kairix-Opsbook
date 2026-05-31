@@ -415,11 +415,14 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
 
 .image-preview {
   display: block;
+  width: 100%;
+  padding: 0;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
   background: var(--surface-soft);
   aspect-ratio: 16 / 10;
+  cursor: zoom-in;
 }
 
 .image-preview img {
@@ -427,6 +430,45 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   height: 100%;
   display: block;
   object-fit: contain;
+}
+
+.image-modal-panel {
+  width: min(96vw, 1200px);
+  max-height: 94vh;
+  display: grid;
+  gap: 10px;
+}
+
+.image-modal-stage {
+  min-height: 60vh;
+  max-height: 78vh;
+  overflow: auto;
+  display: grid;
+  place-items: center;
+  background: #05070a;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+
+.image-modal-stage img {
+  max-width: 100%;
+  max-height: 100%;
+  transform-origin: center center;
+  transition: transform 120ms ease;
+}
+
+.token-row.token-expired {
+  border-color: color-mix(in srgb, var(--red) 70%, var(--line));
+  background: color-mix(in srgb, var(--red) 7%, var(--surface));
+}
+
+.token-row.token-warning {
+  border-color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 8%, var(--surface));
+}
+
+.account-access-grid > div {
+  min-width: 0;
 }
 
 .section-title {
