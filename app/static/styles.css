@@ -643,12 +643,23 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   align-items: center;
   gap: 7px;
 }
-.list-row > .dashboard-service-meta {
+.dashboard-service-row > strong {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.list-row.dashboard-service-row > .dashboard-service-meta {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
-  width: 100%;
+  flex: 0 1 62%;
+  min-width: min(220px, 52%);
+  max-width: 68%;
+  justify-content: flex-end;
+  text-align: right;
+  margin-top: 0;
   white-space: nowrap;
 }
 .dashboard-service-device {
@@ -659,7 +670,7 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   white-space: nowrap;
 }
 .dashboard-service-url {
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1548,6 +1559,23 @@ input[type="color"] {
   .sidebar a { white-space: nowrap; }
   .shell { padding: 18px; }
   .page-head, .list-row, .device-row { align-items: flex-start; flex-direction: column; }
+  .list-row.dashboard-service-row > strong {
+    max-width: 100%;
+  }
+  .list-row.dashboard-service-row > .dashboard-service-meta {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    justify-content: flex-start;
+    text-align: left;
+    white-space: normal;
+    flex-wrap: wrap;
+  }
+  .dashboard-service-url {
+    white-space: normal;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
   .stats-grid, .two-col, .form-grid, .quick-grid, .summary-grid { grid-template-columns: 1fr; }
   .span-2 { grid-column: auto; }
   .filter-bar { flex-direction: row; flex-wrap: wrap; gap: 6px; }
