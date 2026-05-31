@@ -467,7 +467,55 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   background: color-mix(in srgb, #f59e0b 8%, var(--surface));
 }
 
-.account-access-grid > div {
+.security-access-grid {
+  align-items: start;
+}
+
+.security-form {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.security-form:first-of-type {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
+.danger-form {
+  margin-top: 16px;
+}
+
+.security-option-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.security-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  background: var(--surface-soft);
+}
+
+.security-option input {
+  width: auto;
+  margin-top: 3px;
+}
+
+.security-option small {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.security-access-grid > .panel {
   min-width: 0;
 }
 

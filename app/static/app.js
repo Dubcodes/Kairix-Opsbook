@@ -205,12 +205,14 @@
     return new Promise((resolve) => {
       const label = options.label || "Password or reveal PIN";
       const autocomplete = options.autocomplete || "current-password";
+      const requireTotp = Boolean(options.requireTotp);
       const backdrop = document.createElement("div");
       backdrop.className = "modal-backdrop";
       backdrop.innerHTML = `
         <form class="modal-panel compact-modal credential-challenge-modal">
           <h2>${escapeHtml(message || label)}</h2>
           <label>${escapeHtml(label)} <input name="challenge" type="password" autocomplete="${escapeHtml(autocomplete)}" required></label>
+          ${requireTotp ? '<label>2FA code <input name="totp_code" inputmode="numeric" autocomplete="one-time-code" required></label>' : ''}
           <div class="form-actions">
             <button type="submit">Continue</button>
             <button class="secondary" type="button" data-cancel-challenge>Cancel</button>
@@ -219,6 +221,7 @@
       document.body.appendChild(backdrop);
       const form = backdrop.querySelector("form");
       const input = backdrop.querySelector("input");
+      const totpInput = backdrop.querySelector('input[name="totp_code"]');
 
       function finish(value) {
         document.removeEventListener("keydown", onKeydown, true);
@@ -232,7 +235,11 @@
 
       form.addEventListener("submit", (event) => {
         event.preventDefault();
-        finish(input.value);
+        if (requireTotp) {
+          finish({challenge: input.value, totp_code: totpInput?.value || ""});
+        } else {
+          finish(input.value);
+        }
       });
       backdrop.addEventListener("click", (event) => {
         if (event.target === backdrop || event.target.closest("[data-cancel-challenge]")) finish("");
@@ -248,21 +255,32 @@
     const credentialId = button.getAttribute("data-reveal-credential") || button.getAttribute("data-copy-credential") || button.getAttribute("data-copy-go-credential");
     const csrf = document.querySelector("meta[name='csrf-token']")?.getAttribute("content") || "";
     let challenge = "";
+    let totpCode = "";
     let reason = "";
 
     async function sendReveal() {
       return fetch(`/credentials/${credentialId}/reveal-json`, {
         method: "POST",
         headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf},
-        body: JSON.stringify({challenge, reason})
+        body: JSON.stringify({challenge, reason, totp_code: totpCode})
       });
     }
 
     let response = await sendReveal();
     let data = await response.json();
     if (response.status === 403 && data.requires_challenge) {
-      challenge = await requestMaskedChallenge(data.message || "Password or reveal PIN");
+      const result = await requestMaskedChallenge(data.message || "Password or reveal PIN", {
+        requireTotp: Boolean(data.requires_totp)
+      });
+      if (typeof result === "object" && result !== null) {
+        challenge = result.challenge || "";
+        totpCode = result.totp_code || "";
+      } else {
+        challenge = result || "";
+        totpCode = "";
+      }
       if (!challenge) return;
+      if (data.requires_totp && !totpCode) return;
       response = await sendReveal();
       data = await response.json();
     }

@@ -194,67 +194,107 @@
   </section>
 </section>
 
-<section class="panel" id="account-security">
-  <h2>Account Access</h2>
-  <section class="two-col flush-grid account-access-grid">
-    <div>
-      <h3>Recovery Phrase</h3>
-      <p class="{% if recovery_enabled %}muted{% else %}warning{% endif %}">{{ "Recovery phrase is configured." if recovery_enabled else "Set this before relying on 2FA." }}</p>
-      <form method="post" action="/settings/security/recovery" class="form-grid">
+<section class="two-col security-access-grid">
+  <section class="panel" id="account-security">
+    <div class="section-title">
+      <div>
+        <h2>Recovery Phrase</h2>
+        <p class="{% if recovery_enabled %}muted{% else %}warning{% endif %}">{{ "Configured for password recovery." if recovery_enabled else "Set this before relying on 2FA." }}</p>
+      </div>
+    </div>
+    <form method="post" action="/settings/security/recovery" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="span-2">Account password <input name="current_password" type="password" required autocomplete="current-password"></label>
+      <label class="span-2">Recovery phrase
+        <input name="recovery_phrase" type="password" autocomplete="new-password" placeholder="{{ suggested_recovery_phrase }}" data-recovery-phrase>
+        <small>Use a long sentence with uppercase, lowercase, a number, and a special character.</small>
+      </label>
+      <label class="span-2">Confirm recovery phrase <input name="confirm_recovery_phrase" type="password" autocomplete="new-password" data-recovery-confirm></label>
+      <label class="check-row span-2"><input type="checkbox" name="clear_recovery"> Remove recovery phrase</label>
+      <div class="form-actions span-2">
+        <button type="button" class="secondary" data-generate-recovery>Generate</button>
+        <button type="submit">Save Recovery Phrase</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="panel" id="two-factor">
+    <div class="section-title">
+      <div>
+        <h2>Two-Factor Authentication</h2>
+        {% if user.totp_enabled %}
+          <p class="muted">Enabled · {{ "main login" if totp_scope == "login" else "high-security credential reveals" }}</p>
+        {% else %}
+          <p class="muted">Optional login or reveal protection.</p>
+        {% endif %}
+      </div>
+    </div>
+    {% set scope_options = [("login", "Main login", "Ask for 2FA after the account password at sign in."), ("high_security", "High-security reveals", "Keep login password-only, then ask for 2FA when revealing High or Extreme credentials.")] %}
+    {% if user.totp_enabled %}
+      <form method="post" action="/settings/2fa/scope" class="form-grid security-form">
         <input type="hidden" name="csrf" value="{{ csrf }}">
-        <label class="span-2">Account password <input name="current_password" type="password" required autocomplete="current-password"></label>
-        <label class="span-2">Recovery phrase
-          <input name="recovery_phrase" type="password" autocomplete="new-password" placeholder="{{ suggested_recovery_phrase }}" data-recovery-phrase>
-          <small>Use a long sentence with uppercase, lowercase, a number, and a special character.</small>
-        </label>
-        <label class="span-2">Confirm recovery phrase <input name="confirm_recovery_phrase" type="password" autocomplete="new-password" data-recovery-confirm></label>
-        <label class="check-row span-2"><input type="checkbox" name="clear_recovery"> Remove recovery phrase</label>
-        <div class="form-actions span-2">
-          <button type="button" class="secondary" data-generate-recovery>Generate</button>
-          <button type="submit">Save Recovery Phrase</button>
+        <div class="security-option-grid span-2">
+          {% for value, label, help in scope_options %}
+            <label class="security-option">
+              <input type="radio" name="totp_scope" value="{{ value }}" {% if totp_scope == value %}checked{% endif %}>
+              <span><strong>{{ label }}</strong><small>{{ help }}</small></span>
+            </label>
+          {% endfor %}
         </div>
+        <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+        <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <div class="form-actions span-2"><button type="submit">Save 2FA Use</button></div>
       </form>
-    </div>
-    <div id="two-factor">
-      <h3>Two-Factor Authentication</h3>
-      {% if user.totp_enabled %}
-        <p class="muted">2FA is enabled for your login. Disabling it requires your password and a current authenticator code.</p>
-        <form method="post" action="/settings/2fa/disable" class="form-grid">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
-          <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
-          <div class="form-actions span-2"><button class="secondary" type="submit">Disable 2FA</button></div>
-        </form>
-      {% elif pending_totp_secret %}
-        <p class="muted">Scan this QR code with your authenticator app, then enter the 6-digit code. If two people need access, scan the same QR on both phones before enabling.</p>
-        <div class="qr-code">{{ pending_totp_qr_svg|safe }}</div>
-        <details class="collapsible-panel">
-          <summary><span><strong>Manual setup key</strong><small>Use this if scanning the QR code is not available.</small></span></summary>
-          <pre>{{ pending_totp_secret }}</pre>
-        </details>
-        <details class="collapsible-panel">
-          <summary><span><strong>Advanced setup URI</strong><small>Use this if your authenticator can import an otpauth URI.</small></span></summary>
-          <pre>{{ pending_totp_uri }}</pre>
-        </details>
-        <form method="post" action="/settings/2fa/verify" class="form-grid">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
-          <div class="form-actions"><button type="submit">Enable 2FA</button></div>
-        </form>
-        <form method="post" action="/settings/2fa/disable" class="inline-mini" data-confirm-delete="Cancel this pending 2FA setup?">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
-          <button class="ghost" type="submit">Cancel setup</button>
-        </form>
-      {% else %}
-        <p class="muted">2FA is optional. Enable it when you want login protection beyond your account password.</p>
-        <form method="post" action="/settings/2fa/start" class="form-grid">
-          <input type="hidden" name="csrf" value="{{ csrf }}">
-          <label>Confirm password <input name="password" type="password" required autocomplete="current-password"></label>
-          <div class="form-actions"><button type="submit">Start 2FA setup</button></div>
-        </form>
-      {% endif %}
-    </div>
+      <form method="post" action="/settings/2fa/disable" class="form-grid security-form danger-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+        <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <div class="form-actions span-2"><button class="secondary" type="submit">Disable 2FA</button></div>
+      </form>
+    {% elif pending_totp_secret %}
+      <p class="muted">Scan this QR code with your authenticator app, then enter the 6-digit code. If two people need access, scan the same QR on both phones before enabling.</p>
+      <div class="qr-code">{{ pending_totp_qr_svg|safe }}</div>
+      <details class="collapsible-panel">
+        <summary><span><strong>Manual setup key</strong><small>Use this if scanning the QR code is not available.</small></span></summary>
+        <pre>{{ pending_totp_secret }}</pre>
+      </details>
+      <details class="collapsible-panel">
+        <summary><span><strong>Advanced setup URI</strong><small>Use this if your authenticator can import an otpauth URI.</small></span></summary>
+        <pre>{{ pending_totp_uri }}</pre>
+      </details>
+      <form method="post" action="/settings/2fa/verify" class="form-grid security-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="security-option-grid span-2">
+          {% for value, label, help in scope_options %}
+            <label class="security-option">
+              <input type="radio" name="totp_scope" value="{{ value }}" {% if totp_scope == value %}checked{% endif %}>
+              <span><strong>{{ label }}</strong><small>{{ help }}</small></span>
+            </label>
+          {% endfor %}
+        </div>
+        <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <div class="form-actions"><button type="submit">Enable 2FA</button></div>
+      </form>
+      <form method="post" action="/settings/2fa/disable" class="inline-mini" data-confirm-delete="Cancel this pending 2FA setup?">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <input name="password" type="password" placeholder="Password" required autocomplete="current-password">
+        <button class="ghost" type="submit">Cancel setup</button>
+      </form>
+    {% else %}
+      <form method="post" action="/settings/2fa/start" class="form-grid security-form">
+        <input type="hidden" name="csrf" value="{{ csrf }}">
+        <div class="security-option-grid span-2">
+          {% for value, label, help in scope_options %}
+            <label class="security-option">
+              <input type="radio" name="totp_scope" value="{{ value }}" {% if totp_scope == value %}checked{% endif %}>
+              <span><strong>{{ label }}</strong><small>{{ help }}</small></span>
+            </label>
+          {% endfor %}
+        </div>
+        <label class="span-2">Confirm password <input name="password" type="password" required autocomplete="current-password"></label>
+        <div class="form-actions span-2"><button type="submit">Start 2FA Setup</button></div>
+      </form>
+    {% endif %}
   </section>
 </section>
 

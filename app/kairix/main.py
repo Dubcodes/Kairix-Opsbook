@@ -142,6 +142,9 @@ WEBHOOK_URL_SETTING = "ping_webhook_url_encrypted"
 WEBHOOK_SCOPE_SETTING = "ping_webhook_scope"
 WEBHOOK_RECOVERY_SETTING = "ping_webhook_send_recovery"
 RECOVERY_PHRASE_HASH_SETTING = "recovery_phrase_hash"
+TOTP_SCOPE_SETTING = "totp_scope"
+TOTP_SCOPE_LOGIN = "login"
+TOTP_SCOPE_HIGH_SECURITY = "high_security"
 DEVICE_IMAGE_DIR = "device-images"
 SUGGESTION_IMAGE_DIR = "suggestion-images"
 MAX_IMAGE_UPLOAD_BYTES = 12 * 1024 * 1024
@@ -658,6 +661,33 @@ def _recovery_phrase_error(value: str) -> str:
     if not all(checks):
         return "Recovery phrase needs uppercase, lowercase, a number, and a special character."
     return ""
+
+
+def _totp_scope(db: Session) -> str:
+    row = db.query(models.AppSetting).filter_by(key=TOTP_SCOPE_SETTING).first()
+    value = row.value if row and row.value else TOTP_SCOPE_LOGIN
+    return value if value in {TOTP_SCOPE_LOGIN, TOTP_SCOPE_HIGH_SECURITY} else TOTP_SCOPE_LOGIN
+
+
+def _set_totp_scope(db: Session, raw_value: str) -> str:
+    value = raw_value if raw_value in {TOTP_SCOPE_LOGIN, TOTP_SCOPE_HIGH_SECURITY} else TOTP_SCOPE_LOGIN
+    set_app_setting(db, TOTP_SCOPE_SETTING, value)
+    return value
+
+
+def _verify_totp_code(user: models.User, code: str) -> bool:
+    if not user.totp_secret_encrypted:
+        return False
+    secret = decrypt_text(user.totp_secret_encrypted)
+    return pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1)
+
+
+def _credential_requires_totp(db: Session, user: models.User, credential: models.Credential) -> bool:
+    return bool(
+        user.totp_enabled
+        and _totp_scope(db) == TOTP_SCOPE_HIGH_SECURITY
+        and credential.security_level in {"high", "extreme"}
+    )
 
 
 def _recovery_challenge_options(db: Session) -> tuple[list[int], list[dict[str, Any]]]:
@@ -1863,6 +1893,7 @@ AUDIT_ACTION_LABELS = {
     "webhook_test": "Webhook tested",
     "totp_setup_started": "2FA setup started",
     "totp_enabled": "2FA enabled",
+    "totp_scope_changed": "2FA use changed",
     "totp_disabled": "2FA disabled",
     "password_changed": "Password changed",
     "reveal_pin_changed": "Reveal password changed",
@@ -2395,7 +2426,7 @@ def login(
         flash(request, "Login failed. Check the username and password.", "danger")
         return redirect("/login")
     request.session.clear()
-    if user.totp_enabled:
+    if user.totp_enabled and _totp_scope(db) == TOTP_SCOPE_LOGIN:
         request.session["pending_2fa_user_id"] = user.id
         request.session["last_seen"] = now_utc().isoformat()
         csrf_token(request)
@@ -2436,8 +2467,7 @@ def login_2fa(
     if not user or not user.totp_secret_encrypted:
         request.session.clear()
         return redirect("/login")
-    secret = decrypt_text(user.totp_secret_encrypted)
-    if not pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1):
+    if not _verify_totp_code(user, code):
         flash(request, "Incorrect 2FA code.", "danger")
         return redirect("/login/2fa")
     request.session.clear()
@@ -3953,7 +3983,13 @@ def medium_unlocked(request: Request) -> bool:
         return False
 
 
-def _reveal_failure_response(request: Request, *, json_response: bool = False) -> JSONResponse | RedirectResponse:
+def _reveal_failure_response(
+    request: Request,
+    *,
+    json_response: bool = False,
+    message_prefix: str = "Incorrect password or reveal PIN.",
+    requires_totp: bool = False,
+) -> JSONResponse | RedirectResponse:
     failures = int(request.session.get("reveal_failures") or 0) + 1
     if failures >= 5:
         request.session.clear()
@@ -3968,13 +4004,14 @@ def _reveal_failure_response(request: Request, *, json_response: bool = False) -
         flash(request, "Too many wrong password attempts. You have been logged out for security.", "danger")
         return redirect("/login")
     request.session["reveal_failures"] = failures
-    message = f"Incorrect password or reveal PIN. {5 - failures} attempt(s) left."
+    message = f"{message_prefix} {5 - failures} attempt(s) left."
     if json_response:
         return JSONResponse(
             {
                 "detail": message,
                 "requires_challenge": True,
-                "message": "Password or reveal PIN",
+                "requires_totp": requires_totp,
+                "message": "Security check" if requires_totp else "Password or reveal PIN",
             },
             status_code=403,
         )
@@ -4006,6 +4043,7 @@ def credential_reveal_page(
             "credential": credential,
             "revealed_secret": None,
             "can_reveal_without_challenge": can_reveal_without_challenge,
+            "requires_totp": _credential_requires_totp(db, user, credential),
         },
         user=user,
     )
@@ -4017,6 +4055,7 @@ def credential_reveal_post(
     credential_id: int,
     csrf: str = Form(...),
     challenge: str = Form(""),
+    totp_code: str = Form(""),
     reason: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
@@ -4028,6 +4067,7 @@ def credential_reveal_post(
     needs_challenge = credential.security_level in {"high", "extreme"} or (
         credential.security_level == "medium" and not medium_unlocked(request)
     )
+    needs_totp = _credential_requires_totp(db, user, credential)
     if needs_challenge and not challenge.strip():
         flash(request, "Enter your account password or reveal PIN.", "warning")
         return redirect(f"/credentials/{credential.id}/reveal")
@@ -4035,6 +4075,11 @@ def credential_reveal_post(
         challenge, user.password_hash, user.secondary_password_hash
     ):
         return _reveal_failure_response(request)
+    if needs_totp and not totp_code.strip():
+        flash(request, "Enter your 2FA code.", "warning")
+        return redirect(f"/credentials/{credential.id}/reveal")
+    if needs_totp and not _verify_totp_code(user, totp_code):
+        return _reveal_failure_response(request, message_prefix="Incorrect 2FA code.")
     if credential.security_level == "medium" and needs_challenge:
         request.session["credential_unlock_until"] = unlock_expiry().isoformat()
     _reset_reveal_failures(request)
@@ -4083,14 +4128,17 @@ async def credential_reveal_json(
     needs_challenge = credential.security_level in {"high", "extreme"} or (
         credential.security_level == "medium" and not medium_unlocked(request)
     )
+    needs_totp = _credential_requires_totp(db, user, credential)
     challenge_value = str(payload.get("challenge", ""))
-    if needs_challenge and not challenge_value:
+    totp_code = str(payload.get("totp_code", ""))
+    if (needs_challenge and not challenge_value) or (needs_totp and not totp_code):
         return JSONResponse(
             {
-                "detail": "Password or reveal PIN required.",
+                "detail": "Password or reveal PIN and 2FA code required." if needs_totp else "Password or reveal PIN required.",
                 "requires_challenge": True,
+                "requires_totp": needs_totp,
                 "requires_reason": False,
-                "message": "Password or reveal PIN",
+                "message": "Security check" if needs_totp else "Password or reveal PIN",
             },
             status_code=403,
         )
@@ -4098,6 +4146,15 @@ async def credential_reveal_json(
         challenge_value, user.password_hash, user.secondary_password_hash
     ):
         response = _reveal_failure_response(request, json_response=True)
+        if isinstance(response, JSONResponse):
+            return response
+    if needs_totp and not _verify_totp_code(user, totp_code):
+        response = _reveal_failure_response(
+            request,
+            json_response=True,
+            message_prefix="Incorrect 2FA code.",
+            requires_totp=True,
+        )
         if isinstance(response, JSONResponse):
             return response
     if credential.security_level == "medium" and needs_challenge:
@@ -5749,6 +5806,7 @@ def settings_page(
             "webhook_send_recovery": _webhook_recovery_enabled(db),
             "recovery_enabled": _recovery_enabled(db),
             "suggested_recovery_phrase": _suggested_recovery_phrase(),
+            "totp_scope": _totp_scope(db),
         },
         user=user,
     )
@@ -6069,6 +6127,7 @@ def settings_2fa_start(
     request: Request,
     csrf: str = Form(...),
     password: str = Form(...),
+    totp_scope: str = Form(TOTP_SCOPE_LOGIN),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -6077,9 +6136,18 @@ def settings_2fa_start(
     if not verify_password(password, user.password_hash):
         flash(request, "Incorrect password. 2FA setup was not started.", "danger")
         return redirect("/settings#two-factor")
+    scope = _set_totp_scope(db, totp_scope)
     user.totp_enabled = False
     user.totp_secret_encrypted = encrypt_text(pyotp.random_base32())
-    db.add(models.AuditLog(user_id=user.id, action="totp_setup_started", object_type="user", object_id=user.id))
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="totp_setup_started",
+            object_type="user",
+            object_id=user.id,
+            details_json={"scope": scope},
+        )
+    )
     db.commit()
     flash(request, "2FA setup started. Add the manual key to your authenticator app, then verify a code.", "success")
     return redirect("/settings#two-factor")
@@ -6090,6 +6158,7 @@ def settings_2fa_verify(
     request: Request,
     csrf: str = Form(...),
     code: str = Form(...),
+    totp_scope: str = Form(TOTP_SCOPE_LOGIN),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -6098,14 +6167,62 @@ def settings_2fa_verify(
     if not user.totp_secret_encrypted:
         flash(request, "Start 2FA setup first.", "warning")
         return redirect("/settings#two-factor")
-    secret = decrypt_text(user.totp_secret_encrypted)
-    if not pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1):
+    if not _verify_totp_code(user, code):
         flash(request, "Incorrect 2FA code.", "danger")
         return redirect("/settings#two-factor")
+    scope = _set_totp_scope(db, totp_scope)
     user.totp_enabled = True
-    db.add(models.AuditLog(user_id=user.id, action="totp_enabled", object_type="user", object_id=user.id))
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="totp_enabled",
+            object_type="user",
+            object_id=user.id,
+            details_json={"scope": scope},
+        )
+    )
     db.commit()
-    flash(request, "2FA is now enabled for login.", "success")
+    flash(
+        request,
+        "2FA is now enabled for login." if scope == TOTP_SCOPE_LOGIN else "2FA is now enabled for high-security credential reveals.",
+        "success",
+    )
+    return redirect("/settings#two-factor")
+
+
+@app.post("/settings/2fa/scope")
+def settings_2fa_scope(
+    request: Request,
+    csrf: str = Form(...),
+    password: str = Form(...),
+    code: str = Form(...),
+    totp_scope: str = Form(TOTP_SCOPE_LOGIN),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if not user.totp_enabled:
+        flash(request, "Enable 2FA before changing where it is used.", "warning")
+        return redirect("/settings#two-factor")
+    if not verify_password(password, user.password_hash):
+        flash(request, "Incorrect password. 2FA use was not changed.", "danger")
+        return redirect("/settings#two-factor")
+    if not _verify_totp_code(user, code):
+        flash(request, "Incorrect 2FA code. 2FA use was not changed.", "danger")
+        return redirect("/settings#two-factor")
+    scope = _set_totp_scope(db, totp_scope)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="totp_scope_changed",
+            object_type="user",
+            object_id=user.id,
+            details_json={"scope": scope},
+        )
+    )
+    db.commit()
+    flash(request, "2FA use saved.", "success")
     return redirect("/settings#two-factor")
 
 
@@ -6123,11 +6240,9 @@ def settings_2fa_disable(
     if not verify_password(password, user.password_hash):
         flash(request, "Incorrect password. 2FA was not changed.", "danger")
         return redirect("/settings#two-factor")
-    if user.totp_enabled and user.totp_secret_encrypted:
-        secret = decrypt_text(user.totp_secret_encrypted)
-        if not pyotp.TOTP(secret).verify(code.strip().replace(" ", ""), valid_window=1):
-            flash(request, "Incorrect 2FA code. 2FA was not disabled.", "danger")
-            return redirect("/settings#two-factor")
+    if user.totp_enabled and not _verify_totp_code(user, code):
+        flash(request, "Incorrect 2FA code. 2FA was not disabled.", "danger")
+        return redirect("/settings#two-factor")
     user.totp_enabled = False
     user.totp_secret_encrypted = None
     db.add(models.AuditLog(user_id=user.id, action="totp_disabled", object_type="user", object_id=user.id))
@@ -6483,11 +6598,15 @@ def export_delete(
     request: Request,
     export_id: int,
     csrf: str = Form(...),
+    password: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
+    if not challenge_ok(password, user.password_hash, user.secondary_password_hash):
+        flash(request, "Deleting emergency exports requires your account password or reveal PIN.", "danger")
+        return redirect("/exports")
     export = db.get(models.BackupExport, export_id)
     if not export:
         raise HTTPException(404, "Export not found.")
@@ -6518,11 +6637,15 @@ def exports_delete_old(
     request: Request,
     csrf: str = Form(...),
     older_than_days: int = Form(90),
+    password: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
+    if not challenge_ok(password, user.password_hash, user.secondary_password_hash):
+        flash(request, "Deleting old emergency exports requires your account password or reveal PIN.", "danger")
+        return redirect("/exports")
     days = max(1, min(99999, int(older_than_days or 90)))
     cutoff = now_utc() - timedelta(days=days)
     exports = db.query(models.BackupExport).filter(models.BackupExport.created_at < cutoff).all()
