@@ -421,6 +421,9 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   margin-bottom: 16px;
 }
 .two-col.flush-grid { margin-bottom: 0; }
+.dashboard-recent-grid {
+  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+}
 
 .image-grid {
   display: grid;
@@ -643,6 +646,12 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   align-items: center;
   gap: 7px;
 }
+.dashboard-service-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+  justify-content: normal;
+}
 .dashboard-service-row > strong {
   flex: 1 1 auto;
   min-width: 0;
@@ -655,18 +664,26 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   align-items: center;
   gap: 6px;
   flex: 0 1 62%;
-  min-width: min(220px, 52%);
-  max-width: 68%;
+  min-width: 0;
+  max-width: 100%;
   justify-content: flex-end;
   text-align: right;
   margin-top: 0;
+  overflow: hidden;
   white-space: nowrap;
 }
 .dashboard-service-device {
-  flex: 0 0 auto;
-  min-width: max-content;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 46%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dashboard-service-device .device-with-ping {
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
 }
 .dashboard-service-url {
@@ -1559,6 +1576,10 @@ input[type="color"] {
   .sidebar a { white-space: nowrap; }
   .shell { padding: 18px; }
   .page-head, .list-row, .device-row { align-items: flex-start; flex-direction: column; }
+  .list-row.dashboard-service-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
   .list-row.dashboard-service-row > strong {
     max-width: 100%;
   }
@@ -1570,6 +1591,9 @@ input[type="color"] {
     text-align: left;
     white-space: normal;
     flex-wrap: wrap;
+  }
+  .dashboard-service-device {
+    max-width: 100%;
   }
   .dashboard-service-url {
     white-space: normal;
