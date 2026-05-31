@@ -370,18 +370,13 @@
           const badge = document.createElement("small");
           badge.textContent = item.type || "Result";
           const title = document.createElement("strong");
-          if (item.device_position === "title" && item.device_name) {
+          if (item.type === "Device" && item.device_name) {
             appendDevicePing(title, item.device_name, item.device_ping_state, item.device_ping_label);
           } else {
             title.textContent = item.title || "Result";
           }
           const subtitle = document.createElement("span");
-          if (item.device_position === "subtitle" && item.device_name) {
-            appendDevicePing(subtitle, item.device_name, item.device_ping_state, item.device_ping_label);
-            if (item.subtitle) subtitle.append(document.createTextNode(` · ${item.subtitle}`));
-          } else {
-            subtitle.textContent = item.subtitle || "";
-          }
+          subtitle.textContent = item.subtitle || "";
           link.append(badge, title, subtitle);
           host.dropdown.appendChild(link);
         });

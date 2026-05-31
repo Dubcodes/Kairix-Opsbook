@@ -6741,7 +6741,6 @@ def _search_live_items(db: Session, results: dict[str, list[Any]], q: str) -> li
         url: str,
         *,
         device: models.Device | None = None,
-        device_position: str = "",
     ) -> None:
         item = {
             "type": kind,
@@ -6756,20 +6755,9 @@ def _search_live_items(db: Session, results: dict[str, list[Any]], q: str) -> li
                     "device_name": device.name,
                     "device_ping_state": ping.get("state", "unknown"),
                     "device_ping_label": ping.get("label", "unknown"),
-                    "device_position": device_position,
                 }
             )
         items.append(item)
-
-    def command_device(command: models.Command) -> models.Device | None:
-        if not command.applies_to_id:
-            return None
-        if command.applies_to_type == "device":
-            return db.get(models.Device, command.applies_to_id)
-        if command.applies_to_type == "service":
-            service = db.get(models.Service, command.applies_to_id)
-            return service.device if service and service.device else None
-        return None
 
     for device in results["devices"]:
         add(
@@ -6778,55 +6766,38 @@ def _search_live_items(db: Session, results: dict[str, list[Any]], q: str) -> li
             _search_result_subtitle(device.primary_ip or device.hostname, device.purpose or device.type),
             f"/devices/{device.id}",
             device=device,
-            device_position="title",
         )
     for service in results["services"]:
         add(
             "Service",
             service.name,
-            _search_result_subtitle(service.local_url or service.public_url or service.compose_path),
+            _search_result_subtitle(service.device.name if service.device else "Unlinked", service.local_url or service.public_url or service.compose_path),
             f"/services/{service.id}",
-            device=service.device,
-            device_position="subtitle",
         )
     for credential in results["credentials"]:
         context_device = _credential_context_device(credential)
         add(
             "Token" if credential.secret_type == "API token" else "Credential",
             credential.label,
-            _search_result_subtitle(credential.service.name if credential.service else "", credential.username, credential.secret_type),
+            _search_result_subtitle(credential.service.name if credential.service else context_device.name if context_device else "Unlinked", credential.username, credential.secret_type),
             f"/credentials/{credential.id}",
-            device=context_device,
-            device_position="subtitle",
         )
     for command in results["commands"]:
-        related_device = command_device(command)
-        add(
-            "Command",
-            command.name,
-            _search_result_subtitle(command.category, command.short_description),
-            f"/commands/{command.id}/edit",
-            device=related_device,
-            device_position="subtitle",
-        )
+        add("Command", command.name, _search_result_subtitle(command.category, command.short_description), f"/commands/{command.id}/edit")
     for url in results["urls"]:
         context_device = url.service.device if url.service and url.service.device else url.device
         add(
             "URL",
             url.label or url.url,
-            _search_result_subtitle(url.url_type, url.url),
+            _search_result_subtitle(context_device.name if context_device else "", url.url_type, url.url),
             f"/urls/{url.id}/edit?return_to=/search%3Fq={quote(q, safe='')}",
-            device=context_device,
-            device_position="subtitle",
         )
     for port in results["ports"]:
         add(
             "Port",
             f"{port.host_port}/{port.protocol}",
-            _search_result_subtitle(port.service.name if port.service else "", port.purpose),
+            _search_result_subtitle(port.device.name if port.device else "", port.service.name if port.service else "", port.purpose),
             f"/ports/{port.id}/edit?return_to=/search%3Fq={quote(q, safe='')}",
-            device=port.device,
-            device_position="subtitle",
         )
     for note in results["notes"]:
         target, _ = _note_target_label(db, note)
@@ -6835,10 +6806,8 @@ def _search_live_items(db: Session, results: dict[str, list[Any]], q: str) -> li
         add(
             "Image",
             image.name or image.original_filename,
-            _search_result_subtitle(image.notes),
+            _search_result_subtitle(image.device.name if image.device else "", image.notes),
             f"/devices/{image.device_id}?tab=images",
-            device=image.device,
-            device_position="subtitle",
         )
     for suggestion in results["suggestions"]:
         add("Suggestion", suggestion.title, _search_result_subtitle(suggestion.subtitle, suggestion.notes), "/suggestions#custom-suggestions")
