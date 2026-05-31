@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Recover Access · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="auth-card">
+  <p class="eyebrow">Account recovery</p>
+  <h1>Recover access</h1>
+  {% if recovery_enabled %}
+    <form method="post" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label class="span-2">Recovery phrase
+        <input name="recovery_phrase" type="password" required autocomplete="off">
+      </label>
+      <button type="submit">Continue</button>
+      <a class="button secondary" href="/login">Back</a>
+    </form>
+  {% else %}
+    <p class="muted">Recovery phrase is not configured yet.</p>
+    <a class="button secondary" href="/login">Back to login</a>
+  {% endif %}
+</section>
+{% endblock %}

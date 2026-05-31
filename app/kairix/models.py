@@ -68,6 +68,9 @@ class Device(Base, TimestampMixin):
     credentials: Mapped[list["Credential"]] = relationship(back_populates="device")
     ports: Mapped[list["Port"]] = relationship(back_populates="device")
     urls: Mapped[list["Url"]] = relationship(back_populates="device")
+    images: Mapped[list["DeviceImage"]] = relationship(
+        back_populates="device", cascade="all, delete-orphan"
+    )
 
 
 class DeviceHardware(Base):
@@ -237,6 +240,39 @@ class Note(Base, TimestampMixin):
     title: Mapped[str] = mapped_column(String(180), default="")
     body: Mapped[str] = mapped_column(Text, default="")
     source: Mapped[str] = mapped_column(String(120), default="manual")
+
+
+class DeviceImage(Base, TimestampMixin):
+    __tablename__ = "device_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"), index=True)
+    device: Mapped[Device] = relationship(back_populates="images")
+    name: Mapped[str] = mapped_column(String(180), default="")
+    image_date: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    original_filename: Mapped[str] = mapped_column(String(260), default="")
+    stored_filename: Mapped[str] = mapped_column(String(260), unique=True, index=True)
+    mime_type: Mapped[str] = mapped_column(String(120), default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    notes: Mapped[str] = mapped_column(Text, default="")
+    ocr_text: Mapped[str] = mapped_column(Text, default="")
+
+
+class UserSuggestion(Base, TimestampMixin):
+    __tablename__ = "user_suggestions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(180), index=True)
+    subtitle: Mapped[str] = mapped_column(Text, default="")
+    due_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    severity: Mapped[str] = mapped_column(String(40), default="info")
+    object_type: Mapped[str] = mapped_column(String(40), default="")
+    object_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    image_filename: Mapped[str] = mapped_column(String(260), default="")
+    image_original_filename: Mapped[str] = mapped_column(String(260), default="")
+    image_mime_type: Mapped[str] = mapped_column(String(120), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    done: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
 class ImportRecord(Base, TimestampMixin):

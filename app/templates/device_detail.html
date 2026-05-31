@@ -15,7 +15,7 @@
   </div>
 </section>
 
-{% set tabs = ["overview", "services", "credentials", "commands", "hardware", "network", "backups", "notes", "history"] %}
+{% set tabs = ["overview", "services", "credentials", "commands", "hardware", "network", "backups", "images", "notes", "history"] %}
 <nav class="tabs">
   {% for item in tabs %}
     <a class="{% if tab == item %}active{% endif %}" href="/devices/{{ device.id }}?tab={{ item }}">{{ item|title }}</a>
@@ -306,6 +306,52 @@
       {% endfor %}
     </div>
   </section>
+{% elif tab == "images" %}
+  <section class="panel">
+    <div class="section-title">
+      <div>
+        <h2>Images</h2>
+        <p class="muted">Store receipts, labels, rack photos, screenshots, and other visual notes for this device.</p>
+      </div>
+    </div>
+    <form method="post" action="/devices/{{ device.id }}/images" enctype="multipart/form-data" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <label>Name <input name="name" placeholder="Receipt, serial label, rack photo" spellcheck="true"></label>
+      <label>Date <input name="image_date" type="date"></label>
+      <label class="span-2">Image <input name="image_file" type="file" accept="image/*" required></label>
+      <label class="span-2">Tags <input name="tags" placeholder="receipt, warranty, rack, serial" spellcheck="true"></label>
+      <label>Notes <textarea name="notes" spellcheck="true"></textarea></label>
+      <label>OCR / Text <textarea name="ocr_text" placeholder="Optional text copied from the image." spellcheck="true"></textarea></label>
+      <div class="form-actions span-2"><button type="submit">Add Image</button></div>
+    </form>
+  </section>
+  <section class="image-grid">
+    {% for image in images %}
+      <article class="panel image-card">
+        <a class="image-preview" href="/device-images/{{ image.id }}/file" target="_blank" title="Open image">
+          <img src="/device-images/{{ image.id }}/file" alt="{{ image.name or image.original_filename }}">
+        </a>
+        <form method="post" action="/device-images/{{ image.id }}/edit" class="form-grid">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <label>Name <input name="name" value="{{ image.name }}" spellcheck="true"></label>
+          <label>Date <input name="image_date" type="date" value="{{ image.image_date|date_input }}"></label>
+          <label class="span-2">Tags <input name="tags" value="{{ image_tags.get(image.id, [])|join(', ') }}" spellcheck="true"></label>
+          <label>Notes <textarea name="notes" spellcheck="true">{{ image.notes }}</textarea></label>
+          <label>OCR / Text <textarea name="ocr_text" spellcheck="true">{{ image.ocr_text }}</textarea></label>
+          <div class="form-actions span-2">
+            <button class="secondary" type="submit">Save</button>
+            <span class="muted">{{ image.original_filename }} · {{ image.size_bytes }} bytes</span>
+          </div>
+        </form>
+        <form method="post" action="/device-images/{{ image.id }}/delete" data-confirm-delete="Delete this image from {{ device.name }}?">
+          <input type="hidden" name="csrf" value="{{ csrf }}">
+          <button class="ghost small-button danger-ghost" type="submit">Delete Image</button>
+        </form>
+      </article>
+    {% else %}
+      <section class="panel"><p class="empty">No images saved for this device yet.</p></section>
+    {% endfor %}
+  </section>
 {% elif tab == "notes" %}
   <section class="panel">
     <h2>Notes</h2>
@@ -317,7 +363,19 @@
       <textarea name="body" placeholder="Add a note..." spellcheck="true" required></textarea>
       <button type="submit">Add Note</button>
     </form>
-    <div class="list">{% for note in notes %}<article class="note-block"><strong>{{ note.title or "Note" }}</strong><small>{{ note.source }} · {{ note.updated_at|dt }}</small><pre>{{ note.body }}</pre></article>{% else %}<p class="empty">No notes yet.</p>{% endfor %}</div>
+    <div class="list">
+      {% for note in notes %}
+        <article class="note-block">
+          <div class="section-title">
+            <div><strong>{{ note.title or "Note" }}</strong><small>{{ note.source }} · {{ note.updated_at|dt }}</small></div>
+            <a class="button secondary small-button" href="/notes/{{ note.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=notes">Edit</a>
+          </div>
+          <pre>{{ note.body }}</pre>
+        </article>
+      {% else %}
+        <p class="empty">No notes yet.</p>
+      {% endfor %}
+    </div>
   </section>
 {% elif tab == "history" %}
   <section class="panel">

@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Recovery Check · Kairix Opsbook{% endblock %}
+{% block content %}
+<section class="auth-card recovery-card">
+  <p class="eyebrow">Service recognition</p>
+  <h1>Pick your services</h1>
+  <p class="muted">Select the three services that are actually in this Opsbook.</p>
+  <form method="post" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <div class="recovery-choice-grid span-2">
+      {% for option in options %}
+        <label class="recovery-choice">
+          <input type="checkbox" name="service_id" value="{{ option.id }}">
+          <span><strong>{{ option.name }}</strong>{% if option.device %}<small>{{ option.device }}</small>{% endif %}</span>
+        </label>
+      {% endfor %}
+    </div>
+    <button type="submit">Verify</button>
+    <a class="button secondary" href="/login">Cancel</a>
+  </form>
+</section>
+{% endblock %}

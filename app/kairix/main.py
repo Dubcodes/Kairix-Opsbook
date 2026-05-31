@@ -5,9 +5,11 @@ import io
 import json
 import re
 import socket
+import secrets
 import subprocess
 import threading
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -138,6 +140,11 @@ PING_THREAD_STARTED = False
 WEBHOOK_URL_SETTING = "ping_webhook_url_encrypted"
 WEBHOOK_SCOPE_SETTING = "ping_webhook_scope"
 WEBHOOK_RECOVERY_SETTING = "ping_webhook_send_recovery"
+RECOVERY_PHRASE_HASH_SETTING = "recovery_phrase_hash"
+DEVICE_IMAGE_DIR = "device-images"
+SUGGESTION_IMAGE_DIR = "suggestion-images"
+MAX_IMAGE_UPLOAD_BYTES = 12 * 1024 * 1024
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
 
 @app.on_event("startup")
@@ -532,6 +539,136 @@ def _date_input(value: datetime | None) -> str:
 
 
 templates.env.filters["date_input"] = _date_input
+
+
+def _datetime_local_input(value: datetime | None) -> str:
+    if not value:
+        return ""
+    if value.tzinfo:
+        value = value.astimezone()
+    return value.strftime("%Y-%m-%dT%H:%M")
+
+
+templates.env.filters["datetime_local_input"] = _datetime_local_input
+
+
+def _upload_root(subdir: str) -> Path:
+    path = Path(settings.backup_dir) / subdir
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _stored_upload_path(subdir: str, stored_filename: str) -> Path:
+    clean = Path(stored_filename or "").name
+    if not clean:
+        raise HTTPException(404, "File not found.")
+    return _upload_root(subdir) / clean
+
+
+def _suffix_for_upload(filename: str, content_type: str) -> str:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix in IMAGE_SUFFIXES:
+        return suffix
+    return {
+        "image/jpeg": ".jpg",
+        "image/png": ".png",
+        "image/webp": ".webp",
+        "image/gif": ".gif",
+    }.get(content_type.lower(), "")
+
+
+async def _save_image_upload(upload: UploadFile, subdir: str) -> dict[str, Any]:
+    original = Path(upload.filename or "image").name
+    content_type = (upload.content_type or "").split(";", 1)[0].strip().lower()
+    suffix = _suffix_for_upload(original, content_type)
+    if not content_type.startswith("image/") or suffix not in IMAGE_SUFFIXES:
+        raise ValueError("Use a JPG, PNG, WEBP, or GIF image.")
+    data = await upload.read()
+    if not data:
+        raise ValueError("Choose an image to upload.")
+    if len(data) > MAX_IMAGE_UPLOAD_BYTES:
+        raise ValueError("Image is too large. Keep uploads under 12 MB.")
+    stored = f"{uuid.uuid4().hex}{suffix}"
+    path = _upload_root(subdir) / stored
+    path.write_bytes(data)
+    return {
+        "original_filename": original,
+        "stored_filename": stored,
+        "mime_type": content_type,
+        "size_bytes": len(data),
+    }
+
+
+RECOVERY_WORDS = [
+    "anchor",
+    "backup",
+    "circuit",
+    "docker",
+    "lantern",
+    "matrix",
+    "opsbook",
+    "primary",
+    "signal",
+    "stable",
+    "vault",
+    "warden",
+]
+
+
+def _suggested_recovery_phrase() -> str:
+    words = [secrets.choice(RECOVERY_WORDS) for _ in range(8)]
+    words[0] = words[0].title()
+    return f"{' '.join(words)} {10 + secrets.randbelow(90)}!"
+
+
+def _recovery_phrase_hash(db: Session) -> str:
+    row = db.query(models.AppSetting).filter_by(key=RECOVERY_PHRASE_HASH_SETTING).first()
+    return row.value if row and row.value else ""
+
+
+def _recovery_enabled(db: Session) -> bool:
+    return bool(_recovery_phrase_hash(db))
+
+
+def _recovery_phrase_error(value: str) -> str:
+    phrase = (value or "").strip()
+    if len(phrase) < 40 or len(re.findall(r"[A-Za-z0-9]+", phrase)) < 6:
+        return "Use a sentence-style recovery phrase with at least 6 words and 40 characters."
+    checks = [
+        any(char.islower() for char in phrase),
+        any(char.isupper() for char in phrase),
+        any(char.isdigit() for char in phrase),
+        any(not char.isalnum() and not char.isspace() for char in phrase),
+    ]
+    if not all(checks):
+        return "Recovery phrase needs uppercase, lowercase, a number, and a special character."
+    return ""
+
+
+def _recovery_challenge_options(db: Session) -> tuple[list[int], list[dict[str, Any]]]:
+    recent = db.query(models.Service).order_by(models.Service.updated_at.desc()).limit(3).all()
+    if len(recent) < 3:
+        return [], []
+    recent_ids = [service.id for service in recent]
+    decoys = (
+        db.query(models.Service)
+        .filter(models.Service.id.notin_(recent_ids))
+        .order_by(func.random())
+        .limit(3)
+        .all()
+    )
+    if len(decoys) < 3:
+        return [], []
+    options = recent + decoys
+    secrets.SystemRandom().shuffle(options)
+    return recent_ids, [
+        {
+            "id": service.id,
+            "name": service.name,
+            "device": service.device.name if service.device else "",
+        }
+        for service in options
+    ]
 
 
 def _infer_tags_for_service(service: models.Service) -> str:
@@ -1103,6 +1240,8 @@ IMPORT_MODELS = {
     "tags": models.Tag,
     "tag_links": models.TagLink,
     "notes": models.Note,
+    "device_images": models.DeviceImage,
+    "user_suggestions": models.UserSuggestion,
     "imports": models.ImportRecord,
 }
 
@@ -1654,6 +1793,11 @@ AUDIT_ACTION_LABELS = {
     "note_edited": "Note edited",
     "note_deleted": "Note deleted",
     "note_tags_updated": "Note tags updated",
+    "device_image_added": "Device image added",
+    "device_image_edited": "Device image updated",
+    "device_image_deleted": "Device image deleted",
+    "user_suggestion_created": "Custom suggestion created",
+    "user_suggestion_done": "Custom suggestion completed",
     "tag_deleted": "Tag deleted",
     "quick_credentials_updated": "Favorite credentials updated",
     "ping_warning_scheduled": "Ping warning marked scheduled",
@@ -1676,6 +1820,9 @@ AUDIT_ACTION_LABELS = {
     "password_changed": "Password changed",
     "reveal_pin_changed": "Reveal password changed",
     "reveal_pin_removed": "Reveal password removed",
+    "recovery_phrase_updated": "Recovery phrase updated",
+    "recovery_phrase_removed": "Recovery phrase removed",
+    "recovery_login": "Recovery login",
 }
 
 
@@ -1709,6 +1856,14 @@ def _audit_target_label(db: Session, log: models.AuditLog) -> tuple[str, str]:
         "note": (models.Note, "title", "notes"),
         "url": (models.Url, "label", "urls"),
     }
+    if log.object_type == "device_image" and log.object_id:
+        image = db.get(models.DeviceImage, log.object_id)
+        if image:
+            return image.name or image.original_filename or f"Image #{image.id}", f"/devices/{image.device_id}?tab=images"
+    if log.object_type == "user_suggestion" and log.object_id:
+        suggestion = db.get(models.UserSuggestion, log.object_id)
+        if suggestion:
+            return suggestion.title or f"Suggestion #{suggestion.id}", "/suggestions"
     if log.object_type == "port" and log.object_id:
         port = db.get(models.Port, log.object_id)
         if port:
@@ -1932,6 +2087,7 @@ def _device_history(db: Session, device: models.Device, *, limit: int = 50) -> l
     credential_ids = [credential.id for credential in device.credentials]
     port_ids = [port.id for port in device.ports]
     url_ids = [url.id for url in device.urls]
+    image_ids = [image.id for image in device.images]
     note_ids = [
         note_id
         for (note_id,) in db.query(models.Note.id)
@@ -1952,6 +2108,8 @@ def _device_history(db: Session, device: models.Device, *, limit: int = 50) -> l
         filters.append(and_(models.AuditLog.object_type == "port", models.AuditLog.object_id.in_(port_ids)))
     if url_ids:
         filters.append(and_(models.AuditLog.object_type == "url", models.AuditLog.object_id.in_(url_ids)))
+    if image_ids:
+        filters.append(and_(models.AuditLog.object_type == "device_image", models.AuditLog.object_id.in_(image_ids)))
     if note_ids:
         filters.append(and_(models.AuditLog.object_type.in_(["note", "quick_note"]), models.AuditLog.object_id.in_(note_ids)))
     if command_ids:
@@ -2141,7 +2299,11 @@ def setup_owner(
 def login_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
     if user_count(db) == 0:
         return redirect("/setup")
-    return render(request, "login.html", {"failed_ping_summary": _failed_ping_summary(db)})
+    return render(
+        request,
+        "login.html",
+        {"failed_ping_summary": _failed_ping_summary(db), "recovery_enabled": _recovery_enabled(db)},
+    )
 
 
 @app.post("/login")
@@ -2227,6 +2389,96 @@ def login_2fa(
     _start_login_checks(user.id)
     flash(request, f"Welcome back, {user.display_name or user.username}.", "success")
     return redirect("/")
+
+
+@app.get("/recover", response_class=HTMLResponse)
+def recovery_page(request: Request, db: Session = Depends(get_db)) -> HTMLResponse:
+    if user_count(db) == 0:
+        return redirect("/setup")
+    return render(request, "recover.html", {"recovery_enabled": _recovery_enabled(db)})
+
+
+@app.post("/recover")
+def recovery_start(
+    request: Request,
+    csrf: str = Form(...),
+    recovery_phrase: str = Form(...),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    recovery_hash = _recovery_phrase_hash(db)
+    if not recovery_hash:
+        flash(request, "Recovery phrase is not configured yet.", "warning")
+        return redirect("/login")
+    locked_raw = request.session.get("recovery_locked_until")
+    if locked_raw:
+        try:
+            if datetime.fromisoformat(locked_raw) > now_utc():
+                flash(request, "Too many recovery attempts. Try again in a few minutes.", "danger")
+                return redirect("/recover")
+        except ValueError:
+            request.session.pop("recovery_locked_until", None)
+    if not verify_password(recovery_phrase.strip(), recovery_hash):
+        failures = int(request.session.get("recovery_failures") or 0) + 1
+        request.session["recovery_failures"] = failures
+        if failures >= 5:
+            request.session["recovery_failures"] = 0
+            request.session["recovery_locked_until"] = (now_utc() + timedelta(minutes=5)).isoformat()
+        flash(request, "Recovery phrase was not accepted.", "danger")
+        return redirect("/recover")
+    expected, options = _recovery_challenge_options(db)
+    if not expected or not options:
+        flash(request, "Recovery challenge needs at least six saved services. Log in normally and add more service records first.", "warning")
+        return redirect("/login")
+    request.session.clear()
+    request.session["recovery_expected_service_ids"] = expected
+    request.session["recovery_options"] = options
+    request.session["last_seen"] = now_utc().isoformat()
+    csrf_token(request)
+    return redirect("/recover/challenge")
+
+
+@app.get("/recover/challenge", response_class=HTMLResponse)
+def recovery_challenge_page(request: Request) -> HTMLResponse:
+    options = request.session.get("recovery_options")
+    expected = request.session.get("recovery_expected_service_ids")
+    if not options or not expected:
+        return redirect("/recover")
+    return render(request, "recover_challenge.html", {"options": options})
+
+
+@app.post("/recover/challenge")
+async def recovery_challenge_verify(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    form = await request.form()
+    check_csrf(request, str(form.get("csrf", "")))
+    expected = {int(value) for value in request.session.get("recovery_expected_service_ids", [])}
+    selected: set[int] = set()
+    for raw in form.getlist("service_id"):
+        value = str(raw)
+        if value.isdigit():
+            selected.add(int(value))
+    if not expected or selected != expected:
+        request.session.pop("recovery_expected_service_ids", None)
+        request.session.pop("recovery_options", None)
+        flash(request, "Service recognition challenge did not match.", "danger")
+        return redirect("/recover")
+    user = db.query(models.User).order_by(models.User.id).first()
+    if not user:
+        request.session.clear()
+        return redirect("/setup")
+    request.session.clear()
+    request.session["user_id"] = user.id
+    request.session["last_seen"] = now_utc().isoformat()
+    request.session["session_timeout_minutes"] = int_setting(db, "session_timeout_minutes", 20, minimum=1, maximum=999)
+    csrf_token(request)
+    _start_login_checks(user.id)
+    db.add(models.AuditLog(user_id=user.id, action="recovery_login", object_type="user", object_id=user.id))
+    db.commit()
+    flash(request, "Recovery verified. Update your password or 2FA settings now.", "success")
+    return redirect("/settings#account-security")
 
 
 @app.post("/logout")
@@ -2447,6 +2699,12 @@ def device_detail(
         .order_by(models.Note.updated_at.desc())
         .all()
     )
+    images = (
+        db.query(models.DeviceImage)
+        .filter(models.DeviceImage.device_id == device.id)
+        .order_by(models.DeviceImage.created_at.desc())
+        .all()
+    )
     grouped_services: dict[str, list[models.Service]] = {}
     for service in sorted(device.services, key=lambda item: (item.docker_project or "Ungrouped", item.name.lower())):
         grouped_services.setdefault(service.docker_project or "Ungrouped", []).append(service)
@@ -2496,6 +2754,8 @@ def device_detail(
             "commands": commands,
             "history": _device_history(db, device),
             "notes": notes,
+            "images": images,
+            "image_tags": tag_map(db, "device_image"),
             "tag_list": tags_for(db, "device", device.id),
             "service_groups": service_groups,
             "quick_credentials": _quick_credentials_for_device(db, device),
@@ -2531,6 +2791,142 @@ def device_ping_now(
     db.commit()
     flash(request, f"Ping checked: {'reply received' if result.get('ok') else 'no reply'}.", "success" if result.get("ok") else "warning")
     return redirect(request.headers.get("referer") or f"/devices/{device.id}")
+
+
+@app.get("/device-images/{image_id}/file")
+def device_image_file(
+    image_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    image = db.get(models.DeviceImage, image_id)
+    if not image:
+        raise HTTPException(404, "Image not found.")
+    path = _stored_upload_path(DEVICE_IMAGE_DIR, image.stored_filename)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(404, "Image file not found.")
+    return FileResponse(path, media_type=image.mime_type or "application/octet-stream", filename=image.original_filename)
+
+
+@app.post("/devices/{device_id}/images")
+async def device_image_create(
+    request: Request,
+    device_id: int,
+    csrf: str = Form(...),
+    name: str = Form(""),
+    image_date: str = Form(""),
+    tags: str = Form(""),
+    notes: str = Form(""),
+    ocr_text: str = Form(""),
+    image_file: UploadFile = File(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    device = db.get(models.Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found.")
+    try:
+        saved = await _save_image_upload(image_file, DEVICE_IMAGE_DIR)
+    except ValueError as exc:
+        flash(request, str(exc), "warning")
+        return redirect(f"/devices/{device.id}?tab=images")
+    title = name.strip() or Path(saved["original_filename"]).stem or "Device image"
+    record = models.DeviceImage(
+        device_id=device.id,
+        name=title,
+        image_date=_parse_optional_datetime(image_date),
+        notes=notes,
+        ocr_text=ocr_text,
+        **saved,
+    )
+    db.add(record)
+    db.flush()
+    set_tags(db, "device_image", record.id, tags)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="device_image_added",
+            object_type="device_image",
+            object_id=record.id,
+            details_json={"device_id": device.id, "filename": saved["original_filename"]},
+        )
+    )
+    db.commit()
+    flash(request, "Image saved to this device.", "success")
+    return redirect(f"/devices/{device.id}?tab=images")
+
+
+@app.post("/device-images/{image_id}/edit")
+def device_image_update(
+    request: Request,
+    image_id: int,
+    csrf: str = Form(...),
+    name: str = Form(""),
+    image_date: str = Form(""),
+    tags: str = Form(""),
+    notes: str = Form(""),
+    ocr_text: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    image = db.get(models.DeviceImage, image_id)
+    if not image:
+        raise HTTPException(404, "Image not found.")
+    image.name = name.strip() or Path(image.original_filename).stem or "Device image"
+    image.image_date = _parse_optional_datetime(image_date)
+    image.notes = notes
+    image.ocr_text = ocr_text
+    set_tags(db, "device_image", image.id, tags)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="device_image_edited",
+            object_type="device_image",
+            object_id=image.id,
+        )
+    )
+    db.commit()
+    flash(request, "Image details saved.", "success")
+    return redirect(f"/devices/{image.device_id}?tab=images")
+
+
+@app.post("/device-images/{image_id}/delete")
+def device_image_delete(
+    request: Request,
+    image_id: int,
+    csrf: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    image = db.get(models.DeviceImage, image_id)
+    if not image:
+        raise HTTPException(404, "Image not found.")
+    device_id = image.device_id
+    path = _stored_upload_path(DEVICE_IMAGE_DIR, image.stored_filename)
+    db.query(models.TagLink).filter_by(object_type="device_image", object_id=image.id).delete()
+    db.delete(image)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="device_image_deleted",
+            object_type="device_image",
+            object_id=image_id,
+            details_json={"device_id": device_id},
+        )
+    )
+    db.commit()
+    try:
+        path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    flash(request, "Image deleted.", "success")
+    return redirect(f"/devices/{device_id}?tab=images")
 
 
 @app.post("/devices/{device_id}/validate-services")
@@ -3442,6 +3838,13 @@ def delete_object(
         for url in list(obj.urls):
             db.query(models.TagLink).filter_by(object_type="url", object_id=url.id).delete()
             db.delete(url)
+        for image in list(obj.images):
+            db.query(models.TagLink).filter_by(object_type="device_image", object_id=image.id).delete()
+            try:
+                _stored_upload_path(DEVICE_IMAGE_DIR, image.stored_filename).unlink(missing_ok=True)
+            except OSError:
+                pass
+            db.delete(image)
         db.query(models.Note).filter_by(object_type="device", object_id=obj.id).delete()
         for command in db.query(models.Command).filter_by(applies_to_type="device", applies_to_id=obj.id).all():
             db.query(models.TagLink).filter_by(object_type="command", object_id=command.id).delete()
@@ -3932,6 +4335,23 @@ def tags_page(
             obj = db.get(models.Note, link.object_id)
             if obj:
                 href, label = f"/notes/{obj.id}", obj.title or "Note"
+        elif link.object_type == "device_image":
+            obj = db.get(models.DeviceImage, link.object_id)
+            if obj:
+                href, label = f"/devices/{obj.device_id}?tab=images", obj.name or obj.original_filename or "Device image"
+                subtitle = obj.device.name if obj.device else ""
+                related_device = obj.device
+        elif link.object_type == "user_suggestion":
+            obj = db.get(models.UserSuggestion, link.object_id)
+            if obj:
+                href, label = "/suggestions#custom-suggestions", obj.title or "Custom suggestion"
+                if obj.object_type == "device" and obj.object_id:
+                    related_device = db.get(models.Device, obj.object_id)
+                    subtitle = related_device.name if related_device else ""
+                elif obj.object_type == "service" and obj.object_id:
+                    service = db.get(models.Service, obj.object_id)
+                    related_device = service.device if service and service.device else None
+                    subtitle = service.name if service else ""
         if href == "#":
             continue
         if related_device:
@@ -3949,7 +4369,7 @@ def tags_page(
         else []
     )
     tag_cards: list[dict[str, Any]] = []
-    kind_order = ["Device", "Service", "Credential", "Command", "Port", "Url", "Note", "Quick Note"]
+    kind_order = ["Device", "Service", "Credential", "Command", "Port", "Url", "Device Image", "Note", "Quick Note", "User Suggestion"]
     for tag in tags:
         by_kind: dict[str, list[dict[str, Any]]] = {}
         for item in grouped.get(tag.id, []):
@@ -4944,9 +5364,104 @@ def suggestions_page(
             "suggestions": visible_suggestions(db),
             "tag_ideas": TAG_IDEAS,
             "fill_candidates": fill_candidates[:40],
+            "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
+            "custom_suggestions": db.query(models.UserSuggestion)
+            .order_by(models.UserSuggestion.done, models.UserSuggestion.due_at, models.UserSuggestion.created_at.desc())
+            .limit(50)
+            .all(),
+            "suggestion_tags": tag_map(db, "user_suggestion"),
         },
         user=user,
     )
+
+
+@app.get("/suggestion-images/{suggestion_id}/file")
+def suggestion_image_file(
+    suggestion_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    suggestion = db.get(models.UserSuggestion, suggestion_id)
+    if not suggestion or not suggestion.image_filename:
+        raise HTTPException(404, "Suggestion image not found.")
+    path = _stored_upload_path(SUGGESTION_IMAGE_DIR, suggestion.image_filename)
+    if not path.exists() or not path.is_file():
+        raise HTTPException(404, "Suggestion image file not found.")
+    return FileResponse(
+        path,
+        media_type=suggestion.image_mime_type or "application/octet-stream",
+        filename=suggestion.image_original_filename or Path(suggestion.image_filename).name,
+    )
+
+
+@app.post("/suggestions/custom")
+async def suggestions_custom_create(
+    request: Request,
+    csrf: str = Form(...),
+    title: str = Form(...),
+    subtitle: str = Form(""),
+    due_at: str = Form(""),
+    severity: str = Form("info"),
+    target: str = Form(""),
+    tags: str = Form(""),
+    notes: str = Form(""),
+    image_file: UploadFile | None = File(None),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    clean_title = title.strip()
+    if not clean_title:
+        flash(request, "Custom suggestions need a title.", "warning")
+        return redirect("/suggestions#custom-suggestion-form")
+    object_type = ""
+    object_id: int | None = None
+    if ":" in target:
+        target_type, target_id = target.split(":", 1)
+        if target_type in {"device", "service"} and target_id.isdigit():
+            model = models.Device if target_type == "device" else models.Service
+            if db.get(model, int(target_id)):
+                object_type = target_type
+                object_id = int(target_id)
+    image_data: dict[str, Any] = {}
+    if image_file and image_file.filename:
+        try:
+            saved = await _save_image_upload(image_file, SUGGESTION_IMAGE_DIR)
+        except ValueError as exc:
+            flash(request, str(exc), "warning")
+            return redirect("/suggestions#custom-suggestion-form")
+        image_data = {
+            "image_filename": saved["stored_filename"],
+            "image_original_filename": saved["original_filename"],
+            "image_mime_type": saved["mime_type"],
+        }
+    suggestion = models.UserSuggestion(
+        title=clean_title,
+        subtitle=subtitle.strip(),
+        due_at=_parse_optional_datetime(due_at),
+        severity=severity if severity in {"info", "warning", "danger"} else "info",
+        object_type=object_type,
+        object_id=object_id,
+        notes=notes,
+        **image_data,
+    )
+    db.add(suggestion)
+    db.flush()
+    set_tags(db, "user_suggestion", suggestion.id, tags)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="user_suggestion_created",
+            object_type="user_suggestion",
+            object_id=suggestion.id,
+            details_json={"due_at": suggestion.due_at.isoformat() if suggestion.due_at else ""},
+        )
+    )
+    db.commit()
+    flash(request, "Custom suggestion saved.", "success")
+    return redirect("/suggestions#active-suggestions")
 
 
 @app.post("/suggestions/apply")
@@ -4965,6 +5480,23 @@ def suggestions_apply(
     check_csrf(request, csrf)
     ensure_writable()
     cleaned = value.strip()
+    if action == "user-suggestion-done" and object_type == "user_suggestion":
+        suggestion = db.get(models.UserSuggestion, object_id)
+        if not suggestion:
+            raise HTTPException(404, "Suggestion not found.")
+        suggestion.done = True
+        dismiss_suggestion(db, suggestion_id)
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="user_suggestion_done",
+                object_type="user_suggestion",
+                object_id=suggestion.id,
+            )
+        )
+        db.commit()
+        flash(request, "Custom suggestion marked done.", "success")
+        return redirect("/suggestions#custom-suggestions")
     if action == "mute-ping":
         if not mute_event_id:
             flash(request, "That check warning could not be marked known down.", "warning")
@@ -5129,6 +5661,8 @@ def settings_page(
             "webhook_url_saved": bool(_webhook_url(db)),
             "webhook_scope": _webhook_scope(db),
             "webhook_send_recovery": _webhook_recovery_enabled(db),
+            "recovery_enabled": _recovery_enabled(db),
+            "suggested_recovery_phrase": _suggested_recovery_phrase(),
         },
         user=user,
     )
@@ -5345,6 +5879,43 @@ def settings_reveal_pin_change(
     return redirect("/settings#account-security")
 
 
+@app.post("/settings/security/recovery")
+def settings_recovery_change(
+    request: Request,
+    csrf: str = Form(...),
+    current_password: str = Form(...),
+    recovery_phrase: str = Form(""),
+    confirm_recovery_phrase: str = Form(""),
+    clear_recovery: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if not verify_password(current_password, user.password_hash):
+        flash(request, "Account password was incorrect.", "danger")
+        return redirect("/settings#account-security")
+    if clear_recovery.lower() in {"on", "true", "1", "yes"}:
+        set_app_setting(db, RECOVERY_PHRASE_HASH_SETTING, "")
+        db.add(models.AuditLog(user_id=user.id, action="recovery_phrase_removed", object_type="user", object_id=user.id))
+        db.commit()
+        flash(request, "Recovery phrase removed.", "success")
+        return redirect("/settings#account-security")
+    phrase = recovery_phrase.strip()
+    if phrase != confirm_recovery_phrase.strip():
+        flash(request, "Recovery phrases did not match.", "warning")
+        return redirect("/settings#account-security")
+    error = _recovery_phrase_error(phrase)
+    if error:
+        flash(request, error, "warning")
+        return redirect("/settings#account-security")
+    set_app_setting(db, RECOVERY_PHRASE_HASH_SETTING, hash_password(phrase))
+    db.add(models.AuditLog(user_id=user.id, action="recovery_phrase_updated", object_type="user", object_id=user.id))
+    db.commit()
+    flash(request, "Recovery phrase updated. Store it somewhere safe outside Opsbook.", "success")
+    return redirect("/settings#account-security")
+
+
 @app.post("/settings/tokens")
 def settings_token_create(
     request: Request,
@@ -5503,7 +6074,17 @@ def maintenance_cleanup_smart_paste(
 def _search_results(db: Session, q: str, limit: int = 20) -> dict[str, list[Any]]:
     clean = q.strip()
     like = f"%{clean}%"
-    results: dict[str, list[Any]] = {"devices": [], "services": [], "credentials": [], "commands": [], "urls": [], "ports": [], "notes": []}
+    results: dict[str, list[Any]] = {
+        "devices": [],
+        "services": [],
+        "credentials": [],
+        "commands": [],
+        "urls": [],
+        "ports": [],
+        "notes": [],
+        "images": [],
+        "suggestions": [],
+    }
     if clean:
         results["devices"] = (
             db.query(models.Device)
@@ -5591,6 +6172,31 @@ def _search_results(db: Session, q: str, limit: int = 20) -> dict[str, list[Any]
             .limit(limit)
             .all()
         )
+        results["images"] = (
+            db.query(models.DeviceImage)
+            .filter(
+                or_(
+                    models.DeviceImage.name.ilike(like),
+                    models.DeviceImage.original_filename.ilike(like),
+                    models.DeviceImage.notes.ilike(like),
+                    models.DeviceImage.ocr_text.ilike(like),
+                )
+            )
+            .limit(limit)
+            .all()
+        )
+        results["suggestions"] = (
+            db.query(models.UserSuggestion)
+            .filter(
+                or_(
+                    models.UserSuggestion.title.ilike(like),
+                    models.UserSuggestion.subtitle.ilike(like),
+                    models.UserSuggestion.notes.ilike(like),
+                )
+            )
+            .limit(limit)
+            .all()
+        )
     return results
 
 
@@ -5648,6 +6254,10 @@ def _search_live_items(db: Session, results: dict[str, list[Any]], q: str) -> li
     for note in results["notes"]:
         target, _ = _note_target_label(db, note)
         add("Note", note.title or "Note", _search_result_subtitle(target, note.source), f"/notes/{note.id}")
+    for image in results["images"]:
+        add("Image", image.name or image.original_filename, _search_result_subtitle(image.device.name if image.device else "", image.notes), f"/devices/{image.device_id}?tab=images")
+    for suggestion in results["suggestions"]:
+        add("Suggestion", suggestion.title, _search_result_subtitle(suggestion.subtitle, suggestion.notes), "/suggestions#custom-suggestions")
     return items
 
 
@@ -5674,6 +6284,7 @@ def search_page(
     related_devices: list[models.Device | None] = list(results["devices"])
     related_devices.extend(item.device for item in results["services"] if item.device)
     related_devices.extend(item.device for item in results["ports"] if item.device)
+    related_devices.extend(item.device for item in results["images"] if item.device)
     related_devices.extend(
         item.service.device if item.service and item.service.device else item.device
         for item in results["credentials"]

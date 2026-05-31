@@ -54,6 +54,8 @@ def build_backup_payload(db: Session) -> dict[str, Any]:
             "tags": table_dump(db, models.Tag),
             "tag_links": table_dump(db, models.TagLink),
             "notes": table_dump(db, models.Note),
+            "device_images": table_dump(db, models.DeviceImage),
+            "user_suggestions": table_dump(db, models.UserSuggestion),
             "imports": table_dump(db, models.ImportRecord),
             "audit_log": table_dump(db, models.AuditLog),
             "backup_exports": table_dump(db, models.BackupExport),
@@ -212,4 +214,3 @@ def create_emergency_export(db: Session, *, include_credentials: bool = False) -
 def safe_export_path(filename: str) -> Path:
     clean = os.path.basename(filename)
     return Path(settings.export_dir) / clean
-

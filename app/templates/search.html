@@ -33,6 +33,10 @@
               <a class="list-row" href="/ports/{{ item.id }}/edit?return_to=/search%3Fq={{ q|urlencode }}"><strong>{{ item.host_port }}/{{ item.protocol }}</strong><span>{{ device_label(item.device, device_ping_statuses) }}{% if item.service %} · {{ item.service.name }}{% endif %}</span></a>
             {% elif group == "notes" %}
               <a class="list-row" href="/notes/{{ item.id }}"><strong>{{ item.title or "Note" }}</strong><span>{{ item.body[:180] }}</span></a>
+            {% elif group == "images" %}
+              <a class="list-row" href="/devices/{{ item.device_id }}?tab=images"><strong>{{ item.name or item.original_filename }}</strong><span>{% if item.device %}{{ device_label(item.device, device_ping_statuses) }} · {% endif %}{{ item.notes[:140] }}</span></a>
+            {% elif group == "suggestions" %}
+              <a class="list-row" href="/suggestions#custom-suggestions"><strong>{{ item.title }}</strong><span>{{ item.subtitle or item.notes }}</span></a>
             {% endif %}
           {% else %}
             <p class="empty">No matches.</p>

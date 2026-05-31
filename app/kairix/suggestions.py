@@ -381,6 +381,32 @@ def build_suggestions(db: Session) -> list[dict[str, str]]:
                     }
                 )
 
+    now = datetime.now(timezone.utc)
+    for custom in db.query(models.UserSuggestion).filter(models.UserSuggestion.done.is_(False)).all():
+        due_at = custom.due_at
+        if due_at and due_at.tzinfo is None:
+            due_at = due_at.replace(tzinfo=timezone.utc)
+        if due_at and due_at > now:
+            continue
+        target = "/suggestions"
+        if custom.object_type == "device" and custom.object_id:
+            target = f"/devices/{custom.object_id}"
+        elif custom.object_type == "service" and custom.object_id:
+            target = f"/services/{custom.object_id}"
+        suggestions.append(
+            {
+                "id": f"user-suggestion:{custom.id}",
+                "severity": custom.severity if custom.severity in {"info", "warning", "danger"} else "info",
+                "title": custom.title or "Custom suggestion",
+                "body": custom.subtitle or custom.notes or "Custom reminder is due.",
+                "target": target,
+                "action": "user-suggestion-done",
+                "object_type": "user_suggestion",
+                "object_id": str(custom.id),
+                "image_url": f"/suggestion-images/{custom.id}/file" if custom.image_filename else "",
+            }
+        )
+
     suggestions.extend(
         [
             {

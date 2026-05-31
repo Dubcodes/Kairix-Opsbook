@@ -16,5 +16,8 @@
     <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
     <button type="submit">Log in</button>
   </form>
+  {% if recovery_enabled %}
+    <p class="auth-link"><a href="/recover">Use recovery phrase</a></p>
+  {% endif %}
 </section>
 {% endblock %}

@@ -6,7 +6,40 @@
     <p class="eyebrow">Helpful, advisory, not bossy</p>
     <h1>Suggestions</h1>
   </div>
+  <div class="actions">
+    <a class="button" href="#custom-suggestion-form" title="Create a custom suggestion">+</a>
+  </div>
 </section>
+
+<details class="panel collapsible-panel" id="custom-suggestion-form">
+  <summary>
+    <span><strong>Custom Suggestion</strong><small>Reminder, follow-up, subscription note, or manual warning</small></span>
+  </summary>
+  <form method="post" action="/suggestions/custom" enctype="multipart/form-data" class="form-grid">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <label>Title <input name="title" required placeholder="Cancel subscription, replace UPS battery" spellcheck="true"></label>
+    <label>Due <input name="due_at" type="datetime-local"></label>
+    <label>Severity
+      <select name="severity">
+        <option value="info">Info</option>
+        <option value="warning">Warning</option>
+        <option value="danger">High importance</option>
+      </select>
+    </label>
+    <label>Link
+      <select name="target">
+        <option value="">None</option>
+        {% for device in devices %}<option value="device:{{ device.id }}">Device · {{ device.name }}</option>{% endfor %}
+        {% for service in services %}<option value="service:{{ service.id }}">Service · {{ service.name }}{% if service.device %} · {{ service.device.name }}{% endif %}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="span-2">Subtitle <input name="subtitle" placeholder="What should pop up when this is due?" spellcheck="true"></label>
+    <label>Tags <input name="tags" placeholder="subscription, billing, warranty" spellcheck="true"></label>
+    <label>Image <input name="image_file" type="file" accept="image/*"></label>
+    <label class="span-2">Notes <textarea name="notes" spellcheck="true"></textarea></label>
+    <div class="form-actions span-2"><button type="submit">Save Suggestion</button></div>
+  </form>
+</details>
 
 <details class="panel collapsible-panel" open id="active-suggestions">
   <summary>
@@ -19,6 +52,7 @@
         <strong>{{ suggestion.title }}</strong>
         {% if suggestion.count %}<small>{{ suggestion.count }} items grouped</small>{% endif %}
         <span>{{ suggestion.body }}</span>
+        {% if suggestion.image_url %}<img class="suggestion-thumb" src="{{ suggestion.image_url }}" alt="">{% endif %}
       </a>
       {% if suggestion.action and not suggestion.count %}
         <form class="inline-suggestion-form" method="post" action="/suggestions/apply">
@@ -31,7 +65,7 @@
           {% if suggestion.placeholder %}
             <input name="value" value="" placeholder="{{ suggestion.placeholder }}" spellcheck="true">
           {% endif %}
-          <button class="secondary" type="submit">{% if suggestion.action == 'mute-ping' %}Known Down{% elif suggestion.placeholder %}Apply{% else %}Clean Up{% endif %}</button>
+          <button class="secondary" type="submit">{% if suggestion.action == 'mute-ping' %}Known Down{% elif suggestion.action == 'user-suggestion-done' %}Done{% elif suggestion.placeholder %}Apply{% else %}Clean Up{% endif %}</button>
         </form>
       {% endif %}
       <form method="post" action="/suggestions/dismiss">
@@ -43,6 +77,38 @@
   {% else %}
     <p class="empty">No suggestions yet. That usually means the opsbook is either clean or still freshly empty.</p>
   {% endfor %}
+  </section>
+</details>
+
+<details class="panel collapsible-panel" id="custom-suggestions">
+  <summary>
+    <span><strong>Custom Suggestions</strong><small>{{ custom_suggestions|length }} saved item(s)</small></span>
+  </summary>
+  <section class="list compact">
+    {% for item in custom_suggestions %}
+      <article class="list-row static {% if item.done %}muted{% endif %}">
+        <div>
+          <strong>{{ item.title }}</strong>
+          <span>{% if item.due_at %}due {{ item.due_at|dt }} · {% endif %}{{ item.subtitle or item.notes or "No extra detail" }}</span>
+          <span class="tags">{% for tag in suggestion_tags.get(item.id, []) %}<small>{{ tag }}</small>{% endfor %}</span>
+        </div>
+        <div class="actions compact-actions">
+          <span class="badge">{{ "Done" if item.done else item.severity|title }}</span>
+          {% if not item.done %}
+            <form method="post" action="/suggestions/apply">
+              <input type="hidden" name="csrf" value="{{ csrf }}">
+              <input type="hidden" name="suggestion_id" value="user-suggestion:{{ item.id }}">
+              <input type="hidden" name="action" value="user-suggestion-done">
+              <input type="hidden" name="object_type" value="user_suggestion">
+              <input type="hidden" name="object_id" value="{{ item.id }}">
+              <button class="secondary small-button" type="submit">Done</button>
+            </form>
+          {% endif %}
+        </div>
+      </article>
+    {% else %}
+      <p class="empty">No custom suggestions saved yet.</p>
+    {% endfor %}
   </section>
 </details>
 
