@@ -199,7 +199,7 @@
     <div class="section-title">
       <div>
         <h2>Recovery Phrase</h2>
-        <p class="{% if recovery_enabled %}muted{% else %}warning{% endif %}">{{ "Configured for password recovery." if recovery_enabled else "Set this before relying on 2FA." }}</p>
+        <p class="muted recommendation-note">{% if recovery_enabled %}Recovery phrase is configured for password recovery.{% else %}* Recommendation: set this before relying on 2FA.{% endif %}</p>
       </div>
     </div>
     <form method="post" action="/settings/security/recovery" class="form-grid">
@@ -212,8 +212,8 @@
       <label class="span-2">Confirm recovery phrase <input name="confirm_recovery_phrase" type="password" autocomplete="new-password" data-recovery-confirm></label>
       <label class="check-row span-2"><input type="checkbox" name="clear_recovery"> Remove recovery phrase</label>
       <div class="form-actions span-2">
-        <button type="button" class="secondary" data-generate-recovery>Generate</button>
-        <button type="submit">Save Recovery Phrase</button>
+        <button type="button" class="secondary" data-generate-recovery title="Generate a long recovery phrase suggestion for this browser session.">Generate</button>
+        <button type="submit" title="Save or remove the recovery phrase after confirming your account password.">Save Recovery Phrase</button>
       </div>
     </form>
   </section>
@@ -223,27 +223,31 @@
       <div>
         <h2>Two-Factor Authentication</h2>
         {% if user.totp_enabled %}
-          <p class="muted">Enabled · {{ "main login" if totp_scope == "login" else "high-security credential reveals" }}</p>
+          <p class="muted">Enabled · {{ totp_scope_label }}</p>
         {% else %}
           <p class="muted">Optional login or reveal protection.</p>
         {% endif %}
       </div>
     </div>
-    {% set scope_options = [("login", "Main login", "Ask for 2FA after the account password at sign in."), ("high_security", "High-security reveals", "Keep login password-only, then ask for 2FA when revealing High or Extreme credentials.")] %}
+    {% set uses_login = totp_scope in ["login", "both"] %}
+    {% set uses_high_security = totp_scope in ["high_security", "both"] %}
     {% if user.totp_enabled %}
       <form method="post" action="/settings/2fa/scope" class="form-grid security-form">
         <input type="hidden" name="csrf" value="{{ csrf }}">
+        <p class="muted span-2">Use 2FA for:</p>
         <div class="security-option-grid span-2">
-          {% for value, label, help in scope_options %}
-            <label class="security-option">
-              <input type="radio" name="totp_scope" value="{{ value }}" {% if totp_scope == value %}checked{% endif %}>
-              <span><strong>{{ label }}</strong><small>{{ help }}</small></span>
-            </label>
-          {% endfor %}
+          <label class="security-option">
+            <input type="checkbox" name="totp_login" {% if uses_login %}checked{% endif %}>
+            <span><strong>Main login</strong><small>Ask for 2FA after the account password at sign in.</small></span>
+          </label>
+          <label class="security-option">
+            <input type="checkbox" name="totp_high_security" {% if uses_high_security %}checked{% endif %}>
+            <span><strong>High-security reveals</strong><small>Ask for 2FA when revealing High or Extreme credentials.</small></span>
+          </label>
         </div>
         <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
         <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
-        <div class="form-actions span-2"><button type="submit">Save 2FA Use</button></div>
+        <div class="form-actions span-2"><button type="submit" title="Save where Opsbook asks for authenticator codes.">Save 2FA Use</button></div>
       </form>
       <form method="post" action="/settings/2fa/disable" class="form-grid security-form danger-form">
         <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -264,16 +268,19 @@
       </details>
       <form method="post" action="/settings/2fa/verify" class="form-grid security-form">
         <input type="hidden" name="csrf" value="{{ csrf }}">
+        <p class="muted span-2">Use 2FA for:</p>
         <div class="security-option-grid span-2">
-          {% for value, label, help in scope_options %}
-            <label class="security-option">
-              <input type="radio" name="totp_scope" value="{{ value }}" {% if totp_scope == value %}checked{% endif %}>
-              <span><strong>{{ label }}</strong><small>{{ help }}</small></span>
-            </label>
-          {% endfor %}
+          <label class="security-option">
+            <input type="checkbox" name="totp_login" {% if uses_login %}checked{% endif %}>
+            <span><strong>Main login</strong><small>Ask for 2FA after the account password at sign in.</small></span>
+          </label>
+          <label class="security-option">
+            <input type="checkbox" name="totp_high_security" {% if uses_high_security %}checked{% endif %}>
+            <span><strong>High-security reveals</strong><small>Ask for 2FA when revealing High or Extreme credentials.</small></span>
+          </label>
         </div>
         <label>2FA code <input name="code" inputmode="numeric" autocomplete="one-time-code" required></label>
-        <div class="form-actions"><button type="submit">Enable 2FA</button></div>
+        <div class="form-actions"><button type="submit" title="Enable 2FA using the selected checks.">Enable 2FA</button></div>
       </form>
       <form method="post" action="/settings/2fa/disable" class="inline-mini" data-confirm-delete="Cancel this pending 2FA setup?">
         <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -283,16 +290,19 @@
     {% else %}
       <form method="post" action="/settings/2fa/start" class="form-grid security-form">
         <input type="hidden" name="csrf" value="{{ csrf }}">
+        <p class="muted span-2">Use 2FA for:</p>
         <div class="security-option-grid span-2">
-          {% for value, label, help in scope_options %}
-            <label class="security-option">
-              <input type="radio" name="totp_scope" value="{{ value }}" {% if totp_scope == value %}checked{% endif %}>
-              <span><strong>{{ label }}</strong><small>{{ help }}</small></span>
-            </label>
-          {% endfor %}
+          <label class="security-option">
+            <input type="checkbox" name="totp_login" {% if uses_login %}checked{% endif %}>
+            <span><strong>Main login</strong><small>Ask for 2FA after the account password at sign in.</small></span>
+          </label>
+          <label class="security-option">
+            <input type="checkbox" name="totp_high_security" {% if uses_high_security %}checked{% endif %}>
+            <span><strong>High-security reveals</strong><small>Ask for 2FA when revealing High or Extreme credentials.</small></span>
+          </label>
         </div>
         <label class="span-2">Confirm password <input name="password" type="password" required autocomplete="current-password"></label>
-        <div class="form-actions span-2"><button type="submit">Start 2FA Setup</button></div>
+        <div class="form-actions span-2"><button type="submit" title="Create a new authenticator setup key using the selected checks.">Start 2FA Setup</button></div>
       </form>
     {% endif %}
   </section>

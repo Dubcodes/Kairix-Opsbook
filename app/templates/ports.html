@@ -10,12 +10,13 @@
 </section>
 
 <section class="two-col">
-  <details class="panel collapsible-panel compact-add-panel">
+  <details class="panel collapsible-panel compact-add-panel" {% if add_panel == "port" %}open{% endif %}>
     <summary><span><strong>Add Port</strong><small>Document a device port when you need it.</small></span></summary>
     <form method="post" action="/ports/add" class="form-grid">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label>Device <span class="hint" title="The machine where this port is open.">?</span><select name="device_id">{% for device in devices %}<option value="{{ device.id }}">{{ device.name }}</option>{% endfor %}</select></label>
-      <label>Service <span class="hint" title="Link the port to a service when you know it. Unlinked ports still appear as loose device ports.">?</span><select name="service_id"><option value="">None</option>{% for service in services %}<option value="{{ service.id }}">{{ service.name }}</option>{% endfor %}</select></label>
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <label>Device <span class="hint" title="The machine where this port is open.">?</span><select name="device_id">{% for device in devices %}<option value="{{ device.id }}" {% if selected_device_id == device.id %}selected{% endif %}>{{ device.name }}</option>{% endfor %}</select></label>
+      <label>Service <span class="hint" title="Link the port to a service when you know it. Unlinked ports still appear as loose device ports.">?</span><select name="service_id"><option value="">None</option>{% for service in services %}<option value="{{ service.id }}" {% if selected_service_id == service.id %}selected{% endif %}>{{ service.name }} · {{ service.device.name }}</option>{% endfor %}</select></label>
       <label>Host port <span class="hint" title="The port you connect to from your browser or network, such as 9443.">?</span><input name="host_port" required inputmode="numeric"></label>
       <label>Internal port <span class="hint" title="Optional Docker/container port behind the host mapping, such as 8000 in 8095 -> 8000.">?</span><input name="internal_port" inputmode="numeric"></label>
       <label>Protocol <span class="hint" title="Usually tcp. Use udp when the service is documented that way.">?</span><input name="protocol" value="tcp"></label>
@@ -25,12 +26,13 @@
       <button type="submit">Add Port</button>
     </form>
   </details>
-  <details class="panel collapsible-panel compact-add-panel">
+  <details class="panel collapsible-panel compact-add-panel" {% if add_panel == "url" %}open{% endif %}>
     <summary><span><strong>Add URL</strong><small>Attach a local, public, or admin URL.</small></span></summary>
     <form method="post" action="/urls/add" class="form-grid">
       <input type="hidden" name="csrf" value="{{ csrf }}">
-      <label>Device <span class="hint" title="The device this URL points at or belongs to.">?</span><select name="device_id"><option value="">None</option>{% for device in devices %}<option value="{{ device.id }}">{{ device.name }}</option>{% endfor %}</select></label>
-      <label>Service <span class="hint" title="Link URLs directly to services so they show up in that service's quick view.">?</span><select name="service_id"><option value="">None</option>{% for service in services %}<option value="{{ service.id }}">{{ service.name }}</option>{% endfor %}</select></label>
+      <input type="hidden" name="return_to" value="{{ return_to }}">
+      <label>Device <span class="hint" title="The device this URL points at or belongs to.">?</span><select name="device_id"><option value="" {% if not selected_device_id %}selected{% endif %}>None</option>{% for device in devices %}<option value="{{ device.id }}" {% if selected_device_id == device.id %}selected{% endif %}>{{ device.name }}</option>{% endfor %}</select></label>
+      <label>Service <span class="hint" title="Link URLs directly to services so they show up in that service's quick view.">?</span><select name="service_id"><option value="">None</option>{% for service in services %}<option value="{{ service.id }}" {% if selected_service_id == service.id %}selected{% endif %}>{{ service.name }} · {{ service.device.name }}</option>{% endfor %}</select></label>
       <label>Label <span class="hint" title="Friendly name, such as Portainer HTTPS or Immich local.">?</span><input name="label" spellcheck="true"></label>
       <label>URL <span class="hint" title="Full address including http:// or https://.">?</span><input name="url" required></label>
       <label>Type <span class="hint" title="Examples: local, public, cloudflare, admin, temporary.">?</span><input name="url_type" value="local" spellcheck="true"></label>

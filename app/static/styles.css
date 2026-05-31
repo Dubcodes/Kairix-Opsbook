@@ -363,6 +363,10 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
 }
 .muted, .form-note, .empty { color: var(--muted); }
 .empty { margin: 12px 0; }
+.recommendation-note {
+  margin: 2px 0 0;
+  line-height: 1.35;
+}
 
 .flash, .standby-banner, .warning, .danger-note {
   border-radius: 6px;
@@ -503,6 +507,7 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
 }
 
 .security-option input {
+  flex: 0 0 auto;
   width: auto;
   margin-top: 3px;
 }
@@ -527,6 +532,8 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   margin: 16px 0 10px;
 }
 .panel .section-title { margin-top: 0; }
+.compact-section-title { margin: 14px 0 8px; }
+.compact-section-title h3 { margin: 0; }
 h2 { margin: 0 0 12px; font-size: 20px; letter-spacing: 0; }
 h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
 

@@ -16,7 +16,7 @@
       <pre><code>{{ rendered }}</code></pre>
       <div class="command-actions">
         <button type="button" data-copy-target="prev">Copy command</button>
-        <button type="button" data-help-toggle>High detail</button>
+        <button type="button" data-help-toggle title="Toggle between quick command help and the longer explanation.">High detail</button>
         <a class="button secondary" href="/commands/{{ command.id }}/edit">Edit</a>
         <form method="post" action="/delete/command/{{ command.id }}" data-confirm-delete="Delete this command?">
           <input type="hidden" name="csrf" value="{{ csrf }}">

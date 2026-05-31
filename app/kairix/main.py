@@ -145,6 +145,8 @@ RECOVERY_PHRASE_HASH_SETTING = "recovery_phrase_hash"
 TOTP_SCOPE_SETTING = "totp_scope"
 TOTP_SCOPE_LOGIN = "login"
 TOTP_SCOPE_HIGH_SECURITY = "high_security"
+TOTP_SCOPE_BOTH = "both"
+TOTP_SCOPES = {TOTP_SCOPE_LOGIN, TOTP_SCOPE_HIGH_SECURITY, TOTP_SCOPE_BOTH}
 DEVICE_IMAGE_DIR = "device-images"
 SUGGESTION_IMAGE_DIR = "suggestion-images"
 MAX_IMAGE_UPLOAD_BYTES = 12 * 1024 * 1024
@@ -634,7 +636,11 @@ RECOVERY_WORDS = [
 
 
 def _suggested_recovery_phrase() -> str:
-    words = [secrets.choice(RECOVERY_WORDS) for _ in range(8)]
+    words: list[str] = []
+    while len(words) < 8:
+        word = secrets.choice(RECOVERY_WORDS)
+        if word not in words:
+            words.append(word)
     words[0] = words[0].title()
     return f"{' '.join(words)} {10 + secrets.randbelow(90)}!"
 
@@ -666,13 +672,43 @@ def _recovery_phrase_error(value: str) -> str:
 def _totp_scope(db: Session) -> str:
     row = db.query(models.AppSetting).filter_by(key=TOTP_SCOPE_SETTING).first()
     value = row.value if row and row.value else TOTP_SCOPE_LOGIN
-    return value if value in {TOTP_SCOPE_LOGIN, TOTP_SCOPE_HIGH_SECURITY} else TOTP_SCOPE_LOGIN
+    return value if value in TOTP_SCOPES else TOTP_SCOPE_LOGIN
 
 
 def _set_totp_scope(db: Session, raw_value: str) -> str:
-    value = raw_value if raw_value in {TOTP_SCOPE_LOGIN, TOTP_SCOPE_HIGH_SECURITY} else TOTP_SCOPE_LOGIN
+    value = raw_value if raw_value in TOTP_SCOPES else TOTP_SCOPE_LOGIN
     set_app_setting(db, TOTP_SCOPE_SETTING, value)
     return value
+
+
+def _form_checkbox_enabled(value: str) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _totp_scope_from_flags(login_value: str, high_security_value: str) -> str:
+    login_enabled = _form_checkbox_enabled(login_value)
+    high_security_enabled = _form_checkbox_enabled(high_security_value)
+    if login_enabled and high_security_enabled:
+        return TOTP_SCOPE_BOTH
+    if high_security_enabled:
+        return TOTP_SCOPE_HIGH_SECURITY
+    return TOTP_SCOPE_LOGIN
+
+
+def _totp_scope_label(scope: str) -> str:
+    if scope == TOTP_SCOPE_BOTH:
+        return "main login and high-security credential reveals"
+    if scope == TOTP_SCOPE_HIGH_SECURITY:
+        return "high-security credential reveals"
+    return "main login"
+
+
+def _totp_login_enabled(db: Session) -> bool:
+    return _totp_scope(db) in {TOTP_SCOPE_LOGIN, TOTP_SCOPE_BOTH}
+
+
+def _totp_high_security_enabled(db: Session) -> bool:
+    return _totp_scope(db) in {TOTP_SCOPE_HIGH_SECURITY, TOTP_SCOPE_BOTH}
 
 
 def _verify_totp_code(user: models.User, code: str) -> bool:
@@ -685,7 +721,7 @@ def _verify_totp_code(user: models.User, code: str) -> bool:
 def _credential_requires_totp(db: Session, user: models.User, credential: models.Credential) -> bool:
     return bool(
         user.totp_enabled
-        and _totp_scope(db) == TOTP_SCOPE_HIGH_SECURITY
+        and _totp_high_security_enabled(db)
         and credential.security_level in {"high", "extreme"}
     )
 
@@ -2426,7 +2462,7 @@ def login(
         flash(request, "Login failed. Check the username and password.", "danger")
         return redirect("/login")
     request.session.clear()
-    if user.totp_enabled and _totp_scope(db) == TOTP_SCOPE_LOGIN:
+    if user.totp_enabled and _totp_login_enabled(db):
         request.session["pending_2fa_user_id"] = user.id
         request.session["last_seen"] = now_utc().isoformat()
         csrf_token(request)
@@ -4377,11 +4413,17 @@ def command_update(
 @app.get("/ports", response_class=HTMLResponse)
 def ports_page(
     request: Request,
+    device_id: int | None = None,
+    service_id: int | None = None,
+    add: str = "",
+    return_to: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     ports = db.query(models.Port).order_by(models.Port.host_port).all()
     devices = _device_order_query(db).all()
+    selected_service = db.get(models.Service, service_id) if service_id else None
+    selected_device_id = device_id or (selected_service.device_id if selected_service else None)
     return render(
         request,
         "ports.html",
@@ -4392,6 +4434,10 @@ def ports_page(
             "services": _service_order_query(db).all(),
             "device_ping_statuses": _device_ping_status_map(db, devices),
             "port_validation_statuses": _port_validation_status_map(db, ports),
+            "selected_device_id": selected_device_id,
+            "selected_service_id": selected_service.id if selected_service else None,
+            "add_panel": add if add in {"port", "url"} else "",
+            "return_to": _safe_return_to(return_to, "/ports") if return_to else "",
         },
         user=user,
     )
@@ -4565,11 +4611,20 @@ def add_port(
     purpose: str = Form(""),
     tags: str = Form(""),
     notes: str = Form(""),
+    return_to: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
+    return_target = _safe_return_to(return_to, "/ports")
+    resolved_service_id = int(service_id) if service_id else None
+    if resolved_service_id:
+        service = db.get(models.Service, resolved_service_id)
+        if service:
+            device_id = service.device_id
+        else:
+            resolved_service_id = None
     duplicate = (
         db.query(models.Port)
         .filter(
@@ -4581,10 +4636,10 @@ def add_port(
     )
     if duplicate:
         flash(request, "That port is already documented for this device.", "warning")
-        return redirect("/ports")
+        return redirect(return_target)
     port = models.Port(
         device_id=device_id,
-        service_id=int(service_id) if service_id else None,
+        service_id=resolved_service_id,
         host_port=host_port,
         internal_port=int(internal_port) if internal_port else None,
         protocol=protocol,
@@ -4599,7 +4654,7 @@ def add_port(
     db.add(models.AuditLog(user_id=user.id, action="port_added", object_type="port", object_id=port.id))
     db.commit()
     flash(request, "Port added.", "success")
-    return redirect("/ports")
+    return redirect(return_target)
 
 
 @app.post("/urls/add")
@@ -4613,17 +4668,21 @@ def add_url(
     url_type: str = Form("local"),
     tags: str = Form(""),
     notes: str = Form(""),
+    return_to: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
+    return_target = _safe_return_to(return_to, "/ports")
     resolved_service_id = int(service_id) if service_id else None
     resolved_device_id = int(device_id) if device_id else None
-    if resolved_service_id and not resolved_device_id:
+    if resolved_service_id:
         service = db.get(models.Service, resolved_service_id)
         if service:
             resolved_device_id = service.device_id
+        else:
+            resolved_service_id = None
     row = models.Url(
         device_id=resolved_device_id,
         service_id=resolved_service_id,
@@ -4640,7 +4699,7 @@ def add_url(
     db.add(models.AuditLog(user_id=user.id, action="url_added", object_type="url", object_id=row.id))
     db.commit()
     flash(request, "URL added.", "success")
-    return redirect("/ports")
+    return redirect(return_target)
 
 
 @app.get("/ports/{port_id}/edit", response_class=HTMLResponse)
@@ -4690,8 +4749,15 @@ def port_update(
     port = db.get(models.Port, port_id)
     if not port:
         raise HTTPException(404, "Port not found.")
+    resolved_service_id = int(service_id) if service_id else None
+    if resolved_service_id:
+        service = db.get(models.Service, resolved_service_id)
+        if service:
+            device_id = service.device_id
+        else:
+            resolved_service_id = None
     port.device_id = device_id
-    port.service_id = int(service_id) if service_id else None
+    port.service_id = resolved_service_id
     port.host_port = host_port
     port.internal_port = int(internal_port) if internal_port else None
     port.protocol = protocol
@@ -4754,10 +4820,12 @@ def url_update(
         raise HTTPException(404, "URL not found.")
     resolved_service_id = int(service_id) if service_id else None
     resolved_device_id = int(device_id) if device_id else None
-    if resolved_service_id and not resolved_device_id:
+    if resolved_service_id:
         service = db.get(models.Service, resolved_service_id)
         if service:
             resolved_device_id = service.device_id
+        else:
+            resolved_service_id = None
     row.device_id = resolved_device_id
     row.service_id = resolved_service_id
     row.label = label
@@ -5792,6 +5860,7 @@ def settings_page(
         buffer = io.BytesIO()
         qr_image.save(buffer)
         pending_totp_qr_svg = buffer.getvalue().decode("utf-8")
+    totp_scope = _totp_scope(db)
     return render(
         request,
         "settings.html",
@@ -5806,7 +5875,8 @@ def settings_page(
             "webhook_send_recovery": _webhook_recovery_enabled(db),
             "recovery_enabled": _recovery_enabled(db),
             "suggested_recovery_phrase": _suggested_recovery_phrase(),
-            "totp_scope": _totp_scope(db),
+            "totp_scope": totp_scope,
+            "totp_scope_label": _totp_scope_label(totp_scope),
         },
         user=user,
     )
@@ -6127,7 +6197,8 @@ def settings_2fa_start(
     request: Request,
     csrf: str = Form(...),
     password: str = Form(...),
-    totp_scope: str = Form(TOTP_SCOPE_LOGIN),
+    totp_login: str = Form(""),
+    totp_high_security: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -6136,7 +6207,7 @@ def settings_2fa_start(
     if not verify_password(password, user.password_hash):
         flash(request, "Incorrect password. 2FA setup was not started.", "danger")
         return redirect("/settings#two-factor")
-    scope = _set_totp_scope(db, totp_scope)
+    scope = _set_totp_scope(db, _totp_scope_from_flags(totp_login, totp_high_security))
     user.totp_enabled = False
     user.totp_secret_encrypted = encrypt_text(pyotp.random_base32())
     db.add(
@@ -6158,7 +6229,8 @@ def settings_2fa_verify(
     request: Request,
     csrf: str = Form(...),
     code: str = Form(...),
-    totp_scope: str = Form(TOTP_SCOPE_LOGIN),
+    totp_login: str = Form(""),
+    totp_high_security: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -6170,7 +6242,7 @@ def settings_2fa_verify(
     if not _verify_totp_code(user, code):
         flash(request, "Incorrect 2FA code.", "danger")
         return redirect("/settings#two-factor")
-    scope = _set_totp_scope(db, totp_scope)
+    scope = _set_totp_scope(db, _totp_scope_from_flags(totp_login, totp_high_security))
     user.totp_enabled = True
     db.add(
         models.AuditLog(
@@ -6184,7 +6256,7 @@ def settings_2fa_verify(
     db.commit()
     flash(
         request,
-        "2FA is now enabled for login." if scope == TOTP_SCOPE_LOGIN else "2FA is now enabled for high-security credential reveals.",
+        f"2FA is now enabled for {_totp_scope_label(scope)}.",
         "success",
     )
     return redirect("/settings#two-factor")
@@ -6196,7 +6268,8 @@ def settings_2fa_scope(
     csrf: str = Form(...),
     password: str = Form(...),
     code: str = Form(...),
-    totp_scope: str = Form(TOTP_SCOPE_LOGIN),
+    totp_login: str = Form(""),
+    totp_high_security: str = Form(""),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -6211,7 +6284,7 @@ def settings_2fa_scope(
     if not _verify_totp_code(user, code):
         flash(request, "Incorrect 2FA code. 2FA use was not changed.", "danger")
         return redirect("/settings#two-factor")
-    scope = _set_totp_scope(db, totp_scope)
+    scope = _set_totp_scope(db, _totp_scope_from_flags(totp_login, totp_high_security))
     db.add(
         models.AuditLog(
             user_id=user.id,

@@ -82,7 +82,7 @@
     <div class="panel">
       <div class="section-title">
         <h2>Quick URLs & Ports</h2>
-        <a href="/ports">Add</a>
+        <a href="/ports?device_id={{ device.id }}&add=port&return_to={{ ('/devices/' ~ device.id)|urlencode }}">Add</a>
       </div>
       <div class="list compact">
         {% for item in quick_network_items %}
@@ -254,7 +254,10 @@
         {{ ping_status.label }}<span class="ping-dot ping-{{ ping_status.state }}" title="Ping: {{ ping_status.label }}{% if ping_status.last_at_iso %} · last {{ ping_status.last_at }}{% endif %}"></span>{% if ping_status.last_at_iso %} · last <time data-utc="{{ ping_status.last_at_iso }}">{{ ping_status.last_at }}</time>{% endif %}
       </dd>
     </dl>
-    <h3>Ports</h3>
+    <div class="section-title compact-section-title">
+      <h3>Ports</h3>
+      <a class="button secondary small-button" href="/ports?device_id={{ device.id }}&add=port&return_to={{ ('/devices/' ~ device.id ~ '?tab=network')|urlencode }}">Add Port</a>
+    </div>
     <div class="list compact">
       {% for port in device.ports %}
         {% set port_status = port_validation_statuses.get(port.id, {"state": "unknown", "title": "Port not checked"}) %}
@@ -285,7 +288,10 @@
         <p class="empty">No services documented.</p>
       {% endfor %}
     </div>
-    <h3>URLs</h3>
+    <div class="section-title compact-section-title">
+      <h3>URLs</h3>
+      <a class="button secondary small-button" href="/ports?device_id={{ device.id }}&add=url&return_to={{ ('/devices/' ~ device.id ~ '?tab=network')|urlencode }}">Add URL</a>
+    </div>
     <div class="list compact">
       {% for url in device.urls %}
         <div class="list-row static clickable-card" data-card-href="/urls/{{ url.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">

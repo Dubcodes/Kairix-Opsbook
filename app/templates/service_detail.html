@@ -169,7 +169,7 @@
   <section class="panel">
     <div class="section-title">
       <h2>Ports</h2>
-      <a class="button" href="/ports">Add Port</a>
+      <a class="button" href="/ports?device_id={{ service.device_id }}&service_id={{ service.id }}&add=port&return_to={{ ('/services/' ~ service.id ~ '?tab=ports')|urlencode }}">Add Port</a>
     </div>
     <div class="list compact">
       {% for port in service.ports %}
@@ -191,7 +191,7 @@
   <section class="panel">
     <div class="section-title">
       <h2>URLs</h2>
-      <a class="button" href="/ports">Add URL</a>
+      <a class="button" href="/ports?device_id={{ service.device_id }}&service_id={{ service.id }}&add=url&return_to={{ ('/services/' ~ service.id ~ '?tab=ports')|urlencode }}">Add URL</a>
     </div>
     <div class="list compact">
       {% for url in service.urls %}
