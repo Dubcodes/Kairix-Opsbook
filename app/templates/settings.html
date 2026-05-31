@@ -31,20 +31,21 @@
     <dt>Instance name</dt><dd>{{ instance_name }}</dd>
     <dt>Mode</dt><dd>{{ instance_mode|title }}</dd>
   </dl>
-  <p class="muted">Mode is set with the <code>INSTANCE_MODE</code> environment variable. Use <code>primary</code> for the writable instance and <code>standby</code> for a mirror copy that stays read-only until you promote it.</p>
+  <p class="muted">Mode is set with the <code>INSTANCE_MODE</code> environment variable. Use <code>primary</code> for the writable instance and <code>standby</code> for a read-only mirror. Temporary standby intake is planned, but not active in this version.</p>
 </section>
 
 <details class="panel collapsible-panel">
-  <summary><span><strong>Primary / Mirror Setup</strong><small>Plain-English secondary instance steps</small></span></summary>
-  <p class="muted">Today, Opsbook supports a simple primary plus mirror model. The primary is where you normally write. The mirror imports encrypted backups, stays read-only, and can be promoted if the primary is down.</p>
+  <summary><span><strong>Primary / Mirror Setup</strong><small>Current safe model and planned standby intake</small></span></summary>
+  <p class="muted">Today, Opsbook supports a simple primary plus encrypted mirror model. The primary is where you write. The mirror imports emergency exports and stays read-only so two databases do not fight over encrypted secrets.</p>
   <ol class="steps-list">
     <li>Install a second Opsbook stack on another machine.</li>
     <li>Use the same <code>OPSBOOK_SECRET_KEY</code> and <code>EXPORT_SECRET_KEY</code> as the primary so encrypted data can be read after import.</li>
     <li>Set the mirror to <code>INSTANCE_MODE=standby</code> so normal edits are blocked.</li>
     <li>Create an Emergency Export on the primary and import it on the mirror.</li>
-    <li>If the primary is down, change the mirror to <code>INSTANCE_MODE=primary</code> and restart it.</li>
+    <li>Use manual promotion only as an emergency recovery step if the primary is down and you need the mirror to become the writable system.</li>
   </ol>
-  <p class="muted">Bidirectional live sync is not enabled yet. That is deliberate: two writable copies can create conflicts, especially for encrypted secrets. The current flow is boring on purpose, which is exactly what you want in an emergency.</p>
+  <p class="muted">Planned next step: a standby intake mode. If the primary is offline, the mirror would collect temporary recovery notes instead of committing normal database writes. When the primary comes back, those notes would be reviewed through Smart Paste, committed on the primary, then copied back to the mirror.</p>
+  <p class="muted">Bidirectional live sync is still deliberately avoided. The planned intake flow gives you somewhere to record emergency changes without pretending two writable copies can safely merge everything automatically.</p>
 </details>
 
 <section class="panel" id="ping-webhook">

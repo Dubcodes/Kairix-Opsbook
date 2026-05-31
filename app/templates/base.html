@@ -58,7 +58,7 @@
   <main class="{% if user %}shell{% else %}auth-shell{% endif %}">
     {% if read_only and user %}
       <div class="standby-banner">
-        <strong>STANDBY MODE</strong> — read-only copy from Primary. Promote manually by changing <code>INSTANCE_MODE=primary</code> and restarting.
+        <strong>STANDBY MODE</strong> — read-only mirror. Temporary standby intake is planned; emergency promotion still requires <code>INSTANCE_MODE=primary</code> and a restart.
       </div>
     {% endif %}
 
