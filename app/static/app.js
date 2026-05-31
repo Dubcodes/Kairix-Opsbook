@@ -311,6 +311,18 @@
     });
   }
 
+  function initAutoSubmitFilters() {
+    document.querySelectorAll("form[data-auto-submit] select").forEach((select) => {
+      select.addEventListener("change", () => {
+        if (typeof select.form.requestSubmit === "function") {
+          select.form.requestSubmit();
+        } else {
+          select.form.submit();
+        }
+      });
+    });
+  }
+
   document.addEventListener("click", (event) => {
     const quickNoteOpen = event.target.closest("[data-open-quick-note]");
     if (quickNoteOpen) {
@@ -500,6 +512,7 @@
   hydrateLocalTimes();
   highlightFocusedField();
   initLiveSearch();
+  initAutoSubmitFilters();
 
   const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
   if (timeoutMeta) {

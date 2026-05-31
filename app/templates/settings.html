@@ -155,38 +155,6 @@
 </form>
 
 <details class="panel collapsible-panel">
-  <summary><span><strong>Temporary Tokens</strong><small>GitHub PATs and other short-lived access tokens, encrypted like credentials.</small></span></summary>
-  <form method="post" action="/settings/tokens" class="form-grid">
-    <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>Token name <span class="hint" title="Use a searchable name like GitHub Opsbook deploy token.">?</span><input name="token_name" required spellcheck="true"></label>
-    <label>Expires <span class="hint" title="Optional. Opsbook can warn you when a temporary token is expired or expiring soon.">?</span><input name="token_expiry" type="date"></label>
-    <label class="span-2">Token <span class="hint" title="Paste the token once. It is encrypted before storage and hidden by default.">?</span><input name="token_value" type="password" required autocomplete="new-password"></label>
-    <label class="span-2">Notes <textarea name="token_notes" spellcheck="true" placeholder="Repository scope, why it exists, or where it is used."></textarea></label>
-    <div class="form-actions span-2"><button type="submit">Store Token</button></div>
-  </form>
-  <div class="list compact">
-    {% for token in tokens %}
-      <div class="list-row static" data-credential-row>
-        <div>
-          <strong>{{ token.label }}</strong>
-          <span>{% if token.expires_at %}expires {{ token.expires_at|date_input }}{% else %}no expiry saved{% endif %} · {{ token.security_level|title }} security</span>
-        </div>
-        <div class="actions compact-actions">
-          <button class="secondary small-button" type="button" data-copy-credential="{{ token.id }}">Copy</button>
-          <a class="button secondary small-button" href="/credentials/{{ token.id }}/edit?return_to=/settings">Edit</a>
-          <form method="post" action="/delete/credential/{{ token.id }}" data-confirm-delete="Delete this token?">
-            <input type="hidden" name="csrf" value="{{ csrf }}">
-            <button class="ghost small-button" type="submit">Delete</button>
-          </form>
-        </div>
-      </div>
-    {% else %}
-      <p class="empty">No temporary tokens stored yet. Smart Paste can detect GitHub PAT pages and offer them here as high-security credentials.</p>
-    {% endfor %}
-  </div>
-</details>
-
-<details class="panel collapsible-panel">
   <summary><span><strong>Device Order</strong><small>Controls dashboard order and device grouping order on other pages.</small></span></summary>
   <form method="post" action="/settings/device-order" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
@@ -198,6 +166,29 @@
     <div class="form-actions span-2"><button type="submit">Save Device Order</button></div>
   </form>
 </details>
+
+<section class="panel" id="account-security">
+  <h2>Account Security</h2>
+  <section class="two-col flush-grid">
+    <form method="post" action="/settings/security/password" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <h3 class="span-2">Change Password</h3>
+      <label class="span-2">Current password <input name="current_password" type="password" required autocomplete="current-password"></label>
+      <label>New password <input name="new_password" type="password" required minlength="10" autocomplete="new-password"></label>
+      <label>Confirm new password <input name="confirm_password" type="password" required minlength="10" autocomplete="new-password"></label>
+      <div class="form-actions span-2"><button type="submit">Change Password</button></div>
+    </form>
+    <form method="post" action="/settings/security/reveal-pin" class="form-grid">
+      <input type="hidden" name="csrf" value="{{ csrf }}">
+      <h3 class="span-2">Reveal Password or PIN</h3>
+      <label class="span-2">Account password <input name="current_password" type="password" required autocomplete="current-password"></label>
+      <label>New reveal password or PIN <input name="new_reveal_pin" type="password" autocomplete="new-password"></label>
+      <label>Confirm reveal password or PIN <input name="confirm_reveal_pin" type="password" autocomplete="new-password"></label>
+      <p class="muted span-2">Leave the new reveal fields blank to remove the separate reveal password/PIN and use your account password only.</p>
+      <div class="form-actions span-2"><button type="submit">Update Reveal PIN</button></div>
+    </form>
+  </section>
+</section>
 
 <section class="panel" id="two-factor">
   <h2>Two-Factor Authentication</h2>

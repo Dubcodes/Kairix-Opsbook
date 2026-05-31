@@ -817,7 +817,7 @@ def _service_url_validation_status(db: Session, service: models.Service, raw_url
                 item
                 for item in targets
                 if str(item.get("host") or "").lower() == host.lower()
-                and int(item.get("port") or 0) == port
+                and str(item.get("port") or "") == str(port)
             ),
             None,
         )
@@ -852,6 +852,54 @@ def _service_url_validation_statuses(db: Session, service: models.Service) -> di
         "local_url": _service_url_validation_status(db, service, service.local_url, "Local URL") if service.local_url else {},
         "public_url": _service_url_validation_status(db, service, service.public_url, "Public URL") if service.public_url else {},
     }
+
+
+def _service_port_validation_statuses(db: Session, service: models.Service) -> dict[int, dict[str, str]]:
+    latest = _latest_audit(db, "service", service.id, "service_validate")
+    statuses: dict[int, dict[str, str]] = {}
+    if not latest:
+        for port in service.ports:
+            statuses[port.id] = {"state": "unknown", "label": "Port not checked", "title": "This port has not been checked yet."}
+        return statuses
+    checked_at = format_dt(latest.created_at)
+    details = latest.details_json or {}
+    targets = [item for item in details.get("targets") or [] if isinstance(item, dict)]
+    host = (service.device.primary_ip or service.device.hostname or "").strip() if service.device else ""
+    for port in service.ports:
+        expected_label = f"{host}:{port.host_port}/{port.protocol}" if host else ""
+        match = next((item for item in targets if expected_label and item.get("label") == expected_label), None)
+        if not match and host:
+            match = next(
+                (
+                    item
+                    for item in targets
+                    if str(item.get("host") or "").lower() == host.lower()
+                    and str(item.get("port") or "") == str(port.host_port)
+                ),
+                None,
+            )
+        if not match:
+            base = f"{port.host_port}/{port.protocol} was not part of the latest service check"
+            statuses[port.id] = {
+                "state": "unknown",
+                "label": base,
+                "title": f"{base}. Open the History tab for detailed validation logs.",
+            }
+            continue
+        ok = bool(match.get("ok"))
+        error = str(match.get("error") or "").strip()
+        latency = match.get("latency_ms")
+        label = f"{port.host_port}/{port.protocol} reachable via TCP check" if ok else f"{port.host_port}/{port.protocol} did not respond to TCP check"
+        if ok and latency is not None:
+            label += f" in {latency} ms"
+        if error:
+            label += f": {error}"
+        statuses[port.id] = {
+            "state": "good" if ok else "slow",
+            "label": label,
+            "title": f"{label} · checked {checked_at}. Open the History tab for detailed validation logs.",
+        }
+    return statuses
 
 
 def _service_validation_targets(service: models.Service) -> list[tuple[str, str, int]]:
@@ -1603,12 +1651,14 @@ AUDIT_ACTION_LABELS = {
     "url_edited": "URL updated",
     "url_deleted": "URL deleted",
     "note_added": "Note added",
+    "note_edited": "Note edited",
     "note_deleted": "Note deleted",
     "note_tags_updated": "Note tags updated",
     "tag_deleted": "Tag deleted",
     "quick_credentials_updated": "Favorite credentials updated",
     "ping_warning_scheduled": "Ping warning marked scheduled",
     "ping_warning_expected": "Check warning marked expected",
+    "ping_warning_known_down": "Check warning marked known down",
     "smart_paste_parsed": "Smart Paste reviewed",
     "smart_paste_applied": "Smart Paste applied",
     "quick_note_saved": "Quick note saved",
@@ -1623,6 +1673,9 @@ AUDIT_ACTION_LABELS = {
     "totp_setup_started": "2FA setup started",
     "totp_enabled": "2FA enabled",
     "totp_disabled": "2FA disabled",
+    "password_changed": "Password changed",
+    "reveal_pin_changed": "Reveal password changed",
+    "reveal_pin_removed": "Reveal password removed",
 }
 
 
@@ -1780,6 +1833,8 @@ def _delete_redirect_target(request: Request, object_type: str, object_id: int) 
         return "/services"
     if object_type == "credential" and f"/credentials/{object_id}" in referer:
         return "/credentials"
+    if object_type == "note" and f"/notes/{object_id}" in referer:
+        return "/notes"
     if object_type in {"port", "url"}:
         return "/ports"
     if object_type == "device" and f"/devices/{object_id}" in referer:
@@ -2401,6 +2456,37 @@ def device_detail(
     ]
     auto_purpose = _device_auto_purpose(device)
     validation_status = {service.id: _service_validation_status(db, service) for service in device.services}
+    quick_network_limit = int_setting(db, "dashboard_recent_limit", 6, minimum=3, maximum=20)
+    quick_network_items: list[dict[str, str]] = []
+    for service in sorted(device.services, key=lambda item: item.name.lower()):
+        service_url = service.local_url or service.public_url
+        if service_url:
+            quick_network_items.append(
+                {
+                    "title": service.name,
+                    "subtitle": service_url,
+                    "href": service_url,
+                    "external": "true",
+                }
+            )
+        for port in sorted(service.ports, key=lambda item: (item.host_port, item.protocol)):
+            quick_network_items.append(
+                {
+                    "title": service.name,
+                    "subtitle": f"{port.host_port}/{port.protocol} · {port.purpose or 'service port'}",
+                    "href": f"/ports/{port.id}/edit?return_to=/devices/{device.id}",
+                    "external": "",
+                }
+            )
+    for port in sorted((port for port in device.ports if not port.service), key=lambda item: (item.host_port, item.protocol)):
+        quick_network_items.append(
+            {
+                "title": f"{port.host_port}/{port.protocol}",
+                "subtitle": port.purpose or port.notes or "device port",
+                "href": f"/ports/{port.id}/edit?return_to=/devices/{device.id}",
+                "external": "",
+            }
+        )
     return render(
         request,
         "device_detail.html",
@@ -2419,6 +2505,9 @@ def device_detail(
             "validation_status": validation_status,
             "validation_log": _latest_audit(db, "device", device.id, "services_validated"),
             "auto_purpose": auto_purpose,
+            "quick_network_items": quick_network_items[:quick_network_limit],
+            "quick_network_total": len(quick_network_items),
+            "quick_network_limit": quick_network_limit,
             "highlight": highlight,
             "device_ping_statuses": _device_ping_status_map(db, [device]),
         },
@@ -2834,6 +2923,7 @@ def service_detail(
             "status_log": _latest_audit(db, "service", service.id, "service_status_changed"),
             "validation_status": _service_validation_status(db, service),
             "validation_targets": _service_url_validation_statuses(db, service),
+            "port_validation_statuses": _service_port_validation_statuses(db, service),
             "device_ping_statuses": _device_ping_status_map(db, [service.device]),
             "device_ping_status": _device_ping_status(db, service.device),
             "backup_ready": bool(service.backup_path or "backup" in (service.notes or "").lower()),
@@ -4206,6 +4296,48 @@ def note_detail_page(
     )
 
 
+@app.get("/notes/{note_id}/edit", response_class=HTMLResponse)
+def note_edit_page(
+    request: Request,
+    note_id: int,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    note = db.get(models.Note, note_id)
+    if not note:
+        raise HTTPException(404, "Note not found.")
+    target, href = _note_target_label(db, note)
+    return render(
+        request,
+        "note_form.html",
+        {"note": note, "target": target, "target_href": href},
+        user=user,
+    )
+
+
+@app.post("/notes/{note_id}/edit")
+def note_update(
+    request: Request,
+    note_id: int,
+    csrf: str = Form(...),
+    title: str = Form(""),
+    body: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    note = db.get(models.Note, note_id)
+    if not note:
+        raise HTTPException(404, "Note not found.")
+    note.title = title.strip()
+    note.body = body
+    db.add(models.AuditLog(user_id=user.id, action="note_edited", object_type=note.object_type, object_id=note.id))
+    db.commit()
+    flash(request, "Note saved.", "success")
+    return redirect(f"/notes/{note.id}")
+
+
 @app.post("/notes/{note_id}/tags")
 def note_tags_update(
     request: Request,
@@ -4835,20 +4967,20 @@ def suggestions_apply(
     cleaned = value.strip()
     if action == "mute-ping":
         if not mute_event_id:
-            flash(request, "That check warning could not be marked expected.", "warning")
+            flash(request, "That check warning could not be marked known down.", "warning")
             return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
         mute_ping_failure(db, suggestion_id, mute_event_id)
         db.add(
             models.AuditLog(
                 user_id=user.id,
-                action="ping_warning_expected",
+                action="ping_warning_known_down",
                 object_type=object_type,
                 object_id=object_id,
                 details_json={"id": suggestion_id, "event_id": mute_event_id},
             )
         )
         db.commit()
-        flash(request, "Check warning marked expected for this failed check.", "success")
+        flash(request, "Check warning marked known down and hidden from suggestions.", "success")
         return redirect((request.headers.get("referer") or "/suggestions") + "#active-suggestions")
     if action == "duplicate-port-cleanup" and object_type == "port":
         match = re.match(r"device:(\d+):port:(\d+):([^:]+):duplicate", suggestion_id)
@@ -4993,7 +5125,6 @@ def settings_page(
             "pending_totp_secret": pending_totp_secret,
             "pending_totp_uri": pending_totp_uri,
             "pending_totp_qr_svg": pending_totp_qr_svg,
-            "tokens": _token_credentials(db),
             "devices": _device_order_query(db).all(),
             "webhook_url_saved": bool(_webhook_url(db)),
             "webhook_scope": _webhook_scope(db),
@@ -5149,6 +5280,69 @@ async def settings_device_order(
     db.commit()
     flash(request, "Device order saved.", "success")
     return redirect("/settings")
+
+
+@app.post("/settings/security/password")
+def settings_password_change(
+    request: Request,
+    csrf: str = Form(...),
+    current_password: str = Form(...),
+    new_password: str = Form(...),
+    confirm_password: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if not verify_password(current_password, user.password_hash):
+        flash(request, "Current password was incorrect.", "danger")
+        return redirect("/settings#account-security")
+    if new_password != confirm_password:
+        flash(request, "New passwords did not match.", "warning")
+        return redirect("/settings#account-security")
+    if len(new_password) < 10:
+        flash(request, "Use at least 10 characters for the new password.", "warning")
+        return redirect("/settings#account-security")
+    user.password_hash = hash_password(new_password)
+    db.add(models.AuditLog(user_id=user.id, action="password_changed", object_type="user", object_id=user.id))
+    db.commit()
+    flash(request, "Password changed.", "success")
+    return redirect("/settings#account-security")
+
+
+@app.post("/settings/security/reveal-pin")
+def settings_reveal_pin_change(
+    request: Request,
+    csrf: str = Form(...),
+    current_password: str = Form(...),
+    new_reveal_pin: str = Form(""),
+    confirm_reveal_pin: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if not verify_password(current_password, user.password_hash):
+        flash(request, "Account password was incorrect.", "danger")
+        return redirect("/settings#account-security")
+    if new_reveal_pin != confirm_reveal_pin:
+        flash(request, "Reveal password or PIN values did not match.", "warning")
+        return redirect("/settings#account-security")
+    if new_reveal_pin and len(new_reveal_pin) < 6:
+        flash(request, "Use at least 6 characters for a reveal password or PIN.", "warning")
+        return redirect("/settings#account-security")
+    user.secondary_password_hash = hash_password(new_reveal_pin) if new_reveal_pin else None
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="reveal_pin_changed" if new_reveal_pin else "reveal_pin_removed",
+            object_type="user",
+            object_id=user.id,
+        )
+    )
+    db.commit()
+    flash(request, "Reveal password or PIN updated." if new_reveal_pin else "Reveal password or PIN removed.", "success")
+    return redirect("/settings#account-security")
 
 
 @app.post("/settings/tokens")
@@ -5585,6 +5779,7 @@ def export_download(
 def history_page(
     request: Request,
     kind: str = "",
+    q: str = "",
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
@@ -5598,6 +5793,7 @@ def history_page(
                     "services_validated",
                     "ping_warning_scheduled",
                     "ping_warning_expected",
+                    "ping_warning_known_down",
                     "webhook_sent",
                     "webhook_failed",
                     "webhook_test",
@@ -5608,9 +5804,26 @@ def history_page(
         query = query.filter(models.AuditLog.action.ilike("credential_%"))
     elif kind == "smart-paste":
         query = query.filter(models.AuditLog.action.ilike("smart_paste_%"))
-    logs = query.order_by(models.AuditLog.created_at.desc()).limit(200).all()
+    logs = query.order_by(models.AuditLog.created_at.desc()).limit(500 if q else 200).all()
     human_logs = [_human_audit_log(db, item) for item in logs]
-    return render(request, "history.html", {"logs": human_logs, "kind": kind}, user=user)
+    if q:
+        needle = q.strip().lower()
+        human_logs = [
+            item
+            for item in human_logs
+            if needle in " ".join(
+                [
+                    item.get("title", ""),
+                    item.get("target", ""),
+                    item.get("details", ""),
+                    item.get("raw", ""),
+                    item.get("action", ""),
+                    item.get("object_type", ""),
+                    item.get("object_id", ""),
+                ]
+            ).lower()
+        ]
+    return render(request, "history.html", {"logs": human_logs, "kind": kind, "q": q}, user=user)
 
 
 @app.get("/raw/{object_type}/{object_id}", response_class=HTMLResponse)

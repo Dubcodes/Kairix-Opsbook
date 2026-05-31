@@ -70,9 +70,12 @@ def muted_ping_failures(db: Session) -> dict[str, str]:
     return {str(key): str(item) for key, item in value.items()}
 
 
+KNOWN_DOWN_VALUE = "known-down"
+
+
 def mute_ping_failure(db: Session, suggestion_id: str, event_id: str) -> None:
     muted = muted_ping_failures(db)
-    muted[suggestion_id] = str(event_id)
+    muted[suggestion_id] = KNOWN_DOWN_VALUE
     value = json.dumps(muted, sort_keys=True)
     row = db.query(models.AppSetting).filter_by(key="muted_ping_failures").first()
     if row:
@@ -89,7 +92,7 @@ def visible_suggestions(db: Session) -> list[dict[str, str]]:
             item
             for item in build_suggestions(db)
             if item["id"] not in dismissed
-            and not (item.get("mute_event_id") and muted.get(item["id"]) == str(item["mute_event_id"]))
+            and item["id"] not in muted
         ],
         dismissed,
     )

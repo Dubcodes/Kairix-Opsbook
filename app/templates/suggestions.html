@@ -31,7 +31,7 @@
           {% if suggestion.placeholder %}
             <input name="value" value="" placeholder="{{ suggestion.placeholder }}" spellcheck="true">
           {% endif %}
-          <button class="secondary" type="submit">{% if suggestion.action == 'mute-ping' %}Mark Expected{% elif suggestion.placeholder %}Apply{% else %}Clean Up{% endif %}</button>
+          <button class="secondary" type="submit">{% if suggestion.action == 'mute-ping' %}Known Down{% elif suggestion.placeholder %}Apply{% else %}Clean Up{% endif %}</button>
         </form>
       {% endif %}
       <form method="post" action="/suggestions/dismiss">

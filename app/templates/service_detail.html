@@ -169,7 +169,8 @@
       {% for port in service.ports %}
         <div class="list-row static clickable-card" data-card-href="/ports/{{ port.id }}/edit?return_to=/services/{{ service.id }}%3Ftab=ports">
           <a class="row-main" href="/ports/{{ port.id }}/edit?return_to=/services/{{ service.id }}%3Ftab=ports">
-            <strong>{{ port.host_port }}/{{ port.protocol }}</strong>
+            {% set port_status = port_validation_statuses.get(port.id, {"state": "unknown", "title": "Port not checked"}) %}
+            <strong>{{ port.host_port }}/{{ port.protocol }}<span class="status-dot status-{{ port_status.state }}" title="{{ port_status.title or port_status.label }}"></span></strong>
             <span>{% if port.internal_port %}internal {{ port.internal_port }} · {% endif %}{{ port.purpose or port.notes or "No purpose documented" }}</span>
           </a>
           <div class="actions compact-actions">

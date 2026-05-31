@@ -397,6 +397,7 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   gap: 16px;
   margin-bottom: 16px;
 }
+.two-col.flush-grid { margin-bottom: 0; }
 
 .section-title {
   display: flex;

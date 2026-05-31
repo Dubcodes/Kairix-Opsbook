@@ -10,7 +10,10 @@
       {% if target_href %} · <a href="{{ target_href }}">{{ target }}</a>{% elif target %} · {{ target }}{% endif %}
     </p>
   </div>
-  <a class="button secondary" href="/notes">Back to Notes</a>
+  <div class="actions">
+    <a class="button" href="/notes/{{ note.id }}/edit">Edit</a>
+    <a class="button secondary" href="/notes">Back to Notes</a>
+  </div>
 </section>
 
 <section class="panel">

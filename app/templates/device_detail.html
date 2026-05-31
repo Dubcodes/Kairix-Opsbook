@@ -85,21 +85,16 @@
         <a href="/ports">Add</a>
       </div>
       <div class="list compact">
-        {% for service in device.services %}
-          {% if service.local_url or service.public_url %}
-            <a class="quick-row link-row" href="{{ service.local_url or service.public_url }}" target="_blank">
-              <div><strong>{{ service.name }}</strong><span>{{ service.local_url or service.public_url }}</span></div>
-            </a>
-          {% endif %}
-          {% for port in service.ports %}
-            <div class="quick-row"><div><strong>{{ service.name }}</strong><span>{{ port.host_port }}/{{ port.protocol }} · {{ port.purpose or "service port" }}</span></div></div>
-          {% endfor %}
+        {% for item in quick_network_items %}
+          <a class="quick-row link-row" href="{{ item.href }}" {% if item.external %}target="_blank"{% endif %}>
+            <div><strong>{{ item.title }}</strong><span>{{ item.subtitle }}</span></div>
+          </a>
+        {% else %}
+          <p class="empty">No quick URLs or ports documented.</p>
         {% endfor %}
-        {% for port in device.ports %}
-          {% if not port.service %}
-            <div class="quick-row"><div><strong>{{ port.host_port }}/{{ port.protocol }}</strong><span>{{ port.purpose or port.notes }}</span></div></div>
-          {% endif %}
-        {% endfor %}
+        {% if quick_network_total > quick_network_limit %}
+          <a class="quick-row link-row" href="/devices/{{ device.id }}?tab=network"><div><strong>View all</strong><span>{{ quick_network_total - quick_network_limit }} more network item{% if quick_network_total - quick_network_limit != 1 %}s{% endif %}</span></div></a>
+        {% endif %}
       </div>
     </div>
   </section>
