@@ -1,11 +1,13 @@
 <section class="command-grid">
+  {% set context_map = command_contexts|default({}) %}
   {% for command in commands %}
-    {% set rendered = render_vars(command.command_template, device=device|default(none), service=service|default(none)) %}
+    {% set active_service = context_map.get(command.id) or service|default(none) %}
+    {% set rendered = render_vars(command.command_template, device=device|default(none), service=active_service) %}
     <article class="command-card risk-{{ command.risk_level }}">
       <div class="command-head">
         <div>
           <strong>{{ command.name }}</strong>
-          <span>{{ command.category }} · {{ command.where_to_run }}</span>
+          <span>{{ command.category }} · {{ command.where_to_run }}{% if context_map.get(command.id) %} · {{ active_service.name }}{% endif %}</span>
         </div>
         <span class="risk">{{ command.risk_level }}</span>
       </div>

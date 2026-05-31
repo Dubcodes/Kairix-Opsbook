@@ -222,7 +222,13 @@
     {% else %}<p class="empty">No device credentials yet.</p>{% endfor %}
   </section>
 {% elif tab == "commands" %}
-  <section class="section-title"><h2>Commands</h2><a class="button" href="/commands/new?applies_to_type=device&applies_to_id={{ device.id }}">Add Command</a></section>
+  <section class="section-title">
+    <h2>Commands</h2>
+    <div class="actions compact-actions">
+      <a class="button secondary" href="/commands">All Commands</a>
+      <a class="button" href="/commands/new?applies_to_type=device&applies_to_id={{ device.id }}">Add Command</a>
+    </div>
+  </section>
   {% include "partials/command_cards.html" %}
 {% elif tab == "hardware" %}
   <section class="panel">
@@ -341,9 +347,8 @@
       <label>Date <input name="image_date" type="date"></label>
       <label class="span-2">Image <input name="image_file" type="file" accept="image/*" required></label>
       <label class="span-2">Tags <input name="tags" placeholder="receipt, warranty, rack, serial" spellcheck="true"></label>
-      <label>Notes <textarea name="notes" spellcheck="true"></textarea></label>
-      <label>Extracted text <textarea name="ocr_text" placeholder="Optional text copied from the image. Automatic OCR is not enabled in this build." spellcheck="true"></textarea></label>
-      <p class="muted span-2">Image text can be stored here for search. Full selectable OCR needs an OCR engine added to the stack first.</p>
+      <label class="span-2">Notes <textarea name="notes" spellcheck="true"></textarea></label>
+      <p class="muted span-2">OCR runs automatically after upload. Extracted text is searchable and editable after the image is saved.</p>
       <div class="form-actions span-2"><button type="submit">Add Image</button></div>
     </form>
   </section>
@@ -362,6 +367,7 @@
           <label>Extracted text <textarea name="ocr_text" spellcheck="true">{{ image.ocr_text }}</textarea></label>
           <div class="form-actions span-2">
             <button class="secondary" type="submit">Save</button>
+            <button class="secondary small-button" type="submit" formaction="/device-images/{{ image.id }}/ocr" formmethod="post" title="Run OCR again and replace the extracted text.">Run OCR</button>
             {% if image.ocr_text %}<button class="ghost small-button" type="button" data-copy-text="{{ image.ocr_text }}">Copy Text</button>{% endif %}
             <span class="muted">{{ image.original_filename }} · {{ image.size_bytes }} bytes</span>
           </div>

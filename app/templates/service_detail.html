@@ -126,7 +126,13 @@
     <div class="warning">Docker API integration is disabled by design in this MVP. Prefer Smart Paste or a future read-only Kairix Agent.</div>
   </section>
 {% elif tab == "commands" %}
-  <section class="section-title"><h2>Commands</h2><a class="button" href="/commands/new?applies_to_type=service&applies_to_id={{ service.id }}">Add Command</a></section>
+  <section class="section-title">
+    <h2>Commands</h2>
+    <div class="actions compact-actions">
+      <a class="button secondary" href="/commands">All Commands</a>
+      <a class="button" href="/commands/new?applies_to_type=service&applies_to_id={{ service.id }}">Add Command</a>
+    </div>
+  </section>
   {% include "partials/command_cards.html" %}
 {% elif tab == "files" %}
   <section class="panel">

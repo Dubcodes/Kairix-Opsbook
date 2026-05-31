@@ -4,6 +4,7 @@ import copy
 import io
 import json
 import re
+import shutil
 import socket
 import secrets
 import subprocess
@@ -619,6 +620,31 @@ async def _save_image_upload(upload: UploadFile, subdir: str) -> dict[str, Any]:
     }
 
 
+def _extract_ocr_text(path: Path) -> tuple[str, str]:
+    engine = shutil.which("tesseract")
+    if not engine:
+        return "", "Automatic OCR is not available in this container yet."
+    try:
+        result = subprocess.run(
+            [engine, str(path), "stdout", "--psm", "6"],
+            capture_output=True,
+            text=True,
+            timeout=35,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return "", "OCR took too long and was skipped."
+    except OSError:
+        return "", "OCR could not start in this container."
+    if result.returncode != 0:
+        detail = (result.stderr or "").strip().splitlines()
+        return "", detail[-1] if detail else "OCR could not read this image."
+    text = re.sub(r"\n{3,}", "\n\n", (result.stdout or "").strip())
+    if not text:
+        return "", "OCR ran, but no readable text was found."
+    return text, ""
+
+
 RECOVERY_WORDS = [
     "anchor",
     "backup",
@@ -856,6 +882,196 @@ def _infer_tags_for_device(device: models.Device) -> str:
         if port.host_port in {139, 445}:
             tags.append("smb")
     return ", ".join(dict.fromkeys(tag for tag in tags if tag))
+
+
+def _context_tokens(*values: Any) -> set[str]:
+    tokens: set[str] = set()
+    for value in values:
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower()):
+            if len(token) > 1:
+                tokens.add(token)
+    return tokens
+
+
+def _command_search_text(command: models.Command) -> str:
+    return " ".join(
+        str(value or "")
+        for value in [
+            command.name,
+            command.category,
+            command.command_template,
+            command.short_description,
+            command.long_description,
+            command.help_low,
+            command.help_high,
+            command.where_to_run,
+            command.notes,
+        ]
+    ).lower()
+
+
+def _service_context_tokens(db: Session, service: models.Service) -> set[str]:
+    tokens = _context_tokens(
+        service.name,
+        service.type,
+        service.purpose,
+        service.local_url,
+        service.public_url,
+        service.repo_url,
+        service.compose_path,
+        service.data_path,
+        service.config_path,
+        service.log_path,
+        service.backup_path,
+        service.docker_project,
+        service.container_name,
+        service.image,
+        service.notes,
+        _infer_tags_for_service(service),
+        " ".join(tags_for(db, "service", service.id)),
+    )
+    if service.device:
+        tokens.update(
+            _context_tokens(
+                service.device.name,
+                service.device.type,
+                service.device.hostname,
+                service.device.primary_ip,
+                service.device.os_name,
+                service.device.os_version,
+                service.device.purpose,
+                _infer_tags_for_device(service.device),
+                " ".join(tags_for(db, "device", service.device.id)),
+            )
+        )
+        if service.device.primary_ip or service.device.hostname:
+            tokens.update({"host", "ping", "network"})
+    if service.repo_url:
+        tokens.update({"git", "github", "repo", "repository"})
+    if service.compose_path or service.docker_project or service.container_name or service.image:
+        tokens.update({"docker", "compose", "container", "logs"})
+    if service.ports:
+        tokens.update({"port", "ports", "network"})
+    if service.local_url or service.public_url:
+        tokens.update({"url", "network"})
+    if service.backup_path:
+        tokens.update({"backup", "storage"})
+    if tokens & {"debian", "ubuntu", "raspbian", "raspberry", "pi"}:
+        tokens.add("linux")
+    return tokens
+
+
+def _device_context_tokens(db: Session, device: models.Device) -> set[str]:
+    tokens = _context_tokens(
+        device.name,
+        device.type,
+        device.purpose,
+        device.hostname,
+        device.primary_ip,
+        device.os_name,
+        device.os_version,
+        device.location,
+        device.notes,
+        device.hardware.model if device.hardware else "",
+        device.hardware.cpu if device.hardware else "",
+        device.hardware.ram if device.hardware else "",
+        device.hardware.storage_summary if device.hardware else "",
+        _infer_tags_for_device(device),
+        " ".join(tags_for(db, "device", device.id)),
+    )
+    if device.primary_ip or device.hostname:
+        tokens.update({"host", "ping", "network"})
+    if tokens & {"debian", "ubuntu", "raspbian", "raspberry", "pi"}:
+        tokens.add("linux")
+    if device.services:
+        tokens.update({"service", "services"})
+    for service in device.services:
+        tokens.update(_service_context_tokens(db, service))
+    for port in device.ports:
+        tokens.update({"port", "ports", "network", str(port.host_port)})
+        if port.host_port == 22:
+            tokens.add("ssh")
+        if port.host_port in {139, 445}:
+            tokens.update({"smb", "samba", "file-sharing"})
+    return tokens
+
+
+def _generic_command_matches_context(command: models.Command, tokens: set[str]) -> bool:
+    text = _command_search_text(command)
+    category = (command.category or "").strip().lower()
+    if category in {"common", "storage", "networking", "ssh"} and tokens & {"host", "network", "linux", "ports"}:
+        return True
+    if any(term in text for term in ["proxmox", "pveversion", "pvecm", "vzdump", "qm ", "pct "]):
+        return "proxmox" in tokens or "pve" in tokens
+    if any(term in text for term in ["docker", "compose", "container"]):
+        return bool(tokens & {"docker", "compose", "container", "docker-host"})
+    if any(term in text for term in ["github", "git ", "git\n", "{{repo", "repo "]):
+        return bool(tokens & {"github", "git", "repo", "repository"})
+    if any(term in text for term in ["cloudflare", "cloudflared", "trycloudflare", "tunnel"]):
+        return bool(tokens & {"cloudflare", "cloudflared", "trycloudflare", "tunnel", "public-url"})
+    if any(term in text for term in ["debian", "ubuntu", "apt ", "apt\n"]):
+        return bool(tokens & {"debian", "ubuntu", "linux", "raspberry-pi", "raspbian"})
+    if any(term in text for term in ["systemctl", "journalctl", "earlyoom", "oom", "reboot-required", "vmstat"]):
+        return bool(tokens & {"linux", "debian", "ubuntu", "raspberry-pi", "docker"})
+    if any(term in text for term in ["smb", "samba"]):
+        return bool(tokens & {"smb", "samba", "file-sharing"})
+    if "windows" in text:
+        return "windows" in tokens or ("ping" in text and "host" in tokens)
+    if "macos" in text:
+        return "macos" in tokens or ("ping" in text and "host" in tokens)
+    if any(term in text for term in ["port", "ping", "network", "disk", "memory", "load", "uptime", "df -h", "du -h", "free -h"]):
+        return bool(tokens & {"host", "network", "linux", "ports", "storage", "docker"})
+    return False
+
+
+def _commands_for_service(db: Session, service: models.Service) -> list[models.Command]:
+    tokens = _service_context_tokens(db, service)
+    commands = (
+        db.query(models.Command)
+        .filter(
+            or_(
+                (models.Command.applies_to_type == "service")
+                & (models.Command.applies_to_id == service.id),
+                models.Command.applies_to_type == "generic",
+            )
+        )
+        .order_by(models.Command.category, models.Command.name)
+        .all()
+    )
+    return [
+        command
+        for command in commands
+        if command.applies_to_type != "generic" or _generic_command_matches_context(command, tokens)
+    ]
+
+
+def _commands_for_device(db: Session, device: models.Device) -> tuple[list[models.Command], dict[int, models.Service]]:
+    service_by_id = {service.id: service for service in device.services}
+    service_ids = list(service_by_id) or [0]
+    tokens = _device_context_tokens(db, device)
+    commands = (
+        db.query(models.Command)
+        .filter(
+            or_(
+                (models.Command.applies_to_type == "device")
+                & (models.Command.applies_to_id == device.id),
+                (models.Command.applies_to_type == "service")
+                & (models.Command.applies_to_id.in_(service_ids)),
+                models.Command.applies_to_type == "generic",
+            )
+        )
+        .order_by(models.Command.category, models.Command.name)
+        .all()
+    )
+    filtered: list[models.Command] = []
+    command_contexts: dict[int, models.Service] = {}
+    for command in commands:
+        if command.applies_to_type == "generic" and not _generic_command_matches_context(command, tokens):
+            continue
+        if command.applies_to_type == "service" and command.applies_to_id in service_by_id:
+            command_contexts[command.id] = service_by_id[command.applies_to_id]
+        filtered.append(command)
+    return filtered, command_contexts
 
 
 def _device_auto_purpose(device: models.Device, *, limit: int = 8) -> str:
@@ -1906,6 +2122,7 @@ AUDIT_ACTION_LABELS = {
     "note_tags_updated": "Note tags updated",
     "device_image_added": "Device image added",
     "device_image_edited": "Device image updated",
+    "device_image_ocr": "Device image OCR updated",
     "device_image_deleted": "Device image deleted",
     "user_suggestion_created": "Custom suggestion created",
     "user_suggestion_done": "Custom suggestion completed",
@@ -2806,18 +3023,7 @@ def device_detail(
     device = db.get(models.Device, device_id)
     if not device:
         raise HTTPException(404, "Device not found.")
-    commands = (
-        db.query(models.Command)
-        .filter(
-            or_(
-                (models.Command.applies_to_type == "device")
-                & (models.Command.applies_to_id == device.id),
-                models.Command.applies_to_type == "generic",
-            )
-        )
-        .order_by(models.Command.category, models.Command.name)
-        .all()
-    )
+    commands, command_contexts = _commands_for_device(db, device)
     notes = (
         db.query(models.Note)
         .filter(models.Note.object_type == "device", models.Note.object_id == device.id)
@@ -2877,6 +3083,7 @@ def device_detail(
             "device": device,
             "tab": tab,
             "commands": commands,
+            "command_contexts": command_contexts,
             "history": _device_history(db, device),
             "notes": notes,
             "images": images,
@@ -2959,12 +3166,15 @@ async def device_image_create(
         flash(request, str(exc), "warning")
         return redirect(f"/devices/{device.id}?tab=images")
     title = name.strip() or Path(saved["original_filename"]).stem or "Device image"
+    image_path = _stored_upload_path(DEVICE_IMAGE_DIR, saved["stored_filename"])
+    extracted_text, ocr_error = _extract_ocr_text(image_path)
+    final_ocr_text = ocr_text.strip() or extracted_text
     record = models.DeviceImage(
         device_id=device.id,
         name=title,
         image_date=_parse_optional_datetime(image_date),
         notes=notes,
-        ocr_text=ocr_text,
+        ocr_text=final_ocr_text,
         **saved,
     )
     db.add(record)
@@ -2976,11 +3186,21 @@ async def device_image_create(
             action="device_image_added",
             object_type="device_image",
             object_id=record.id,
-            details_json={"device_id": device.id, "filename": saved["original_filename"]},
+            details_json={
+                "device_id": device.id,
+                "filename": saved["original_filename"],
+                "ocr": "manual" if ocr_text.strip() else "auto" if extracted_text else "none",
+                "ocr_error": ocr_error,
+            },
         )
     )
     db.commit()
-    flash(request, "Image saved to this device.", "success")
+    if final_ocr_text:
+        flash(request, "Image saved and OCR text extracted.", "success")
+    elif ocr_error:
+        flash(request, f"Image saved. {ocr_error}", "warning")
+    else:
+        flash(request, "Image saved to this device.", "success")
     return redirect(f"/devices/{device.id}?tab=images")
 
 
@@ -3017,6 +3237,42 @@ def device_image_update(
     )
     db.commit()
     flash(request, "Image details saved.", "success")
+    return redirect(f"/devices/{image.device_id}?tab=images")
+
+
+@app.post("/device-images/{image_id}/ocr")
+def device_image_ocr(
+    request: Request,
+    image_id: int,
+    csrf: str = Form(...),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    image = db.get(models.DeviceImage, image_id)
+    if not image:
+        raise HTTPException(404, "Image not found.")
+    path = _stored_upload_path(DEVICE_IMAGE_DIR, image.stored_filename)
+    if not path.exists() or not path.is_file():
+        flash(request, "The image file is missing, so OCR could not run.", "warning")
+        return redirect(f"/devices/{image.device_id}?tab=images")
+    extracted_text, ocr_error = _extract_ocr_text(path)
+    if extracted_text:
+        image.ocr_text = extracted_text
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="device_image_ocr",
+                object_type="device_image",
+                object_id=image.id,
+                details_json={"device_id": image.device_id},
+            )
+        )
+        db.commit()
+        flash(request, "OCR text updated.", "success")
+    else:
+        flash(request, ocr_error or "OCR did not find readable text.", "warning")
     return redirect(f"/devices/{image.device_id}?tab=images")
 
 
@@ -3414,18 +3670,7 @@ def service_detail(
         raise HTTPException(404, "Service not found.")
     if tab == "login":
         tab = "creds"
-    commands = (
-        db.query(models.Command)
-        .filter(
-            or_(
-                (models.Command.applies_to_type == "service")
-                & (models.Command.applies_to_id == service.id),
-                models.Command.applies_to_type == "generic",
-            )
-        )
-        .order_by(models.Command.category, models.Command.name)
-        .all()
-    )
+    commands = _commands_for_service(db, service)
     notes = (
         db.query(models.Note)
         .filter(models.Note.object_type == "service", models.Note.object_id == service.id)
