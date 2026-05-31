@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% from "partials/status_macros.html" import device_label %}
 {% block title %}Settings · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
@@ -163,7 +164,7 @@
   <form method="post" action="/settings/device-order" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     {% for device in devices %}
-      <label>{{ device.name }} <input name="device_order_{{ device.id }}" type="number" min="0" max="999999" value="{{ device.display_order }}"></label>
+      <label>{{ device_label(device, device_ping_statuses) }} <input name="device_order_{{ device.id }}" type="number" min="0" max="999999" value="{{ device.display_order }}"></label>
     {% else %}
       <p class="empty">No devices yet.</p>
     {% endfor %}

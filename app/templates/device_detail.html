@@ -355,20 +355,33 @@
   <section class="image-grid">
     {% for image in images %}
       <article class="panel image-card">
-        <button class="image-preview" type="button" data-image-preview="/device-images/{{ image.id }}/file" data-image-title="{{ image.name or image.original_filename }}" title="Open image">
-          <img src="/device-images/{{ image.id }}/file" alt="{{ image.name or image.original_filename }}">
-        </button>
+        {% set image_title = image.name or image.original_filename %}
+        <div class="image-viewer" data-inline-image-viewer title="Scroll to zoom. Drag while zoomed. Double-click to reset.">
+          <img src="/device-images/{{ image.id }}/file" alt="{{ image_title }}" draggable="false">
+          {% if image.ocr_text %}
+            <div class="image-ocr-overlay" aria-label="Selectable OCR text">
+              <pre>{{ image.ocr_text }}</pre>
+            </div>
+          {% endif %}
+        </div>
+        <div class="image-card-actions">
+          <button class="secondary small-button" type="button" data-image-reset>Reset View</button>
+          {% if image.ocr_text %}<button class="secondary small-button" type="button" data-toggle-ocr>Hide Text</button>{% endif %}
+        </div>
         <form method="post" action="/device-images/{{ image.id }}/edit" class="form-grid">
           <input type="hidden" name="csrf" value="{{ csrf }}">
           <label>Name <input name="name" value="{{ image.name }}" spellcheck="true"></label>
           <label>Date <input name="image_date" type="date" value="{{ image.image_date|date_input }}"></label>
           <label class="span-2">Tags <input name="tags" value="{{ image_tags.get(image.id, [])|join(', ') }}" spellcheck="true"></label>
-          <label>Notes <textarea name="notes" spellcheck="true">{{ image.notes }}</textarea></label>
-          <label>Extracted text <textarea name="ocr_text" spellcheck="true">{{ image.ocr_text }}</textarea></label>
+          <label class="span-2">Notes <textarea name="notes" spellcheck="true">{{ image.notes }}</textarea></label>
+          <details class="span-2 collapsible-panel image-text-editor">
+            <summary><span><strong>OCR text</strong><small>Searchable extracted text stored with this image.</small></span></summary>
+            <label>Extracted text <textarea name="ocr_text" spellcheck="true">{{ image.ocr_text }}</textarea></label>
+          </details>
           <div class="form-actions span-2">
             <button class="secondary" type="submit">Save</button>
             <button class="secondary small-button" type="submit" formaction="/device-images/{{ image.id }}/ocr" formmethod="post" title="Run OCR again and replace the extracted text.">Run OCR</button>
-            {% if image.ocr_text %}<button class="ghost small-button" type="button" data-copy-text="{{ image.ocr_text }}">Copy Text</button>{% endif %}
+            {% if image.ocr_text %}<button class="ghost small-button" type="button" data-copy-target="ocr-overlay">Copy Text</button>{% endif %}
             <span class="muted">{{ image.original_filename }} · {{ image.size_bytes }} bytes</span>
           </div>
         </form>

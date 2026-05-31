@@ -201,6 +201,23 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   line-height: 1.35;
 }
 
+.live-search-item .live-search-device {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.live-search-item strong .live-search-device {
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.live-search-item .ping-dot {
+  width: 9px;
+  height: 9px;
+  margin-left: 0;
+}
+
 .sidebar {
   position: fixed;
   top: 64px;
@@ -417,48 +434,88 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   align-self: start;
 }
 
-.image-preview {
-  display: block;
+.image-viewer {
+  position: relative;
   width: 100%;
-  padding: 0;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 8px;
-  overflow: hidden;
-  background: var(--surface-soft);
-  aspect-ratio: 16 / 10;
+  background: #05070a;
   cursor: zoom-in;
+  touch-action: none;
 }
 
-.image-preview img {
+.image-viewer.is-zoomed {
+  cursor: grab;
+}
+
+.image-viewer.is-dragging {
+  cursor: grabbing;
+}
+
+.image-viewer img {
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   display: block;
   object-fit: contain;
-}
-
-.image-modal-panel {
-  width: min(96vw, 1200px);
-  max-height: 94vh;
-  display: grid;
-  gap: 10px;
-}
-
-.image-modal-stage {
-  min-height: 60vh;
-  max-height: 78vh;
-  overflow: auto;
-  display: grid;
-  place-items: center;
-  background: #05070a;
-  border-radius: 8px;
-  border: 1px solid var(--line);
-}
-
-.image-modal-stage img {
-  max-width: 100%;
-  max-height: 100%;
   transform-origin: center center;
-  transition: transform 120ms ease;
+  transition: transform 90ms ease;
+  user-select: none;
+  pointer-events: none;
+}
+
+.image-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.image-ocr-overlay {
+  position: absolute;
+  left: 10px;
+  right: 10px;
+  bottom: 10px;
+  z-index: 2;
+  max-height: 42%;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  color: var(--ink);
+  padding: 8px 9px;
+  cursor: text;
+  user-select: text;
+}
+
+.image-ocr-overlay[hidden] {
+  display: none;
+}
+
+.image-ocr-overlay pre {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: pre-wrap;
+}
+
+.image-text-editor {
+  margin-bottom: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-soft);
+}
+
+.image-text-editor textarea {
+  min-height: 120px;
 }
 
 .token-row.token-expired {

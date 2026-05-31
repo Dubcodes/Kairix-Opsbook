@@ -92,6 +92,9 @@
 
   function findCopySource(button) {
     const mode = button.getAttribute("data-copy-target");
+    if (mode === "ocr-overlay") {
+      return button.closest(".image-card")?.querySelector(".image-ocr-overlay")?.textContent || "";
+    }
     if (mode === "prev") {
       let node = button.previousElementSibling;
       while (node && node.tagName !== "PRE") node = node.previousElementSibling;
@@ -155,50 +158,91 @@
     return `${chosen.join(" ")} ${stamp}-${suffix}!`;
   }
 
-  function openImagePreview(src, title) {
-    const backdrop = document.createElement("div");
-    backdrop.className = "modal-backdrop";
-    let zoom = 1;
-    backdrop.innerHTML = `
-      <div class="modal-panel image-modal-panel">
-        <div class="section-title">
-          <h2>${escapeHtml(title || "Image")}</h2>
-          <div class="actions compact-actions">
-            <button class="secondary small-button" type="button" data-image-zoom-out>Zoom Out</button>
-            <button class="secondary small-button" type="button" data-image-zoom-in>Zoom In</button>
-            <button class="ghost small-button" type="button" data-image-close>Close</button>
-          </div>
-        </div>
-        <div class="image-modal-stage"><img src="${escapeHtml(src)}" alt=""></div>
-      </div>`;
-    document.body.appendChild(backdrop);
-    const image = backdrop.querySelector("img");
+  function initInlineImageViewers() {
+    document.querySelectorAll("[data-inline-image-viewer]").forEach((viewer) => {
+      if (viewer.dataset.viewerReady === "true") return;
+      const image = viewer.querySelector("img");
+      if (!image) return;
+      viewer.dataset.viewerReady = "true";
 
-    function updateZoom() {
-      image.style.transform = `scale(${zoom})`;
-    }
+      let scale = 1;
+      let offsetX = 0;
+      let offsetY = 0;
+      let dragging = false;
+      let startX = 0;
+      let startY = 0;
+      let startOffsetX = 0;
+      let startOffsetY = 0;
 
-    backdrop.addEventListener("click", (event) => {
-      if (event.target === backdrop || event.target.closest("[data-image-close]")) {
-        backdrop.remove();
-        return;
+      function clamp(value, min, max) {
+        return Math.max(min, Math.min(max, value));
       }
-      if (event.target.closest("[data-image-zoom-in]")) {
-        zoom = Math.min(4, zoom + 0.25);
-        updateZoom();
-        return;
+
+      function apply() {
+        image.style.transform = `translate(${offsetX}px, ${offsetY}px) scale(${scale})`;
+        viewer.classList.toggle("is-zoomed", scale > 1.01);
       }
-      if (event.target.closest("[data-image-zoom-out]")) {
-        zoom = Math.max(0.5, zoom - 0.25);
-        updateZoom();
+
+      function reset() {
+        scale = 1;
+        offsetX = 0;
+        offsetY = 0;
+        apply();
       }
+
+      viewer.addEventListener("wheel", (event) => {
+        if (event.target.closest(".image-ocr-overlay")) return;
+        event.preventDefault();
+        const previousScale = scale;
+        const nextScale = clamp(scale + (event.deltaY < 0 ? 0.18 : -0.18), 1, 5);
+        if (nextScale === scale) return;
+        scale = nextScale;
+        if (scale <= 1.01) {
+          reset();
+          return;
+        }
+        const rect = viewer.getBoundingClientRect();
+        const pointX = event.clientX - rect.left - rect.width / 2;
+        const pointY = event.clientY - rect.top - rect.height / 2;
+        const ratio = scale / previousScale;
+        offsetX = pointX - (pointX - offsetX) * ratio;
+        offsetY = pointY - (pointY - offsetY) * ratio;
+        apply();
+      }, {passive: false});
+
+      viewer.addEventListener("pointerdown", (event) => {
+        if (event.button !== 0 || event.target.closest(".image-ocr-overlay") || scale <= 1.01) return;
+        dragging = true;
+        startX = event.clientX;
+        startY = event.clientY;
+        startOffsetX = offsetX;
+        startOffsetY = offsetY;
+        viewer.classList.add("is-dragging");
+        viewer.setPointerCapture(event.pointerId);
+      });
+
+      viewer.addEventListener("pointermove", (event) => {
+        if (!dragging) return;
+        offsetX = startOffsetX + event.clientX - startX;
+        offsetY = startOffsetY + event.clientY - startY;
+        apply();
+      });
+
+      ["pointerup", "pointercancel", "lostpointercapture"].forEach((eventName) => {
+        viewer.addEventListener(eventName, () => {
+          dragging = false;
+          viewer.classList.remove("is-dragging");
+        });
+      });
+
+      viewer.addEventListener("dblclick", (event) => {
+        if (!event.target.closest(".image-ocr-overlay")) reset();
+      });
+
+      const resetButton = viewer.closest(".image-card")?.querySelector("[data-image-reset]");
+      if (resetButton) resetButton.addEventListener("click", reset);
+      apply();
     });
-    backdrop.addEventListener("wheel", (event) => {
-      if (!event.ctrlKey && !event.metaKey) return;
-      event.preventDefault();
-      zoom = Math.max(0.5, Math.min(4, zoom + (event.deltaY < 0 ? 0.2 : -0.2)));
-      updateZoom();
-    }, {passive: false});
   }
 
   function requestMaskedChallenge(message, options = {}) {
@@ -326,15 +370,37 @@
           const badge = document.createElement("small");
           badge.textContent = item.type || "Result";
           const title = document.createElement("strong");
-          title.textContent = item.title || "Result";
+          if (item.device_position === "title" && item.device_name) {
+            appendDevicePing(title, item.device_name, item.device_ping_state, item.device_ping_label);
+          } else {
+            title.textContent = item.title || "Result";
+          }
           const subtitle = document.createElement("span");
-          subtitle.textContent = item.subtitle || "";
+          if (item.device_position === "subtitle" && item.device_name) {
+            appendDevicePing(subtitle, item.device_name, item.device_ping_state, item.device_ping_label);
+            if (item.subtitle) subtitle.append(document.createTextNode(` · ${item.subtitle}`));
+          } else {
+            subtitle.textContent = item.subtitle || "";
+          }
           link.append(badge, title, subtitle);
           host.dropdown.appendChild(link);
         });
       }
       host.dropdown.hidden = false;
       host.input.setAttribute("aria-expanded", "true");
+    }
+
+    function appendDevicePing(parent, name, state, label) {
+      const wrapper = document.createElement("span");
+      wrapper.className = "device-with-ping live-search-device";
+      wrapper.append(document.createTextNode(name || "Unlinked"));
+      if (state) {
+        const dot = document.createElement("span");
+        dot.className = `ping-dot ping-${state}`;
+        dot.setAttribute("title", `Ping: ${label || state}`);
+        wrapper.append(dot);
+      }
+      parent.append(wrapper);
     }
 
     async function run(host) {
@@ -420,12 +486,12 @@
       return;
     }
 
-    const imagePreview = event.target.closest("[data-image-preview]");
-    if (imagePreview) {
-      openImagePreview(
-        imagePreview.getAttribute("data-image-preview"),
-        imagePreview.getAttribute("data-image-title")
-      );
+    const ocrToggle = event.target.closest("[data-toggle-ocr]");
+    if (ocrToggle) {
+      const overlay = ocrToggle.closest(".image-card")?.querySelector(".image-ocr-overlay");
+      if (!overlay) return;
+      overlay.hidden = !overlay.hidden;
+      ocrToggle.textContent = overlay.hidden ? "Show Text" : "Hide Text";
       return;
     }
 
@@ -618,6 +684,7 @@
   highlightFocusedField();
   initLiveSearch();
   initAutoSubmitFilters();
+  initInlineImageViewers();
 
   const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
   if (timeoutMeta) {
