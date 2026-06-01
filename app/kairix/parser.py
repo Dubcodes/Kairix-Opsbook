@@ -21,8 +21,14 @@ printf '\n=== DOCKER COMPOSE PROJECTS ===\n'; docker compose ls 2>/dev/null || t
 printf '\n=== CLOUDFLARE TUNNELS ===\n'; docker ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | awk '$2 ~ /cloudflare\/cloudflared/ {print $1}' | while read -r container; do printf '\n--- %s ---\n' "$container"; docker logs --tail 200 "$container" 2>&1 | grep -Eo 'https://[-A-Za-z0-9.]+\.trycloudflare\.com' | tail -n 5; done 2>/dev/null || true; \
 printf '\n=== LISTENING PORTS ===\n'; ss -tulpn 2>/dev/null | sed -n '1,80p'"""
 
+CLOUDFLARED_URL_COMMAND = r"""printf '=== CLOUDFLARE TUNNELS ===\n'
+docker ps --format '{{.Names}}\t{{.Image}}' | awk '$2 ~ /cloudflare\/cloudflared/ {print $1}' | while read -r container; do
+  printf '\n--- %s ---\n' "$container"
+  docker logs --tail 300 "$container" 2>&1 | grep -Eo 'https://[-A-Za-z0-9.]+\.trycloudflare\.com' | tail -n 3
+done"""
+
 IP_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
-URL_RE = re.compile(r"https?://[^\s)'\"<>]+", re.IGNORECASE)
+URL_RE = re.compile(r"https?://[^\s)\]'\"<>]+", re.IGNORECASE)
 PATH_RE = re.compile(r"(?<![\w.-])/(?:[\w .@+-]+/)*[\w .@+-]+")
 PORT_RE = re.compile(r"\bport\s*(?:is|:)?\s*(\d{2,5})\b", re.IGNORECASE)
 COMMAND_RE = re.compile(
@@ -80,7 +86,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     listening_ports = _section(effective_text, "LISTENING PORTS")
 
     ips = _unique(IP_RE.findall(ip_section or effective_text))
-    urls = _unique(URL_RE.findall(effective_text if not is_inventory else ""))
+    urls = _unique(_normalize_discovered_url(url) for url in URL_RE.findall(effective_text if not is_inventory else ""))
     paths = _unique(_clean_paths(PATH_RE.findall(effective_text)))
     ports = _unique([match.group(1) for match in PORT_RE.finditer(effective_text)])
     if not is_inventory:
@@ -112,6 +118,24 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         if stripped and not COMMAND_RE.search(stripped) and not URL_RE.search(stripped) and len(stripped) < 80:
             previous_label = stripped.strip(":")
     commands = _unique_commands(commands)
+    cloudflared_containers = _cloudflared_container_names(docker_containers)
+    if _looks_like_temporary_cloudflared(effective_text) or cloudflared_containers:
+        command_template = _cloudflared_url_command(cloudflared_containers)
+        container_note = ", ".join(cloudflared_containers) if cloudflared_containers else "running cloudflared containers"
+        commands = _unique_commands(
+            commands
+            + [
+                {
+                    "command": command_template,
+                    "name": "Find temporary Cloudflare tunnel URLs",
+                    "category": "Network lookup",
+                    "where_to_run": "Docker host SSH shell",
+                    "risk_level": "safe",
+                    "help_low": "Lists quick TryCloudflare URLs from running cloudflared containers. Paste the output back into Smart Paste so Opsbook can attach the URL to the matching service.",
+                    "notes": f"Generated because Smart Paste saw temporary cloudflared / trycloudflare activity. Targets: {container_note}.",
+                }
+            ]
+        )
 
     usernames = _unique(_safe_usernames(raw_text))
     primary_ip = _primary_ip(ips)
@@ -140,6 +164,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                 }
             )
     _attach_cloudflare_urls(service_items, _cloudflare_tunnel_urls(cloudflare_tunnels))
+    service_items = [item for item in service_items if not _is_detached_cloudflared_placeholder(item)]
     if not is_inventory:
         service_items.extend(_note_services(raw_text))
         service_items.extend(_inline_service_entries(raw_text))
@@ -231,7 +256,16 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     ]
     suggested_services = service_items
     suggested_commands = [
-        {"name": command["name"], "command_template": command["command"], "confidence": "medium"}
+        {
+            "name": command["name"],
+            "command_template": command["command"],
+            "category": command.get("category", ""),
+            "where_to_run": command.get("where_to_run", ""),
+            "risk_level": command.get("risk_level", ""),
+            "help_low": command.get("help_low", ""),
+            "notes": command.get("notes", ""),
+            "confidence": "medium",
+        }
         for command in commands
     ]
     suggested_credentials = [
@@ -307,6 +341,18 @@ def _is_private_url(url: str) -> bool:
     parsed = urlparse(url)
     host = parsed.hostname or ""
     return host.startswith("192.168.") or host.startswith("10.") or host in {"localhost", "127.0.0.1"}
+
+
+def _normalize_discovered_url(url: str) -> str:
+    clean = url.strip().rstrip(".,;")
+    try:
+        parsed = urlparse(clean)
+    except ValueError:
+        return clean
+    host = parsed.hostname or ""
+    if host.endswith("trycloudflare.com"):
+        return parsed._replace(path="", params="", query="", fragment="").geturl()
+    return clean
 
 
 def _primary_ip(ips: list[str]) -> str:
@@ -387,13 +433,54 @@ def _cloudflare_tunnel_urls(text: str) -> dict[str, list[str]]:
             current = header.group(1).strip()
             tunnels.setdefault(current, [])
             continue
-        urls = [url for url in URL_RE.findall(clean) if "trycloudflare.com" in url.lower()]
+        urls = [_normalize_discovered_url(url) for url in URL_RE.findall(clean) if "trycloudflare.com" in url.lower()]
         if not urls:
             continue
         key = current or "cloudflare"
         tunnels.setdefault(key, [])
         tunnels[key].extend(_unique(urls))
     return {name: _unique(urls) for name, urls in tunnels.items() if urls}
+
+
+def _looks_like_temporary_cloudflared(text: str) -> bool:
+    lowered = text.lower()
+    return (
+        "trycloudflare.com" in lowered
+        or "quick tunnel" in lowered
+        or "cloudflare/cloudflared" in lowered
+        or ("cloudflared" in lowered and "requesting new quick tunnel" in lowered)
+    )
+
+
+def _cloudflared_container_names(text: str) -> list[str]:
+    names: list[str] = []
+    for line in text.splitlines():
+        clean = line.strip()
+        if "cloudflare/cloudflared" not in clean.lower():
+            continue
+        name = clean.split(None, 1)[0]
+        if name.lower() in {"names", "name"}:
+            continue
+        if re.fullmatch(r"[A-Za-z0-9_.-]+", name) and name not in names:
+            names.append(name)
+    return names
+
+
+def _shell_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
+def _cloudflared_url_command(container_names: list[str]) -> str:
+    if not container_names:
+        return CLOUDFLARED_URL_COMMAND
+    quoted = " ".join(_shell_quote(name) for name in container_names)
+    return (
+        "printf '=== CLOUDFLARE TUNNELS ===\\n'\n"
+        f"for container in {quoted}; do\n"
+        "  printf '\\n--- %s ---\\n' \"$container\"\n"
+        "  docker logs --tail 300 \"$container\" 2>&1 | grep -Eo 'https://[-A-Za-z0-9.]+\\.trycloudflare\\.com' | tail -n 3\n"
+        "done"
+    )
 
 
 def _attach_cloudflare_urls(services: list[dict[str, Any]], tunnels: dict[str, list[str]]) -> None:
@@ -448,13 +535,33 @@ def _cloudflare_target_service(services: list[dict[str, Any]], container_name: s
         )
         if match:
             return match
+    target_hint = _cloudflare_target_hint(container_name)
+    if target_hint:
+        scored: list[tuple[int, dict[str, Any]]] = []
+        for item in candidates:
+            candidate_text = _norm_name(str(item.get("name", "") + " " + item.get("container_name", "")))
+            if target_hint in candidate_text or candidate_text in target_hint:
+                scored.append((max(len(target_hint), len(candidate_text)), item))
+        if scored:
+            return sorted(scored, key=lambda item: item[0], reverse=True)[0][1]
     with_ports = [item for item in candidates if item.get("ports")]
     return (with_ports or candidates)[0]
+
+
+def _cloudflare_target_hint(container_name: str) -> str:
+    hint = _norm_name(container_name)
+    for marker in ["trycloudflare", "cloudflared", "cloudflare", "temporary", "temp", "tunnel", "public", "control", "url"]:
+        hint = hint.replace(marker, "")
+    return hint.strip()
 
 
 def _is_cloudflare_container(item: dict[str, Any]) -> bool:
     text = " ".join(str(item.get(key, "")) for key in ["name", "container_name", "image"]).lower()
     return "cloudflared" in text or "cloudflare/cloudflared" in text
+
+
+def _is_detached_cloudflared_placeholder(item: dict[str, Any]) -> bool:
+    return _is_cloudflare_container(item) and not item.get("ports") and not item.get("urls") and not item.get("credentials")
 
 
 def _append_service_url(service: dict[str, Any], url: str, url_type: str, confidence: str) -> None:
@@ -1024,10 +1131,12 @@ def _looks_like_note_service_name(value: str) -> bool:
         not clean
         or len(clean) > 60
         or lower in {"root", "user", "main ip", "ssh", "hostname", "os", "admin", "serveruser"}
+        or re.match(r"^\d{4}-\d{2}-\d{2}[t\s]\d{2}:", lower)
+        or lower.startswith(("inf ", "err ", "wrn "))
         or any(word in lower for word in ["folder", "folders", "rules", "shares", "by ip", "check ", "restart ", "start/stop", "recommended", "update system"])
         or COMMAND_RE.search(clean)
         or IP_RE.search(clean)
-        or re.search(r"[@\\\\]", clean)
+        or re.search(r"[@\\\\|]", clean)
     ):
         return False
     if "." in clean and not any(word in lower for word in ["app", "tools"]):

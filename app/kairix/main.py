@@ -1823,6 +1823,92 @@ def _preserve_existing_service_url_paths(service_hint: dict[str, Any], existing:
             break
 
 
+def _import_badge(kind: str, label: str, title: str) -> dict[str, str]:
+    return {"kind": kind, "label": label, "title": title}
+
+
+def _import_list_label(values: list[str], *, empty: str = "") -> str:
+    clean = [value for value in dict.fromkeys(values) if value]
+    if not clean:
+        return empty
+    if len(clean) == 1:
+        return clean[0]
+    if len(clean) == 2:
+        return f"{clean[0]} and {clean[1]}"
+    return f"{', '.join(clean[:2])}, and {len(clean) - 2} more"
+
+
+def _suggested_url_field(url_hint: dict[str, Any]) -> str:
+    return "public_url" if str(url_hint.get("url_type") or "").lower() == "public" else "local_url"
+
+
+def _service_url_conflicts(existing: models.Service, service_hint: dict[str, Any]) -> list[str]:
+    conflicts: list[str] = []
+    for url_hint in service_hint.get("urls", []):
+        suggested = str(url_hint.get("url") or "").strip()
+        if not suggested:
+            continue
+        field = _suggested_url_field(url_hint)
+        current = str(getattr(existing, field) or "").strip()
+        if current and current != suggested:
+            conflicts.append("public URL" if field == "public_url" else "local URL")
+    return conflicts
+
+
+def _service_metadata_changes(existing: models.Service, service_hint: dict[str, Any]) -> tuple[list[str], list[str]]:
+    fields = [
+        ("docker_project", "stack/group", "stack_group"),
+        ("compose_path", "compose path", "compose_path"),
+        ("container_name", "container name", "container_name"),
+        ("image", "image", "image"),
+    ]
+    fills: list[str] = []
+    conflicts: list[str] = []
+    for attr, label, hint_key in fields:
+        suggested = str(service_hint.get(hint_key) or "").strip()
+        current = str(getattr(existing, attr) or "").strip()
+        if not suggested:
+            continue
+        if not current:
+            fills.append(label)
+        elif current != suggested:
+            conflicts.append(label)
+    return fills, conflicts
+
+
+def _annotate_service_import_badges(service: dict[str, Any], duplicate: models.Service | None) -> None:
+    badges: list[dict[str, str]] = []
+    if not duplicate:
+        badges.append(_import_badge("new", "New service", "Opsbook does not see a matching service on the selected device. Applying will create a new service record."))
+    else:
+        url_adds = sum(1 for url in service.get("urls", []) if url.get("selected"))
+        port_adds = sum(1 for port in service.get("ports", []) if port.get("selected"))
+        credential_adds = sum(1 for credential in service.get("credentials", []) if credential.get("selected"))
+        metadata_fills, metadata_conflicts = _service_metadata_changes(duplicate, service)
+        conflicts = _service_url_conflicts(duplicate, service) + metadata_conflicts
+        additions: list[str] = []
+        if url_adds:
+            additions.append(f"{url_adds} URL{'s' if url_adds != 1 else ''}")
+        if port_adds:
+            additions.append(f"{port_adds} port{'s' if port_adds != 1 else ''}")
+        if credential_adds:
+            additions.append(f"{credential_adds} login{'s' if credential_adds != 1 else ''}")
+        if conflicts:
+            label = f"Conflict: {_import_list_label(conflicts)}"
+            badges.append(_import_badge("conflict", label, "Smart Paste found a matching service, but the pasted value differs from a value already stored. Review before applying."))
+        if metadata_fills:
+            label = f"Updating entry: {_import_list_label(metadata_fills)}"
+            badges.append(_import_badge("update", label, "A matching service exists and Smart Paste can fill these blank metadata fields."))
+        if additions:
+            label = f"Partially exists; adds {_import_list_label(additions)}"
+            badges.append(_import_badge("partial", label, "A matching service already exists. Only the listed missing details are new or blank-field fills."))
+        elif not conflicts and not metadata_fills:
+            badges.append(_import_badge("exists", "Already exists", "A matching service already exists and Smart Paste did not find obvious new details for it."))
+    if any("trycloudflare.com" in str(url.get("url") or "").lower() for url in service.get("urls", [])):
+        badges.append(_import_badge("temp", "Temporary tunnel", "This service includes a trycloudflare.com quick tunnel URL. It may change after the cloudflared container restarts."))
+    service["badges"] = badges
+
+
 def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[str, Any]:
     parsed = dict(parsed)
     matched_device = _match_device_for_import(db, parsed.get("device", {}))
@@ -1833,6 +1919,11 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
         duplicate = _duplicate_command(db, command.get("command_template", ""))
         command["duplicate_id"] = duplicate.id if duplicate else None
         command["selected"] = duplicate is None and bool(command.get("command_template"))
+        command["badges"] = [
+            _import_badge("exists", "Already exists", "This exact command already exists in the command library.")
+            if duplicate
+            else _import_badge("new", "New command", "This command is not currently in the command library.")
+        ]
     for service in parsed.get("services", []):
         has_context = bool(
             service.get("ports")
@@ -1847,12 +1938,48 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
             duplicate = _match_service_for_import(db, existing_device_id, service)
         if duplicate:
             _preserve_existing_service_url_paths(service, duplicate)
-        service["duplicate_id"] = duplicate.id if duplicate else None
-        service["selected"] = has_context
         for url in service.get("urls", []):
-            duplicate_url = db.query(models.Url).filter(models.Url.url == str(url.get("url", ""))).first()
+            url_value = str(url.get("url", "")).strip()
+            duplicate_url = db.query(models.Url).filter(models.Url.url == url_value).first()
+            duplicate_service = None
+            if existing_device_id and url_value:
+                duplicate_service = (
+                    db.query(models.Service)
+                    .filter(
+                        models.Service.device_id == existing_device_id,
+                        or_(models.Service.local_url == url_value, models.Service.public_url == url_value),
+                    )
+                    .first()
+                )
             url["duplicate_id"] = duplicate_url.id if duplicate_url else None
-            url["selected"] = duplicate_url is None
+            url["duplicate_service_id"] = duplicate_service.id if duplicate_service else None
+            url["selected"] = duplicate_url is None and duplicate_service is None
+            url["badges"] = []
+            if duplicate_url or duplicate_service:
+                url["badges"].append(_import_badge("exists", "Already documented", "This URL is already stored in Opsbook."))
+            else:
+                url["badges"].append(_import_badge("new", "New URL", "This URL is not stored yet and will be linked to the service if selected."))
+            if "trycloudflare.com" in url_value.lower():
+                url["badges"].append(_import_badge("temp", "Temporary tunnel", "Quick TryCloudflare URLs are temporary and may change when cloudflared restarts."))
+        for port in service.get("ports", []):
+            duplicate_port = None
+            if existing_device_id and port.get("host_port"):
+                duplicate_port = (
+                    db.query(models.Port)
+                    .filter(
+                        models.Port.device_id == existing_device_id,
+                        models.Port.host_port == int(port["host_port"]),
+                        models.Port.protocol == str(port.get("protocol", "tcp")),
+                    )
+                    .first()
+                )
+            port["duplicate_id"] = duplicate_port.id if duplicate_port else None
+            port["selected"] = duplicate_port is None
+            port["badges"] = [
+                _import_badge("exists", "Already documented", "This port is already stored on the selected device.")
+                if duplicate_port
+                else _import_badge("new", "New port", "This port is not stored yet and will be linked to the service if selected.")
+            ]
         for credential in service.get("credentials", []):
             label = str(credential.get("label", ""))
             username = str(credential.get("username", ""))
@@ -1867,8 +1994,17 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
                 )
             credential["duplicate_id"] = duplicate_credential.id if duplicate_credential else None
             credential["selected"] = bool(credential.get("secret")) and duplicate_credential is None
+            credential["badges"] = [
+                _import_badge("exists", "Duplicate login", "A matching login already exists for this service or device.")
+                if duplicate_credential
+                else _import_badge("new", "New login", "This login does not appear to be stored yet.")
+            ]
+        service["duplicate_id"] = duplicate.id if duplicate else None
+        service["selected"] = has_context
+        _annotate_service_import_badges(service, duplicate)
     for port in parsed.get("ports", []):
         port["selected"] = False
+        port["badges"] = [_import_badge("skip", "Loose; optional", "This listening port was not tied to a Docker service. Select it only if you want a standalone port record.")]
         if existing_device_id and port.get("host_port"):
             duplicate = (
                 db.query(models.Port)
@@ -1876,10 +2012,20 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
                 .first()
             )
             port["duplicate_id"] = duplicate.id if duplicate else None
+            if duplicate:
+                port["badges"] = [_import_badge("exists", "Already documented", "This standalone port is already stored on the selected device.")]
     for url in parsed.get("urls", []):
-        duplicate = db.query(models.Url).filter(models.Url.url == str(url.get("url", ""))).first()
+        url_value = str(url.get("url", "")).strip()
+        duplicate = db.query(models.Url).filter(models.Url.url == url_value).first()
         url["duplicate_id"] = duplicate.id if duplicate else None
         url["selected"] = duplicate is None
+        url["badges"] = [
+            _import_badge("exists", "Already documented", "This URL is already stored in Opsbook.")
+            if duplicate
+            else _import_badge("new", "New URL", "This URL is not stored yet.")
+        ]
+        if "trycloudflare.com" in url_value.lower():
+            url["badges"].append(_import_badge("temp", "Temporary tunnel", "Quick TryCloudflare URLs are temporary and may change when cloudflared restarts."))
     for credential in parsed.get("credentials", []):
         duplicate = None
         label = str(credential.get("label", ""))
@@ -1894,6 +2040,11 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
             duplicate = query.first()
         credential["duplicate_id"] = duplicate.id if duplicate else None
         credential["selected"] = bool(credential.get("secret")) and duplicate is None
+        credential["badges"] = [
+            _import_badge("exists", "Duplicate login", "A matching credential already exists.")
+            if duplicate
+            else _import_badge("new", "New login", "This credential does not appear to be stored yet.")
+        ]
     for token in parsed.get("tokens", []):
         label = str(token.get("label", ""))
         username = str(token.get("username", ""))
@@ -1910,6 +2061,11 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
             )
         token["duplicate_id"] = duplicate.id if duplicate else None
         token["selected"] = bool(token.get("token")) and duplicate is None
+        token["badges"] = [
+            _import_badge("exists", "Duplicate token", "A matching token already exists.")
+            if duplicate
+            else _import_badge("new", "New token", "This token does not appear to be stored yet.")
+        ]
     return parsed
 
 
@@ -1977,6 +2133,48 @@ def _create_token_credential_from_import(
         )
     )
     return credential
+
+
+def _apply_loose_urls_from_import(
+    db: Session,
+    form: Any,
+    parsed: dict[str, Any],
+    record: models.ImportRecord,
+    default_device: models.Device | None,
+) -> int:
+    created_urls = 0
+    for index_raw in form.getlist("urls"):
+        item = parsed.get("urls", [])[int(index_raw)]
+        url_value = str(form.get(f"url_value_{index_raw}") or item["url"]).strip()
+        if not url_value:
+            continue
+        duplicate = db.query(models.Url).filter(models.Url.url == url_value).first()
+        if duplicate:
+            continue
+        service_id_raw = str(form.get(f"url_service_{index_raw}") or "").strip()
+        linked_service = db.get(models.Service, int(service_id_raw)) if service_id_raw.isdigit() else None
+        if not linked_service and not default_device:
+            continue
+        url_type = str(form.get(f"url_type_{index_raw}") or item.get("url_type", "local"))
+        if linked_service and "trycloudflare.com" in url_value.lower():
+            url_type = "public"
+        url_device_id = linked_service.device_id if linked_service else default_device.id
+        if linked_service:
+            if url_type == "public":
+                linked_service.public_url = url_value
+            elif url_type == "local":
+                linked_service.local_url = url_value
+        db.add(
+            models.Url(
+                device_id=url_device_id,
+                service_id=linked_service.id if linked_service else None,
+                url=url_value,
+                url_type=url_type,
+                notes=f"Imported from Smart Paste {record.id}.",
+            )
+        )
+        created_urls += 1
+    return created_urls
 
 
 def _quick_credentials_for_device(db: Session, device: models.Device) -> list[models.Credential]:
@@ -5398,6 +5596,7 @@ def smart_paste_review(
             "record": record,
             "parsed": _annotate_import_suggestions(db, _decrypted_parsed(record)),
             "devices": _device_order_query(db).all(),
+            "services": _service_order_query(db).all(),
         },
         user=user,
     )
@@ -5429,10 +5628,12 @@ async def smart_paste_apply(
         db.commit()
         flash(request, "Smart Paste review saved with no changes applied.", "success")
         return redirect("/smart-paste")
+    selected_url_indexes = [str(value) for value in form.getlist("urls")]
+    unlinked_url_selected = any(not str(form.get(f"url_service_{index}") or "").strip().isdigit() for index in selected_url_indexes)
     device_bound_selected = any(
         form.getlist(name)
-        for name in ["services", "ports", "urls", "credentials", "service_credentials", "service_urls", "delete_missing_services"]
-    ) or bool(form.get("apply_hardware"))
+        for name in ["services", "ports", "credentials", "service_credentials", "service_urls", "delete_missing_services"]
+    ) or unlinked_url_selected or bool(form.get("apply_hardware"))
     if target_raw == "new" and device_bound_selected and not apply_device:
         flash(
             request,
@@ -5441,11 +5642,12 @@ async def smart_paste_apply(
         )
         return redirect(f"/smart-paste/{record.id}")
     requires_device = device_bound_selected or target_raw != "new" or apply_device
-    if not requires_device and (form.getlist("tokens") or form.getlist("commands")):
+    if not requires_device and (form.getlist("tokens") or form.getlist("commands") or form.getlist("urls")):
         created_tokens = 0
         for index_raw in form.getlist("tokens"):
             if _create_token_credential_from_import(db, user, form, parsed, str(index_raw), record, None):
                 created_tokens += 1
+        created_urls = _apply_loose_urls_from_import(db, form, parsed, record, None)
         created_commands = 0
         for index_raw in form.getlist("commands"):
             item = parsed.get("commands", [])[int(index_raw)]
@@ -5471,10 +5673,10 @@ async def smart_paste_apply(
             )
             created_commands += 1
         record.status = "applied"
-        db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id, details_json={"tokens": created_tokens, "commands": created_commands}))
+        db.add(models.AuditLog(user_id=user.id, action="smart_paste_applied", object_type="import", object_id=record.id, details_json={"tokens": created_tokens, "commands": created_commands, "urls": created_urls}))
         db.commit()
-        flash(request, f"Stored {created_tokens} token/API item(s) and {created_commands} command(s).", "success")
-        return redirect("/commands" if created_commands else "/tokens")
+        flash(request, f"Stored {created_tokens} token/API item(s), {created_commands} command(s), and {created_urls} URL(s).", "success")
+        return redirect("/commands" if created_commands else "/tokens" if created_tokens else "/ports")
     device: models.Device | None = None
     if target_raw and target_raw != "new":
         device = db.get(models.Device, int(target_raw))
@@ -5683,21 +5885,7 @@ async def smart_paste_apply(
             if port_tags:
                 set_tags(db, "port", port.id, port_tags)
                 merge_tags(db, "device", device.id, port_tags)
-    for index_raw in form.getlist("urls"):
-        item = parsed.get("urls", [])[int(index_raw)]
-        url_value = str(form.get(f"url_value_{index_raw}") or item["url"]).strip()
-        if not url_value:
-            continue
-        duplicate = db.query(models.Url).filter(models.Url.url == url_value).first()
-        if not duplicate:
-            db.add(
-                models.Url(
-                    device_id=device.id,
-                    url=url_value,
-                    url_type=str(form.get(f"url_type_{index_raw}") or item.get("url_type", "local")),
-                    notes=f"Imported from Smart Paste {record.id}.",
-                )
-            )
+    _apply_loose_urls_from_import(db, form, parsed, record, device)
     for index_raw in form.getlist("commands"):
         item = parsed.get("commands", [])[int(index_raw)]
         command_text = str(form.get(f"command_text_{index_raw}") or item["command_template"]).strip()

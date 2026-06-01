@@ -1,4 +1,9 @@
 {% extends "base.html" %}
+{% macro import_badges(badges) -%}
+  {% for badge in badges or [] %}
+    <small class="import-badge import-badge-{{ badge.kind }}" title="{{ badge.title }}">{{ badge.label }}</small>
+  {% endfor %}
+{%- endmacro %}
 {% block title %}Review Import · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
@@ -52,7 +57,7 @@
           <label class="check-row">
             <input type="checkbox" name="services" value="{{ service_index }}" {% if item.selected %}checked data-useful="true"{% endif %}>
             Apply service <small>{{ item.confidence }}</small>
-            {% if item.duplicate_id %}<small class="inline-note">Existing; fills gaps</small>{% endif %}
+            {{ import_badges(item.badges) }}
           </label>
           <label>Name <input name="service_name_{{ service_index }}" value="{{ item.name }}" spellcheck="true"></label>
           <label>Stack/group <input name="service_group_{{ service_index }}" value="{{ item.stack_group or '' }}" placeholder="people-system, immich, cloudflare-tunnels" spellcheck="true"></label>
@@ -65,7 +70,7 @@
                 <label class="check-row">
                   <input type="checkbox" name="service_urls" value="{{ service_index }}:{{ url_index }}" {% if url.selected is not defined or url.selected %}checked data-useful="true"{% endif %}>
                   URL <small>{{ url.confidence }}</small>
-                  {% if url.duplicate_id %}<small class="inline-note">Existing</small>{% endif %}
+                  {{ import_badges(url.badges) }}
                 </label>
                 <div class="inline-mini">
                   <input name="service_url_{{ service_index }}_{{ url_index }}" value="{{ url.url }}">
@@ -79,8 +84,9 @@
               <strong>Ports for this service</strong>
               {% for port in item.ports %}
                 <label class="check-row">
-                  <input type="checkbox" name="service_port_{{ service_index }}" value="{{ service_index }}:{{ port.host_port }}:{{ port.protocol }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+                  <input type="checkbox" name="service_port_{{ service_index }}" value="{{ service_index }}:{{ port.host_port }}:{{ port.protocol }}" {% if port.selected is not defined or port.selected %}checked data-useful="true"{% endif %}>
                   {{ port.host_port }}/{{ port.protocol }}{% if port.internal_port %} -> internal {{ port.internal_port }}{% endif %}
+                  {{ import_badges(port.badges) }}
                 </label>
               {% endfor %}
             </div>
@@ -93,7 +99,7 @@
                 <label class="check-row">
                   <input type="checkbox" name="service_credentials" value="{{ service_index }}:{{ credential_index }}" {% if credential.selected is not defined or credential.selected %}checked data-useful="true"{% endif %}>
                   Apply login <small>{{ credential.confidence }}</small>
-                  {% if credential.duplicate_id %}<small class="inline-note">Duplicate</small>{% endif %}
+                  {{ import_badges(credential.badges) }}
                 </label>
                 <label>Label <input name="service_credential_label_{{ service_index }}_{{ credential_index }}" value="{{ credential.label or item.name ~ ' login' }}" spellcheck="true"></label>
                 <label>Username <input name="service_credential_username_{{ service_index }}_{{ credential_index }}" value="{{ credential.username or '' }}"></label>
@@ -133,7 +139,7 @@
           <label class="check-row">
             <input type="checkbox" name="ports" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
             Apply port <small>{{ item.confidence }}</small>
-            {% if item.duplicate_id %}<small class="inline-note">Existing</small>{% else %}<small class="inline-note">Loose; optional</small>{% endif %}
+            {{ import_badges(item.badges) }}
           </label>
           <label>Port <input name="port_host_{{ loop.index0 }}" value="{{ item.host_port }}" inputmode="numeric"></label>
           <label>Protocol <input name="port_protocol_{{ loop.index0 }}" value="{{ item.protocol or 'tcp' }}"></label>
@@ -149,10 +155,18 @@
           <label class="check-row">
             <input type="checkbox" name="urls" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
             Apply URL <small>{{ item.confidence }}</small>
-            {% if item.duplicate_id %}<small class="inline-note">Existing</small>{% endif %}
+            {{ import_badges(item.badges) }}
           </label>
           <label>URL <input name="url_value_{{ loop.index0 }}" value="{{ item.url }}"></label>
           <label>Type <input name="url_type_{{ loop.index0 }}" value="{{ item.url_type or 'local' }}" spellcheck="true"></label>
+          <label>Link service
+            <select name="url_service_{{ loop.index0 }}">
+              <option value="">Device only / choose later</option>
+              {% for service in services %}
+                <option value="{{ service.id }}">{{ service.device.name if service.device else 'No device' }} · {{ service.name }}</option>
+              {% endfor %}
+            </select>
+          </label>
         </div>
       {% else %}<p class="empty">No URLs detected.</p>{% endfor %}
     </section>
@@ -163,10 +177,10 @@
           <label class="check-row">
             <input type="checkbox" name="commands" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
             Add to library <small>{{ item.confidence }}</small>
-            {% if item.duplicate_id %}<small class="inline-note">Existing; unchecked</small>{% endif %}
+            {{ import_badges(item.badges) }}
           </label>
           <label>Name <input name="command_name_{{ loop.index0 }}" value="{{ item.name }}" spellcheck="true"></label>
-          <label>Category <input name="command_category_{{ loop.index0 }}" value="Imported" spellcheck="true"></label>
+          <label>Category <input name="command_category_{{ loop.index0 }}" value="{{ item.category or 'Imported' }}" spellcheck="true"></label>
           <label>Applies to
             <select name="command_applies_to_type_{{ loop.index0 }}">
               <option value="device">This selected device</option>
@@ -175,17 +189,18 @@
               <option value="repo">Repo/project</option>
             </select>
           </label>
-          <label>Where to run <input name="command_where_{{ loop.index0 }}" value="Remote SSH host" spellcheck="true"></label>
+          <label>Where to run <input name="command_where_{{ loop.index0 }}" value="{{ item.where_to_run or 'Remote SSH host' }}" spellcheck="true"></label>
           <label>Risk
             <select name="command_risk_{{ loop.index0 }}">
+              {% set command_risk = item.risk_level or 'safe' %}
               {% for risk in ["safe", "caution", "dangerous", "destructive"] %}
-                <option value="{{ risk }}">{{ risk }}</option>
+                <option value="{{ risk }}" {% if command_risk == risk %}selected{% endif %}>{{ risk }}</option>
               {% endfor %}
             </select>
           </label>
-          <label>Short help <input name="command_help_low_{{ loop.index0 }}" value="Imported from pasted notes. Review before running." spellcheck="true"></label>
+          <label>Short help <input name="command_help_low_{{ loop.index0 }}" value="{{ item.help_low or 'Imported from pasted notes. Review before running.' }}" spellcheck="true"></label>
           <label>Command <textarea name="command_text_{{ loop.index0 }}" spellcheck="false">{{ item.command_template }}</textarea></label>
-          <label class="span-2">Notes <textarea name="command_notes_{{ loop.index0 }}" spellcheck="true" placeholder="When to use this, what folder it expects, or what script it triggers."></textarea></label>
+          <label class="span-2">Notes <textarea name="command_notes_{{ loop.index0 }}" spellcheck="true" placeholder="When to use this, what folder it expects, or what script it triggers.">{{ item.notes or '' }}</textarea></label>
         </div>
       {% else %}<p class="empty">No commands detected.</p>{% endfor %}
     </section>
@@ -197,7 +212,7 @@
           <label class="check-row">
             <input type="checkbox" name="credentials" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
             Apply credential <small>{{ item.confidence }}</small>
-            {% if item.duplicate_id %}<small class="inline-note">Duplicate; unchecked</small>{% endif %}
+            {{ import_badges(item.badges) }}
           </label>
           <label>Label <input name="credential_label_{{ loop.index0 }}" value="{{ item.label or 'Imported login' }}" spellcheck="true"></label>
           <label>Username <input name="credential_username_{{ loop.index0 }}" value="{{ item.username or '' }}"></label>
@@ -222,7 +237,7 @@
           <label class="check-row">
             <input type="checkbox" name="tokens" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
             Store token <small>{{ item.confidence }}</small>
-            {% if item.duplicate_id %}<small class="inline-note">Duplicate; unchecked</small>{% endif %}
+            {{ import_badges(item.badges) }}
           </label>
           <label>Name <input name="token_label_{{ loop.index0 }}" value="{{ item.label or 'GitHub token' }}" spellcheck="true"></label>
           <label>Account <input name="token_username_{{ loop.index0 }}" value="{{ item.username or '' }}" placeholder="@username or org"></label>

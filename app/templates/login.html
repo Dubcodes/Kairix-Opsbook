@@ -12,7 +12,7 @@
   {% endif %}
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
-    <label>Username <input name="username" required autocomplete="username"></label>
+    <label>Username <input name="username" required autocomplete="username" autofocus></label>
     <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
     <button type="submit">Log in</button>
   </form>
