@@ -62,6 +62,25 @@
             Apply service <small>{{ item.confidence }}</small>
             {{ import_badges(item.badges) }}
           </label>
+          {% if item.review_details %}
+            <div class="review-diff-list">
+              <strong>Review differences</strong>
+              {% for detail in item.review_details %}
+                <div class="review-diff-row">
+                  <span class="review-diff-label">{{ detail.label }}</span>
+                  <div>
+                    <small>Stored</small>
+                    <code>{{ detail.stored or 'blank' }}</code>
+                  </div>
+                  <div>
+                    <small>Pasted</small>
+                    <code>{{ detail.pasted or 'blank' }}</code>
+                  </div>
+                  {% if detail.note %}<p>{{ detail.note }}</p>{% endif %}
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
           <label>Name <input name="service_name_{{ service_index }}" value="{{ item.name }}" spellcheck="true"></label>
           <label>Stack/group <input name="service_group_{{ service_index }}" value="{{ item.stack_group or '' }}" placeholder="people-system, immich, cloudflare-tunnels" spellcheck="true"></label>
           <label>Compose path <input name="service_compose_{{ service_index }}" value="{{ item.compose_path or '' }}"></label>
@@ -79,6 +98,9 @@
                   <input name="service_url_{{ service_index }}_{{ url_index }}" value="{{ url.url }}">
                   <a class="button secondary small-button" href="{{ url.url }}" target="_blank">Open</a>
                 </div>
+                {% if url.existing_location %}
+                  <p class="url-review-note">Already stored in {{ url.existing_location }}{% if url.existing_value and url.existing_value != url.url %}: <code>{{ url.existing_value }}</code>{% endif %}</p>
+                {% endif %}
               {% endfor %}
             </div>
           {% endif %}

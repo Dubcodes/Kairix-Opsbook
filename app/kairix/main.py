@@ -1833,6 +1833,90 @@ def _url_port(raw_url: str) -> int | None:
         return None
 
 
+def _url_compare_key(raw_url: str) -> str:
+    value = str(raw_url or "").strip()
+    if not value:
+        return ""
+    try:
+        parsed = urlparse(value)
+    except ValueError:
+        return value.rstrip("/").lower()
+    scheme = (parsed.scheme or "").lower()
+    netloc = (parsed.netloc or "").lower()
+    path = (parsed.path or "").rstrip("/")
+    query = f"?{parsed.query}" if parsed.query else ""
+    fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+    if not scheme or not netloc:
+        return value.rstrip("/").lower()
+    return f"{scheme}://{netloc}{path}{query}{fragment}"
+
+
+def _url_values_match(left: str, right: str) -> bool:
+    return bool(_url_compare_key(left) and _url_compare_key(left) == _url_compare_key(right))
+
+
+def _url_candidate_values(raw_url: str) -> list[str]:
+    value = str(raw_url or "").strip()
+    if not value:
+        return []
+    trimmed = value.rstrip("/")
+    candidates = [value, trimmed]
+    if trimmed:
+        candidates.append(f"{trimmed}/")
+    return list(dict.fromkeys(candidates))
+
+
+def _duplicate_url_record(db: Session, raw_url: str) -> models.Url | None:
+    candidates = _url_candidate_values(raw_url)
+    if not candidates:
+        return None
+    duplicate = db.query(models.Url).filter(models.Url.url.in_(candidates)).first()
+    if duplicate:
+        return duplicate
+    compare_key = _url_compare_key(raw_url)
+    if not compare_key:
+        return None
+    return next((url for url in db.query(models.Url).all() if _url_compare_key(url.url) == compare_key), None)
+
+
+def _service_url_field_match(service: models.Service, raw_url: str) -> str:
+    if _url_values_match(service.local_url, raw_url):
+        return "local URL"
+    if _url_values_match(service.public_url, raw_url):
+        return "public URL"
+    return ""
+
+
+def _duplicate_service_url(db: Session, device_id: int | None, raw_url: str) -> models.Service | None:
+    if not device_id or not str(raw_url or "").strip():
+        return None
+    candidates = _url_candidate_values(raw_url)
+    exact = (
+        db.query(models.Service)
+        .filter(
+            models.Service.device_id == device_id,
+            or_(models.Service.local_url.in_(candidates), models.Service.public_url.in_(candidates)),
+        )
+        .first()
+    )
+    if exact:
+        return exact
+    return next(
+        (
+            service
+            for service in db.query(models.Service).filter(models.Service.device_id == device_id).all()
+            if _service_url_field_match(service, raw_url)
+        ),
+        None,
+    )
+
+
+def _service_known_url_values(service: models.Service) -> list[str]:
+    values = [service.local_url, service.public_url]
+    values.extend(url.url for url in service.urls)
+    return [str(value).strip() for value in values if str(value or "").strip()]
+
+
 def _preserve_existing_service_url_paths(service_hint: dict[str, Any], existing: models.Service) -> None:
     existing_urls = [existing.local_url, existing.public_url]
     existing_urls.extend(url.url for url in existing.urls)
@@ -1875,20 +1959,38 @@ def _suggested_url_field(url_hint: dict[str, Any]) -> str:
     return "public_url" if str(url_hint.get("url_type") or "").lower() == "public" else "local_url"
 
 
-def _service_url_conflicts(existing: models.Service, service_hint: dict[str, Any]) -> list[str]:
-    conflicts: list[str] = []
-    for url_hint in service_hint.get("urls", []):
-        suggested = str(url_hint.get("url") or "").strip()
-        if not suggested:
-            continue
-        field = _suggested_url_field(url_hint)
+def _service_url_review_details(existing: models.Service, service_hint: dict[str, Any]) -> list[dict[str, str]]:
+    details: list[dict[str, str]] = []
+    known_urls = _service_known_url_values(existing)
+    for field, label in [("local_url", "local URL"), ("public_url", "public URL")]:
         current = str(getattr(existing, field) or "").strip()
-        if current and current != suggested:
-            conflicts.append("public URL" if field == "public_url" else "local URL")
-    return conflicts
+        if not current:
+            continue
+        pasted = [
+            str(url_hint.get("url") or "").strip()
+            for url_hint in service_hint.get("urls", [])
+            if _suggested_url_field(url_hint) == field and str(url_hint.get("url") or "").strip()
+        ]
+        different = [
+            url
+            for url in dict.fromkeys(pasted)
+            if not _url_values_match(current, url)
+            and not any(_url_values_match(stored, url) for stored in known_urls)
+        ]
+        if different:
+            details.append(
+                {
+                    "kind": "conflict",
+                    "label": label,
+                    "stored": current,
+                    "pasted": ", ".join(different),
+                    "note": "Opsbook already has a primary value for this service. Smart Paste found different endpoint(s); select them as extra URLs if they are valid, or edit the service if the primary URL should change.",
+                }
+            )
+    return details
 
 
-def _service_metadata_changes(existing: models.Service, service_hint: dict[str, Any]) -> tuple[list[str], list[str]]:
+def _service_metadata_changes(existing: models.Service, service_hint: dict[str, Any]) -> tuple[list[str], list[dict[str, str]]]:
     fields = [
         ("docker_project", "stack/group", "stack_group"),
         ("compose_path", "compose path", "compose_path"),
@@ -1896,7 +1998,7 @@ def _service_metadata_changes(existing: models.Service, service_hint: dict[str, 
         ("image", "image", "image"),
     ]
     fills: list[str] = []
-    conflicts: list[str] = []
+    conflicts: list[dict[str, str]] = []
     for attr, label, hint_key in fields:
         suggested = str(service_hint.get(hint_key) or "").strip()
         current = str(getattr(existing, attr) or "").strip()
@@ -1905,12 +2007,21 @@ def _service_metadata_changes(existing: models.Service, service_hint: dict[str, 
         if not current:
             fills.append(label)
         elif current != suggested:
-            conflicts.append(label)
+            conflicts.append(
+                {
+                    "kind": "conflict",
+                    "label": label,
+                    "stored": current,
+                    "pasted": suggested,
+                    "note": "Smart Paste matched this service, but this stored metadata differs from the latest paste. Review before applying.",
+                }
+            )
     return fills, conflicts
 
 
 def _annotate_service_import_badges(service: dict[str, Any], duplicate: models.Service | None) -> None:
     badges: list[dict[str, str]] = []
+    service["review_details"] = service.get("review_details", [])
     if not duplicate:
         badges.append(_import_badge("new", "New service", "Opsbook does not see a matching service on the selected device. Applying will create a new service record."))
     else:
@@ -1918,7 +2029,9 @@ def _annotate_service_import_badges(service: dict[str, Any], duplicate: models.S
         port_adds = sum(1 for port in service.get("ports", []) if port.get("selected"))
         credential_adds = sum(1 for credential in service.get("credentials", []) if credential.get("selected"))
         metadata_fills, metadata_conflicts = _service_metadata_changes(duplicate, service)
-        conflicts = _service_url_conflicts(duplicate, service) + metadata_conflicts
+        conflict_details = _service_url_review_details(duplicate, service) + metadata_conflicts
+        service["review_details"] = conflict_details
+        conflicts = [detail["label"] for detail in conflict_details]
         additions: list[str] = []
         if url_adds:
             additions.append(f"{url_adds} URL{'s' if url_adds != 1 else ''}")
@@ -1986,23 +2099,31 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
             _preserve_existing_service_url_paths(service, duplicate)
         for url in service.get("urls", []):
             url_value = str(url.get("url", "")).strip()
-            duplicate_url = db.query(models.Url).filter(models.Url.url == url_value).first()
+            duplicate_url = _duplicate_url_record(db, url_value)
             duplicate_service = None
             if existing_device_id and url_value:
-                duplicate_service = (
-                    db.query(models.Service)
-                    .filter(
-                        models.Service.device_id == existing_device_id,
-                        or_(models.Service.local_url == url_value, models.Service.public_url == url_value),
-                    )
-                    .first()
-                )
+                duplicate_service = _duplicate_service_url(db, existing_device_id, url_value)
             url["duplicate_id"] = duplicate_url.id if duplicate_url else None
             url["duplicate_service_id"] = duplicate_service.id if duplicate_service else None
             url["selected"] = duplicate_url is None and duplicate_service is None
             url["badges"] = []
             if duplicate_url or duplicate_service:
-                url["badges"].append(_import_badge("exists", "Already documented", "This URL is already stored in Opsbook."))
+                existing_location = "Opsbook"
+                existing_value = url_value
+                if duplicate_url:
+                    existing_location = "URL record"
+                    if duplicate_url.service:
+                        existing_location = f"{duplicate_url.service.name} URL record"
+                    elif duplicate_url.device:
+                        existing_location = f"{duplicate_url.device.name} URL record"
+                    existing_value = duplicate_url.url
+                elif duplicate_service:
+                    field_label = _service_url_field_match(duplicate_service, url_value) or "service URL"
+                    existing_location = f"{duplicate_service.name} {field_label}"
+                    existing_value = duplicate_service.local_url if field_label == "local URL" else duplicate_service.public_url
+                url["existing_location"] = existing_location
+                url["existing_value"] = existing_value
+                url["badges"].append(_import_badge("exists", "Already documented", f"This URL is already stored in {existing_location}."))
             else:
                 url["badges"].append(_import_badge("new", "New URL", "This URL is not stored yet and will be linked to the service if selected."))
             if "trycloudflare.com" in url_value.lower():
@@ -2062,7 +2183,7 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
                 port["badges"] = [_import_badge("exists", "Already documented", "This standalone port is already stored on the selected device.")]
     for url in parsed.get("urls", []):
         url_value = str(url.get("url", "")).strip()
-        duplicate = db.query(models.Url).filter(models.Url.url == url_value).first()
+        duplicate = _duplicate_url_record(db, url_value)
         url["duplicate_id"] = duplicate.id if duplicate else None
         url["selected"] = duplicate is None
         url["badges"] = [

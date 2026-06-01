@@ -1042,6 +1042,60 @@ code {
   padding-top: 7px;
 }
 
+.review-diff-list {
+  display: grid;
+  gap: 7px;
+  border: 1px solid color-mix(in srgb, var(--red) 38%, var(--line));
+  border-radius: 8px;
+  padding: 9px;
+  background: color-mix(in srgb, var(--red) 7%, var(--surface));
+}
+
+.review-diff-row {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.6fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+}
+
+.review-diff-row small {
+  display: block;
+  color: var(--muted);
+  font-weight: 800;
+  margin-bottom: 2px;
+}
+
+.review-diff-row code {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 6px;
+  background: color-mix(in srgb, var(--surface) 75%, var(--bg));
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+
+.review-diff-label {
+  font-weight: 900;
+  color: color-mix(in srgb, var(--red) 70%, var(--text));
+}
+
+.review-diff-row p {
+  grid-column: 2 / -1;
+  margin: 0;
+  color: var(--muted);
+}
+
+.url-review-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.url-review-note code {
+  overflow-wrap: anywhere;
+}
+
 .inline-warning {
   border: 1px solid color-mix(in srgb, var(--amber) 60%, var(--line));
   border-radius: 8px;
@@ -1759,4 +1813,10 @@ input[type="color"] {
   .details { grid-template-columns: 1fr; }
   .tags { justify-content: flex-start; }
   .command-grid { grid-template-columns: 1fr; }
+  .review-diff-row {
+    grid-template-columns: 1fr;
+  }
+  .review-diff-row p {
+    grid-column: auto;
+  }
 }
