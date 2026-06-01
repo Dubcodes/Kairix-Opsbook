@@ -80,7 +80,7 @@
               {% for port in item.ports %}
                 <label class="check-row">
                   <input type="checkbox" name="service_port_{{ service_index }}" value="{{ service_index }}:{{ port.host_port }}:{{ port.protocol }}" {% if item.selected %}checked data-useful="true"{% endif %}>
-                  {{ port.host_port }}/{{ port.protocol }}
+                  {{ port.host_port }}/{{ port.protocol }}{% if port.internal_port %} -> internal {{ port.internal_port }}{% endif %}
                 </label>
               {% endfor %}
             </div>

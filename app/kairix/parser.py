@@ -18,6 +18,7 @@ printf '\n=== ROUTES ===\n'; ip route 2>/dev/null; \
 printf '\n=== DOCKER VERSION ===\n'; docker version --format '{{.Server.Version}}' 2>/dev/null || true; \
 printf '\n=== DOCKER CONTAINERS ===\n'; docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null || true; \
 printf '\n=== DOCKER COMPOSE PROJECTS ===\n'; docker compose ls 2>/dev/null || true; \
+printf '\n=== CLOUDFLARE TUNNELS ===\n'; docker ps --format '{{.Names}}\t{{.Image}}' 2>/dev/null | awk '$2 ~ /cloudflare\/cloudflared/ {print $1}' | while read -r container; do printf '\n--- %s ---\n' "$container"; docker logs --tail 200 "$container" 2>&1 | grep -Eo 'https://[-A-Za-z0-9.]+\.trycloudflare\.com' | tail -n 5; done 2>/dev/null || true; \
 printf '\n=== LISTENING PORTS ===\n'; ss -tulpn 2>/dev/null | sed -n '1,80p'"""
 
 IP_RE = re.compile(r"\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b")
@@ -75,6 +76,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     ip_section = _section(effective_text, "IP ADDRESSES")
     docker_containers = _section(effective_text, "DOCKER CONTAINERS")
     docker_compose = _section(effective_text, "DOCKER COMPOSE PROJECTS")
+    cloudflare_tunnels = _section(effective_text, "CLOUDFLARE TUNNELS")
     listening_ports = _section(effective_text, "LISTENING PORTS")
 
     ips = _unique(IP_RE.findall(ip_section or effective_text))
@@ -112,6 +114,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     commands = _unique_commands(commands)
 
     usernames = _unique(_safe_usernames(raw_text))
+    primary_ip = _primary_ip(ips)
 
     compose_projects = _compose_projects(docker_compose)
     service_items: list[dict[str, Any]] = []
@@ -132,9 +135,11 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                     "stack_group": stack_group,
                     "compose_path": compose_projects.get(stack_group, ""),
                     "ports": docker_port_map.get(container_name, []),
+                    "urls": _local_urls_for_docker_ports(primary_ip, container_name, docker_port_map.get(container_name, [])),
                     "confidence": "medium",
                 }
             )
+    _attach_cloudflare_urls(service_items, _cloudflare_tunnel_urls(cloudflare_tunnels))
     if not is_inventory:
         service_items.extend(_note_services(raw_text))
         service_items.extend(_inline_service_entries(raw_text))
@@ -176,7 +181,6 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
             if clean and not IP_RE.search(clean) and len(clean) < 80:
                 device_name = clean
                 break
-    primary_ip = _primary_ip(ips)
     if not is_inventory and primary_ip:
         last_octet = primary_ip.rsplit(".", 1)[-1]
         for line in lines[:20]:
@@ -268,6 +272,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         "disk_summary": _disk_summary(disks),
         "docker_containers": docker_containers,
         "docker_compose": docker_compose,
+        "cloudflare_tunnels": cloudflare_tunnels,
         "listening_ports": listening_ports,
     }
 
@@ -314,6 +319,151 @@ def _primary_ip(ips: list[str]) -> str:
     return ips[0] if ips else ""
 
 
+def _local_urls_for_docker_ports(primary_ip: str, container_name: str, ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not primary_ip or _is_cloudflare_container({"container_name": container_name}):
+        return []
+    urls: list[dict[str, Any]] = []
+    for port in ports:
+        host_port = int(port.get("host_port") or 0)
+        if not _port_looks_web_accessible(host_port, container_name):
+            continue
+        scheme = "https" if host_port in {443, 8443, 9443} else "http"
+        urls.append(
+            {
+                "url": f"{scheme}://{primary_ip}:{host_port}/",
+                "url_type": "local",
+                "confidence": "medium",
+            }
+        )
+    return urls
+
+
+def _port_looks_web_accessible(port: int, container_name: str) -> bool:
+    if port <= 0:
+        return False
+    lowered = container_name.lower()
+    if any(marker in lowered for marker in ["postgres", "mariadb", "mysql", "redis", "-db", "_db"]):
+        return False
+    non_web_ports = {
+        22,
+        25,
+        53,
+        110,
+        137,
+        138,
+        139,
+        143,
+        389,
+        445,
+        465,
+        587,
+        993,
+        995,
+        1883,
+        1935,
+        21027,
+        22000,
+        3306,
+        5432,
+        5433,
+        5900,
+        6379,
+        8554,
+    }
+    return port not in non_web_ports
+
+
+def _cloudflare_tunnel_urls(text: str) -> dict[str, list[str]]:
+    tunnels: dict[str, list[str]] = {}
+    current = ""
+    for line in text.splitlines():
+        clean = line.strip()
+        if not clean:
+            continue
+        header = re.match(r"^-{3,}\s*(.+?)\s*-{3,}$", clean)
+        if header:
+            current = header.group(1).strip()
+            tunnels.setdefault(current, [])
+            continue
+        urls = [url for url in URL_RE.findall(clean) if "trycloudflare.com" in url.lower()]
+        if not urls:
+            continue
+        key = current or "cloudflare"
+        tunnels.setdefault(key, [])
+        tunnels[key].extend(_unique(urls))
+    return {name: _unique(urls) for name, urls in tunnels.items() if urls}
+
+
+def _attach_cloudflare_urls(services: list[dict[str, Any]], tunnels: dict[str, list[str]]) -> None:
+    for container_name, urls in tunnels.items():
+        target = _cloudflare_target_service(services, container_name)
+        if not target:
+            continue
+        for url in urls:
+            _append_service_url(target, url, "public", "high")
+
+
+def _cloudflare_target_service(services: list[dict[str, Any]], container_name: str) -> dict[str, Any] | None:
+    source = next((item for item in services if item.get("container_name") == container_name), None)
+    source_group = str((source or {}).get("stack_group") or "").strip()
+    candidates = [
+        item
+        for item in services
+        if item.get("container_name") != container_name
+        and not _is_cloudflare_container(item)
+        and (not source_group or item.get("stack_group") == source_group)
+    ]
+    if not candidates:
+        candidates = [
+            item
+            for item in services
+            if item.get("container_name") != container_name and not _is_cloudflare_container(item)
+        ]
+    if not candidates:
+        return source
+
+    descriptor = _norm_name(container_name)
+    db_markers = {"db", "postgres", "redis", "mysql", "mariadb"}
+    non_db_candidates = [
+        item
+        for item in candidates
+        if not any(marker in _norm_name(str(item.get("name", "") + " " + item.get("container_name", ""))) for marker in db_markers)
+    ]
+    candidates = non_db_candidates or candidates
+    preferred_terms: list[str] = []
+    if "public" in descriptor:
+        preferred_terms = ["public"]
+    elif any(term in descriptor for term in ["control", "admin", "web"]):
+        preferred_terms = ["web", "app", "control", "admin"]
+    for term in preferred_terms:
+        match = next(
+            (
+                item
+                for item in candidates
+                if term in _norm_name(str(item.get("name", "") + " " + item.get("container_name", "")))
+            ),
+            None,
+        )
+        if match:
+            return match
+    with_ports = [item for item in candidates if item.get("ports")]
+    return (with_ports or candidates)[0]
+
+
+def _is_cloudflare_container(item: dict[str, Any]) -> bool:
+    text = " ".join(str(item.get(key, "")) for key in ["name", "container_name", "image"]).lower()
+    return "cloudflared" in text or "cloudflare/cloudflared" in text
+
+
+def _append_service_url(service: dict[str, Any], url: str, url_type: str, confidence: str) -> None:
+    clean = url.strip().strip(",.;")
+    if not clean:
+        return
+    existing = {str(item.get("url", "")).strip() for item in service.setdefault("urls", [])}
+    if clean not in existing:
+        service["urls"].append({"url": clean, "url_type": url_type, "confidence": confidence})
+
+
 def _port_hint(port: int) -> dict[str, str]:
     hints = {
         22: {"purpose": "SSH", "tags": "ssh, remote-access"},
@@ -348,12 +498,13 @@ def _extract_mapped_ports(line: str) -> list[dict[str, Any]]:
     seen: set[tuple[int, str]] = set()
     pattern = re.compile(
         r"(?:(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|localhost):)"
-        r"(\d{2,5})(?:-(\d{2,5}))?->\d{1,5}(?:-\d{1,5})?/(\w+)"
+        r"(\d{2,5})(?:-(\d{2,5}))?->(\d{1,5})(?:-\d{1,5})?/(\w+)"
     )
     for match in pattern.finditer(line):
         start = int(match.group(1))
         end = int(match.group(2) or start)
-        protocol = match.group(3).lower()
+        internal_port = int(match.group(3))
+        protocol = match.group(4).lower()
         for port in range(start, min(end, start + 10) + 1):
             key = (port, protocol)
             if key not in seen:
@@ -361,6 +512,7 @@ def _extract_mapped_ports(line: str) -> list[dict[str, Any]]:
                 ports.append(
                     {
                         "host_port": port,
+                        "internal_port": internal_port,
                         "protocol": protocol,
                         "confidence": "high",
                     }
@@ -705,7 +857,7 @@ def _compose_projects(text: str) -> dict[str, str]:
         clean = line.strip()
         if not clean or clean.lower().startswith("name "):
             continue
-        match = re.match(r"^([a-zA-Z0-9_.-]+)\s+\S+\s+(.+docker-compose\.ya?ml|.+compose\.ya?ml)\s*$", clean)
+        match = re.match(r"^([a-zA-Z0-9_.-]+)\s+\S+\s+(.+\.ya?ml)\s*$", clean)
         if match:
             projects[match.group(1)] = match.group(2).strip()
     return projects
@@ -735,8 +887,6 @@ def _guess_stack_group(container_name: str, projects: dict[str, str]) -> str:
         "frigate": "frigatenvr",
         "mqtt": "frigatenvr",
     }
-    if "cloudflared" in normalized or "tunnel" in normalized:
-        return "cloudflare-tunnels"
     for prefix, project in known_prefixes.items():
         if normalized.startswith(prefix) and project in projects:
             return project
@@ -748,6 +898,8 @@ def _guess_stack_group(container_name: str, projects: dict[str, str]) -> str:
                 best = project
     if best:
         return best
+    if "cloudflared" in normalized or "tunnel" in normalized:
+        return "cloudflare-tunnels"
     return ""
 
 

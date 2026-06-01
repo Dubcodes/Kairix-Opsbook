@@ -1790,6 +1790,39 @@ def _missing_services_from_import(
     return missing
 
 
+def _url_port(raw_url: str) -> int | None:
+    parsed = urlparse(raw_url or "")
+    if not parsed.hostname:
+        return None
+    try:
+        return parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError:
+        return None
+
+
+def _preserve_existing_service_url_paths(service_hint: dict[str, Any], existing: models.Service) -> None:
+    existing_urls = [existing.local_url, existing.public_url]
+    existing_urls.extend(url.url for url in existing.urls)
+    for url_hint in service_hint.get("urls", []):
+        suggested = str(url_hint.get("url") or "").strip()
+        suggested_port = _url_port(suggested)
+        if not suggested or suggested_port is None:
+            continue
+        parsed_suggested = urlparse(suggested)
+        for old_url in existing_urls:
+            parsed_old = urlparse(old_url or "")
+            old_path = parsed_old.path or ""
+            if not old_path or old_path == "/" or _url_port(old_url) != suggested_port:
+                continue
+            url_hint["url"] = parsed_suggested._replace(
+                path=old_path,
+                params=parsed_old.params,
+                query=parsed_old.query,
+                fragment=parsed_old.fragment,
+            ).geturl()
+            break
+
+
 def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[str, Any]:
     parsed = dict(parsed)
     matched_device = _match_device_for_import(db, parsed.get("device", {}))
@@ -1812,6 +1845,8 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
         duplicate = None
         if existing_device_id and service.get("name"):
             duplicate = _match_service_for_import(db, existing_device_id, service)
+        if duplicate:
+            _preserve_existing_service_url_paths(service, duplicate)
         service["duplicate_id"] = duplicate.id if duplicate else None
         service["selected"] = has_context
         for url in service.get("urls", []):
@@ -5546,6 +5581,14 @@ async def smart_paste_apply(
                 continue
             if not host_port.isdigit():
                 continue
+            port_item = next(
+                (
+                    port
+                    for port in item.get("ports", [])
+                    if str(port.get("host_port")) == host_port and str(port.get("protocol", "tcp")) == protocol
+                ),
+                {},
+            )
             duplicate = (
                 db.query(models.Port)
                 .filter(
@@ -5561,6 +5604,7 @@ async def smart_paste_apply(
                     models.Port(
                         device_id=device.id,
                         service_id=exists.id,
+                        internal_port=int(port_item["internal_port"]) if str(port_item.get("internal_port", "")).isdigit() else None,
                         host_port=int(host_port),
                         protocol=protocol,
                         purpose=service_name,
