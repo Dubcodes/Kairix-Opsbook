@@ -342,6 +342,8 @@ def _port_looks_web_accessible(port: int, container_name: str) -> bool:
     if port <= 0:
         return False
     lowered = container_name.lower()
+    if "portainer" in lowered and port == 8000:
+        return False
     if any(marker in lowered for marker in ["postgres", "mariadb", "mysql", "redis", "-db", "_db"]):
         return False
     non_web_ports = {

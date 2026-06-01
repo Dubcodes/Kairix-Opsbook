@@ -637,6 +637,20 @@
     }
     const form = event.target.closest("form");
     if (!form) return;
+    const checkedDeleteName = form.getAttribute("data-confirm-checked-name");
+    const checkedDeleteMessage = form.getAttribute("data-confirm-checked-delete");
+    if (checkedDeleteName && checkedDeleteMessage && form.dataset.confirmedCheckedDelete !== "true") {
+      const hasCheckedDelete = Array.from(form.elements).some((element) => (
+        element.name === checkedDeleteName && element.checked
+      ));
+      if (hasCheckedDelete) {
+        if (!window.confirm(checkedDeleteMessage)) {
+          event.preventDefault();
+          return;
+        }
+        form.dataset.confirmedCheckedDelete = "true";
+      }
+    }
     const message = form.getAttribute("data-confirm-delete");
     if (message && form.dataset.confirmedDelete !== "true") {
       if (!window.confirm(message || "Delete this item?")) {

@@ -8,7 +8,7 @@
   </div>
   <a class="button secondary" href="/smart-paste">New paste</a>
 </section>
-<form method="post" action="/smart-paste/{{ record.id }}/apply" class="panel">
+<form method="post" action="/smart-paste/{{ record.id }}/apply" class="panel" data-confirm-checked-name="delete_missing_services" data-confirm-checked-delete="Apply Smart Paste and delete the selected missing service record(s)? This also removes their linked ports, URLs, notes, commands, and credentials.">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   {% set token_only = parsed.tokens and not parsed.device.name and not parsed.device.primary_ip and not parsed.services and not parsed.ports and not parsed.urls and not parsed.commands and not parsed.credentials %}
   <div class="form-actions">
