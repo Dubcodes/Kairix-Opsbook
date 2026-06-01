@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import io
 import json
+import logging
 import re
 import shutil
 import socket
@@ -59,6 +60,7 @@ from .utils import (
 )
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
+logger = logging.getLogger(__name__)
 app.add_middleware(
     SessionMiddleware,
     secret_key=settings.session_secret_key,
@@ -1642,6 +1644,37 @@ def _redact_sensitive_text(raw_text: str, parsed: dict[str, Any]) -> tuple[str, 
     return redacted, changed
 
 
+def _fallback_smart_paste_parse(raw_text: str, exc: Exception) -> dict[str, Any]:
+    return {
+        "device": {"name": "", "primary_ip": "", "os_name": "", "confidence": "low"},
+        "services": [],
+        "urls": [],
+        "ports": [],
+        "commands": [],
+        "credentials": [],
+        "tokens": [],
+        "paths": [],
+        "extras": {"parser_error": str(exc), "raw_length": len(raw_text or "")},
+        "counts": {
+            "ips": 0,
+            "urls": 0,
+            "ports": 0,
+            "services": 0,
+            "usernames": 0,
+            "tokens": 0,
+        },
+        "parse_warning": "Smart Paste could not confidently structure this paste, so it was kept as reviewable source text instead of crashing.",
+    }
+
+
+def _safe_parse_smart_paste(raw_text: str) -> dict[str, Any]:
+    try:
+        return parse_smart_paste(raw_text)
+    except Exception as exc:
+        logger.exception("Smart Paste parser failed")
+        return _fallback_smart_paste_parse(raw_text, exc)
+
+
 def _id_list(value: str) -> list[int]:
     result: list[int] = []
     for part in (value or "").split(","):
@@ -1919,11 +1952,24 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
         duplicate = _duplicate_command(db, command.get("command_template", ""))
         command["duplicate_id"] = duplicate.id if duplicate else None
         command["selected"] = duplicate is None and bool(command.get("command_template"))
-        command["badges"] = [
+        badges = [
             _import_badge("exists", "Already exists", "This exact command already exists in the command library.")
             if duplicate
             else _import_badge("new", "New command", "This command is not currently in the command library.")
         ]
+        command_text = str(command.get("command_template") or "")
+        command_name = str(command.get("name") or "")
+        risk_level = str(command.get("risk_level") or "").lower()
+        where_to_run = str(command.get("where_to_run") or "")
+        if "trycloudflare.com" in command_text or "cloudflare tunnel" in command_name.lower():
+            badges.append(_import_badge("helper", "Paste-back helper", "Run this on the Docker host, then paste the output back into Smart Paste to attach the discovered URLs."))
+        if risk_level == "safe":
+            badges.append(_import_badge("safe", "Safe lookup", "This command only reads container logs and prints URLs. It does not change the host."))
+        elif risk_level:
+            badges.append(_import_badge("risk", f"Risk: {risk_level}", "Review this command carefully before running it."))
+        if where_to_run:
+            badges.append(_import_badge("context", where_to_run, "Where Smart Paste expects this command to be run."))
+        command["badges"] = badges
     for service in parsed.get("services", []):
         has_context = bool(
             service.get("ports")
@@ -5497,7 +5543,9 @@ def smart_paste_parse(
 ) -> HTMLResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    parsed = _annotate_import_suggestions(db, parse_smart_paste(raw_text))
+    parsed = _annotate_import_suggestions(db, _safe_parse_smart_paste(raw_text))
+    if parsed.get("parse_warning"):
+        flash(request, str(parsed["parse_warning"]), "warning")
     safe_raw_text, secrets_redacted = _redact_sensitive_text(raw_text, parsed)
     record = models.ImportRecord(
         source_type=source_type,
@@ -5533,7 +5581,9 @@ def quick_note_parse(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    parsed = _annotate_import_suggestions(db, parse_smart_paste(raw_text))
+    parsed = _annotate_import_suggestions(db, _safe_parse_smart_paste(raw_text))
+    if parsed.get("parse_warning"):
+        flash(request, str(parsed["parse_warning"]), "warning")
     safe_raw_text, secrets_redacted = _redact_sensitive_text(raw_text, parsed)
     note = models.Note(
         object_type="quick_note",

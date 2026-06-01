@@ -1042,6 +1042,67 @@ code {
   padding-top: 7px;
 }
 
+.inline-warning {
+  border: 1px solid color-mix(in srgb, var(--amber) 60%, var(--line));
+  border-radius: 8px;
+  padding: 10px 12px;
+  color: color-mix(in srgb, var(--amber) 82%, var(--text));
+  background: color-mix(in srgb, var(--amber) 12%, var(--surface));
+}
+
+.badge-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.command-review-section {
+  grid-column: 1 / -1;
+}
+
+.command-review-item {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  padding: 12px;
+}
+
+.command-review-head {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.command-meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.command-help {
+  margin: 0;
+  color: var(--muted);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: color-mix(in srgb, var(--surface) 78%, var(--bg));
+}
+
+.command-text-label textarea.command-textarea {
+  min-height: 180px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow: auto;
+}
+
+.command-notes-textarea {
+  min-height: 88px;
+}
+
 .inline-note {
   color: var(--muted);
   background: color-mix(in srgb, var(--surface) 70%, var(--bg));
@@ -1106,6 +1167,30 @@ code {
   color: var(--muted);
   border-style: dashed;
   background: transparent;
+}
+
+.import-badge-helper {
+  color: color-mix(in srgb, var(--blue) 80%, var(--text));
+  border-color: color-mix(in srgb, var(--blue) 68%, var(--line));
+  background: color-mix(in srgb, var(--blue) 16%, var(--surface));
+}
+
+.import-badge-safe {
+  color: color-mix(in srgb, var(--green) 78%, var(--text));
+  border-color: color-mix(in srgb, var(--green) 68%, var(--line));
+  background: color-mix(in srgb, var(--green) 11%, var(--surface));
+}
+
+.import-badge-risk {
+  color: color-mix(in srgb, var(--amber) 82%, var(--text));
+  border-color: color-mix(in srgb, var(--amber) 68%, var(--line));
+  background: color-mix(in srgb, var(--amber) 13%, var(--surface));
+}
+
+.import-badge-context {
+  color: color-mix(in srgb, var(--accent) 72%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface));
 }
 
 .field-highlight {

@@ -5,7 +5,7 @@ services:
     container_name: kairix-opsbook-app
     environment:
       APP_NAME: ${APP_NAME:-Kairix Opsbook}
-      APP_VERSION: ${APP_VERSION:-0.1.4}
+      APP_VERSION: ${APP_VERSION:-0.1.5}
       INSTANCE_NAME: ${INSTANCE_NAME:-Opsbook}
       INSTANCE_MODE: ${INSTANCE_MODE:-primary}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opsbook:change-me@db:5432/opsbook}

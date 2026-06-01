@@ -20,6 +20,9 @@
     <button class="secondary" type="button" data-select-all="smart-paste" data-select-state="on">Select all useful</button>
     <button class="secondary" type="button" data-select-all="smart-paste" data-select-state="off">Deselect all</button>
   </div>
+  {% if parsed.parse_warning %}
+    <div class="inline-warning span-2">{{ parsed.parse_warning }}</div>
+  {% endif %}
   {% if token_only %}
     <input type="hidden" name="target_device_id" value="new">
     <p class="muted">Token-only import. No device will be created unless you link a token to an existing service below.</p>
@@ -35,7 +38,7 @@
   {% endif %}
   <div class="suggestion-grid" data-select-scope="smart-paste">
     {% if not token_only %}
-      {% set apply_device_default = parsed.device.primary_ip or parsed.device.os_name or parsed.services or parsed.ports or parsed.urls or parsed.credentials %}
+      {% set apply_device_default = parsed.device.primary_ip or parsed.device.os_name or parsed.services or parsed.ports or parsed.credentials %}
       <section>
         <h2>Detected device</h2>
         <label class="check-row">
@@ -170,37 +173,45 @@
         </div>
       {% else %}<p class="empty">No URLs detected.</p>{% endfor %}
     </section>
-    <section>
+    <section class="span-2 command-review-section">
       <h2>Commands</h2>
+      <p class="muted">Commands are saved to the library. For Smart Paste helper commands, run them on the noted host and paste the output back into Smart Paste.</p>
       {% for item in parsed.commands %}
-        <div class="review-item">
-          <label class="check-row">
-            <input type="checkbox" name="commands" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
-            Add to library <small>{{ item.confidence }}</small>
-            {{ import_badges(item.badges) }}
-          </label>
-          <label>Name <input name="command_name_{{ loop.index0 }}" value="{{ item.name }}" spellcheck="true"></label>
-          <label>Category <input name="command_category_{{ loop.index0 }}" value="{{ item.category or 'Imported' }}" spellcheck="true"></label>
-          <label>Applies to
-            <select name="command_applies_to_type_{{ loop.index0 }}">
-              <option value="device">This selected device</option>
-              <option value="generic">Generic Linux / reusable</option>
-              <option value="service">Service-specific, link later</option>
-              <option value="repo">Repo/project</option>
-            </select>
-          </label>
-          <label>Where to run <input name="command_where_{{ loop.index0 }}" value="{{ item.where_to_run or 'Remote SSH host' }}" spellcheck="true"></label>
-          <label>Risk
-            <select name="command_risk_{{ loop.index0 }}">
-              {% set command_risk = item.risk_level or 'safe' %}
-              {% for risk in ["safe", "caution", "dangerous", "destructive"] %}
-                <option value="{{ risk }}" {% if command_risk == risk %}selected{% endif %}>{{ risk }}</option>
-              {% endfor %}
-            </select>
-          </label>
-          <label>Short help <input name="command_help_low_{{ loop.index0 }}" value="{{ item.help_low or 'Imported from pasted notes. Review before running.' }}" spellcheck="true"></label>
-          <label>Command <textarea name="command_text_{{ loop.index0 }}" spellcheck="false">{{ item.command_template }}</textarea></label>
-          <label class="span-2">Notes <textarea name="command_notes_{{ loop.index0 }}" spellcheck="true" placeholder="When to use this, what folder it expects, or what script it triggers.">{{ item.notes or '' }}</textarea></label>
+        <div class="review-item command-review-item">
+          <div class="command-review-head">
+            <label class="check-row">
+              <input type="checkbox" name="commands" value="{{ loop.index0 }}" {% if item.selected %}checked data-useful="true"{% endif %}>
+              Add to library <small>{{ item.confidence }}</small>
+            </label>
+            <div class="badge-strip">{{ import_badges(item.badges) }}</div>
+          </div>
+          <label class="span-2">Name <input name="command_name_{{ loop.index0 }}" value="{{ item.name }}" spellcheck="true"></label>
+          <div class="command-meta-grid span-2">
+            <label>Category <input name="command_category_{{ loop.index0 }}" value="{{ item.category or 'Imported' }}" spellcheck="true"></label>
+            <label>Applies to
+              <select name="command_applies_to_type_{{ loop.index0 }}">
+                <option value="device">This selected device</option>
+                <option value="generic">Generic Linux / reusable</option>
+                <option value="service">Service-specific, link later</option>
+                <option value="repo">Repo/project</option>
+              </select>
+            </label>
+            <label>Where to run <input name="command_where_{{ loop.index0 }}" value="{{ item.where_to_run or 'Remote SSH host' }}" spellcheck="true"></label>
+            <label>Risk
+              <select name="command_risk_{{ loop.index0 }}">
+                {% set command_risk = item.risk_level or 'safe' %}
+                {% for risk in ["safe", "caution", "dangerous", "destructive"] %}
+                  <option value="{{ risk }}" {% if command_risk == risk %}selected{% endif %}>{{ risk }}</option>
+                {% endfor %}
+              </select>
+            </label>
+          </div>
+          <label class="span-2">Short help <input name="command_help_low_{{ loop.index0 }}" value="{{ item.help_low or 'Imported from pasted notes. Review before running.' }}" spellcheck="true"></label>
+          {% if item.help_low %}
+            <p class="command-help span-2">{{ item.help_low }}</p>
+          {% endif %}
+          <label class="span-2 command-text-label">Command <textarea class="command-textarea" name="command_text_{{ loop.index0 }}" spellcheck="false">{{ item.command_template }}</textarea></label>
+          <label class="span-2">Notes <textarea class="command-notes-textarea" name="command_notes_{{ loop.index0 }}" spellcheck="true" placeholder="When to use this, what folder it expects, or what script it triggers.">{{ item.notes or '' }}</textarea></label>
         </div>
       {% else %}<p class="empty">No commands detected.</p>{% endfor %}
     </section>

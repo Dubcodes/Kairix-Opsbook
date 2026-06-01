@@ -84,9 +84,10 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     docker_compose = _section(effective_text, "DOCKER COMPOSE PROJECTS")
     cloudflare_tunnels = _section(effective_text, "CLOUDFLARE TUNNELS")
     listening_ports = _section(effective_text, "LISTENING PORTS")
+    is_cloudflare_output_only = bool(cloudflare_tunnels) and not docker_containers and not is_inventory
 
     ips = _unique(IP_RE.findall(ip_section or effective_text))
-    urls = _unique(_normalize_discovered_url(url) for url in URL_RE.findall(effective_text if not is_inventory else ""))
+    urls = _normalized_urls_from_text(effective_text if not is_inventory else "")
     paths = _unique(_clean_paths(PATH_RE.findall(effective_text)))
     ports = _unique([match.group(1) for match in PORT_RE.finditer(effective_text)])
     if not is_inventory:
@@ -97,14 +98,17 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         )
 
     for url in urls:
-        parsed = urlparse(url)
+        try:
+            parsed = urlparse(url)
+        except ValueError:
+            continue
         if parsed.port:
             ports.append(str(parsed.port))
     docker_port_map = _docker_port_map(docker_containers)
     ports.extend(_listening_tcp_ports(listening_ports))
     ports = _unique(ports)
 
-    command_lines = [] if is_inventory else lines
+    command_lines = [] if is_inventory or is_cloudflare_output_only else lines
     commands: list[dict[str, str]] = []
     previous_label = ""
     for line in command_lines:
@@ -119,7 +123,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
             previous_label = stripped.strip(":")
     commands = _unique_commands(commands)
     cloudflared_containers = _cloudflared_container_names(docker_containers)
-    if _looks_like_temporary_cloudflared(effective_text) or cloudflared_containers:
+    if not is_cloudflare_output_only and (_looks_like_temporary_cloudflared(effective_text) or cloudflared_containers):
         command_template = _cloudflared_url_command(cloudflared_containers)
         container_note = ", ".join(cloudflared_containers) if cloudflared_containers else "running cloudflared containers"
         commands = _unique_commands(
@@ -226,6 +230,18 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                 break
 
     final_device_name = "" if device_name == os_name else device_name
+    if (
+        final_device_name
+        and not primary_ip
+        and not os_name
+        and not service_items
+        and (urls or cloudflare_tunnels)
+        and (
+            re.search(r"[@:].*[$#]\s*", final_device_name)
+            or final_device_name.lower().startswith(("printf ", "for container", "docker logs"))
+        )
+    ):
+        final_device_name = ""
     if token_items and not primary_ip and not service_items and not urls and not ports:
         final_device_name = ""
     likely_device = {
@@ -338,21 +354,32 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
 
 
 def _is_private_url(url: str) -> bool:
-    parsed = urlparse(url)
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
     host = parsed.hostname or ""
     return host.startswith("192.168.") or host.startswith("10.") or host in {"localhost", "127.0.0.1"}
 
 
 def _normalize_discovered_url(url: str) -> str:
     clean = url.strip().rstrip(".,;")
+    if not clean or any(marker in clean for marker in ["[", "]", "{", "}", "\\"]):
+        return ""
     try:
         parsed = urlparse(clean)
     except ValueError:
-        return clean
+        return ""
     host = parsed.hostname or ""
+    if not host:
+        return ""
     if host.endswith("trycloudflare.com"):
         return parsed._replace(path="", params="", query="", fragment="").geturl()
     return clean
+
+
+def _normalized_urls_from_text(text: str) -> list[str]:
+    return _unique([_normalize_discovered_url(url) for url in URL_RE.findall(text or "")])
 
 
 def _primary_ip(ips: list[str]) -> str:
@@ -433,7 +460,7 @@ def _cloudflare_tunnel_urls(text: str) -> dict[str, list[str]]:
             current = header.group(1).strip()
             tunnels.setdefault(current, [])
             continue
-        urls = [_normalize_discovered_url(url) for url in URL_RE.findall(clean) if "trycloudflare.com" in url.lower()]
+        urls = [url for url in _normalized_urls_from_text(clean) if "trycloudflare.com" in url.lower()]
         if not urls:
             continue
         key = current or "cloudflare"
@@ -635,7 +662,7 @@ def _clean_note_value(value: str) -> str:
 
 def _note_header_parts(value: str) -> tuple[str, list[str], list[dict[str, Any]]]:
     clean = re.sub(r"^\s*-{2,}\s*", "", value.strip()).strip(" :-")
-    inline_urls = URL_RE.findall(clean)
+    inline_urls = _normalized_urls_from_text(clean)
     clean = URL_RE.sub("", clean).strip(" :-")
     ports: list[dict[str, Any]] = []
     seen: set[int] = set()
@@ -676,6 +703,7 @@ def _clean_paths(paths: list[str]) -> list[str]:
             value == "/"
             or value.startswith(("/dev/null", "/www.", "/bugs."))
             or re.fullmatch(r"/\d{1,3}(?:\.\d{1,3}){3}", value)
+            or re.fullmatch(r"/[-A-Za-z0-9.]+\.trycloudflare\.com", value)
         ):
             continue
         if re.search(r"\s(?:ext4|vfat|swap|xfs|btrfs|zfs)$", value):
@@ -1022,7 +1050,15 @@ def _note_services(text: str) -> list[dict[str, Any]]:
         name, inline_urls, header_ports = _note_header_parts(first_line)
         if not _looks_like_note_service_name(name):
             continue
-        urls = _unique(inline_urls + URL_RE.findall(block))
+        urls = _unique(inline_urls + _normalized_urls_from_text(block))
+        if (
+            first_line.lstrip().startswith("---")
+            and urls
+            and all("trycloudflare.com" in url.lower() for url in urls)
+            and not header_ports
+            and all(line.startswith("---") or URL_RE.fullmatch(line) or re.search(r"[@:].*[$#]\s*$", line) for line in lines)
+        ):
+            continue
         device_login_marker = re.match(r"^.+\s+(\d{1,3})$", first_line)
         if device_login_marker and int(device_login_marker.group(1)) <= 255 and not urls and not header_ports:
             continue
@@ -1037,7 +1073,10 @@ def _note_services(text: str) -> list[dict[str, Any]]:
         ]
         service_ports: list[dict[str, Any]] = []
         for url in urls:
-            parsed = urlparse(url)
+            try:
+                parsed = urlparse(url)
+            except ValueError:
+                continue
             if parsed.port:
                 service_ports.append({"host_port": parsed.port, "protocol": "tcp", "confidence": "high"})
         for port in standalone_ports:
@@ -1090,11 +1129,14 @@ def _inline_service_entries(text: str) -> list[dict[str, Any]]:
             {"url": url, "url_type": "public" if not _is_private_url(url) else "local", "confidence": "high"}
             for url in urls
         ]
-        ports = [
-            {"host_port": parsed.port, "protocol": "tcp", "confidence": "high"}
-            for parsed in (urlparse(url) for url in urls)
-            if parsed.port
-        ]
+        ports: list[dict[str, Any]] = []
+        for url in urls:
+            try:
+                parsed = urlparse(url)
+            except ValueError:
+                continue
+            if parsed.port:
+                ports.append({"host_port": parsed.port, "protocol": "tcp", "confidence": "high"})
         for port in header_ports:
             if all(existing["host_port"] != port["host_port"] for existing in ports):
                 ports.append(port)
