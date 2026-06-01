@@ -1852,7 +1852,28 @@ def _url_compare_key(raw_url: str) -> str:
 
 
 def _url_values_match(left: str, right: str) -> bool:
-    return bool(_url_compare_key(left) and _url_compare_key(left) == _url_compare_key(right))
+    left_key = _url_compare_key(left)
+    right_key = _url_compare_key(right)
+    if left_key and left_key == right_key:
+        return True
+    try:
+        left_parsed = urlparse(str(left or "").strip())
+        right_parsed = urlparse(str(right or "").strip())
+    except ValueError:
+        return False
+    same_origin = (
+        left_parsed.scheme.lower(),
+        left_parsed.netloc.lower(),
+    ) == (
+        right_parsed.scheme.lower(),
+        right_parsed.netloc.lower(),
+    )
+    if not same_origin:
+        return False
+    root_paths = {left_parsed.path or "/", right_parsed.path or "/"} <= {"/"}
+    has_hash_route = (left_parsed.fragment.startswith("!") or right_parsed.fragment.startswith("!"))
+    has_non_hash_query = bool(left_parsed.query or right_parsed.query)
+    return root_paths and has_hash_route and not has_non_hash_query
 
 
 def _url_candidate_values(raw_url: str) -> list[str]:
@@ -1876,7 +1897,14 @@ def _duplicate_url_record(db: Session, raw_url: str) -> models.Url | None:
     compare_key = _url_compare_key(raw_url)
     if not compare_key:
         return None
-    return next((url for url in db.query(models.Url).all() if _url_compare_key(url.url) == compare_key), None)
+    return next(
+        (
+            url
+            for url in db.query(models.Url).all()
+            if _url_compare_key(url.url) == compare_key or _url_values_match(url.url, raw_url)
+        ),
+        None,
+    )
 
 
 def _service_url_field_match(service: models.Service, raw_url: str) -> str:
@@ -1917,6 +1945,17 @@ def _service_known_url_values(service: models.Service) -> list[str]:
     return [str(value).strip() for value in values if str(value or "").strip()]
 
 
+def _service_has_port_for_url(service: models.Service, raw_url: str) -> bool:
+    port = _url_port(raw_url)
+    if port is None:
+        return False
+    return any(port_record.host_port == port for port_record in service.ports)
+
+
+def _primary_url_attr(url_hint: dict[str, Any]) -> str:
+    return "public_url" if str(url_hint.get("url_type") or "").lower() == "public" else "local_url"
+
+
 def _preserve_existing_service_url_paths(service_hint: dict[str, Any], existing: models.Service) -> None:
     existing_urls = [existing.local_url, existing.public_url]
     existing_urls.extend(url.url for url in existing.urls)
@@ -1925,11 +1964,18 @@ def _preserve_existing_service_url_paths(service_hint: dict[str, Any], existing:
         suggested_port = _url_port(suggested)
         if not suggested or suggested_port is None:
             continue
-        parsed_suggested = urlparse(suggested)
+        try:
+            parsed_suggested = urlparse(suggested)
+        except ValueError:
+            continue
         for old_url in existing_urls:
-            parsed_old = urlparse(old_url or "")
+            try:
+                parsed_old = urlparse(old_url or "")
+            except ValueError:
+                continue
             old_path = parsed_old.path or ""
-            if not old_path or old_path == "/" or _url_port(old_url) != suggested_port:
+            has_route_detail = bool((old_path and old_path != "/") or parsed_old.query or parsed_old.fragment)
+            if not has_route_detail or _url_port(old_url) != suggested_port:
                 continue
             url_hint["url"] = parsed_suggested._replace(
                 path=old_path,
@@ -1971,11 +2017,12 @@ def _service_url_review_details(existing: models.Service, service_hint: dict[str
             for url_hint in service_hint.get("urls", [])
             if _suggested_url_field(url_hint) == field and str(url_hint.get("url") or "").strip()
         ]
+        if any(_url_values_match(current, url) for url in pasted):
+            continue
         different = [
             url
             for url in dict.fromkeys(pasted)
-            if not _url_values_match(current, url)
-            and not any(_url_values_match(stored, url) for stored in known_urls)
+            if not any(_url_values_match(stored, url) for stored in known_urls)
         ]
         if different:
             details.append(
@@ -2103,9 +2150,18 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
             duplicate_service = None
             if existing_device_id and url_value:
                 duplicate_service = _duplicate_service_url(db, existing_device_id, url_value)
+            primary_attr = _primary_url_attr(url)
+            current_primary = str(getattr(duplicate, primary_attr) or "").strip() if duplicate else ""
+            optional_endpoint = bool(
+                duplicate
+                and primary_attr == "local_url"
+                and current_primary
+                and not _url_values_match(current_primary, url_value)
+                and _service_has_port_for_url(duplicate, url_value)
+            )
             url["duplicate_id"] = duplicate_url.id if duplicate_url else None
             url["duplicate_service_id"] = duplicate_service.id if duplicate_service else None
-            url["selected"] = duplicate_url is None and duplicate_service is None
+            url["selected"] = duplicate_url is None and duplicate_service is None and not optional_endpoint
             url["badges"] = []
             if duplicate_url or duplicate_service:
                 existing_location = "Opsbook"
@@ -2124,6 +2180,19 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
                 url["existing_location"] = existing_location
                 url["existing_value"] = existing_value
                 url["badges"].append(_import_badge("exists", "Already documented", f"This URL is already stored in {existing_location}."))
+            elif optional_endpoint:
+                port_label = _url_port(url_value)
+                url["review_note"] = (
+                    f"Optional endpoint inferred from {duplicate.name}'s documented port {port_label}. "
+                    "It is left unselected so it does not replace the service's main web UI URL."
+                )
+                url["badges"].append(
+                    _import_badge(
+                        "optional",
+                        "Optional endpoint",
+                        "Smart Paste inferred this URL from a port already documented on the matched service. Select it only if you want it saved as an extra URL.",
+                    )
+                )
             else:
                 url["badges"].append(_import_badge("new", "New URL", "This URL is not stored yet and will be linked to the service if selected."))
             if "trycloudflare.com" in url_value.lower():
@@ -5931,19 +6000,21 @@ async def smart_paste_apply(
             url_value = str(form.get(f"service_url_{index_raw}_{url_index_raw}") or url_item.get("url", "")).strip()
             if not url_value:
                 continue
-            if str(url_item.get("url_type", "local")) == "public":
-                exists.public_url = url_value or exists.public_url
-            else:
-                exists.local_url = url_value or exists.local_url
-            duplicate_url = db.query(models.Url).filter(models.Url.url == url_value).first()
-            if not duplicate_url:
+            url_type = str(url_item.get("url_type", "local"))
+            primary_attr = "public_url" if url_type == "public" else "local_url"
+            current_primary = str(getattr(exists, primary_attr) or "").strip()
+            if not current_primary:
+                setattr(exists, primary_attr, url_value)
+            duplicate_url = _duplicate_url_record(db, url_value)
+            duplicate_service = _duplicate_service_url(db, device.id, url_value)
+            if not duplicate_url and not duplicate_service:
                 db.add(
                     models.Url(
                         device_id=device.id,
                         service_id=exists.id,
                         label=service_name,
                         url=url_value,
-                        url_type=str(url_item.get("url_type", "local")),
+                        url_type=url_type,
                         notes=f"Imported from Smart Paste {record.id}.",
                     )
                 )

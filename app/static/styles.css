@@ -1199,6 +1199,13 @@ code {
   background: color-mix(in srgb, var(--accent) 13%, var(--surface));
 }
 
+.import-badge-optional {
+  color: color-mix(in srgb, var(--blue) 76%, var(--text));
+  border-color: color-mix(in srgb, var(--blue) 54%, var(--line));
+  border-style: dashed;
+  background: color-mix(in srgb, var(--blue) 8%, var(--surface));
+}
+
 .import-badge-update {
   color: color-mix(in srgb, var(--blue) 75%, var(--text));
   border-color: color-mix(in srgb, var(--blue) 62%, var(--line));

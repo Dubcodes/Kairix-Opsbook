@@ -101,6 +101,9 @@
                 {% if url.existing_location %}
                   <p class="url-review-note">Already stored in {{ url.existing_location }}{% if url.existing_value and url.existing_value != url.url %}: <code>{{ url.existing_value }}</code>{% endif %}</p>
                 {% endif %}
+                {% if url.review_note %}
+                  <p class="url-review-note">{{ url.review_note }}</p>
+                {% endif %}
               {% endfor %}
             </div>
           {% endif %}
