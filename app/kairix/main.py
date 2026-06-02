@@ -36,12 +36,13 @@ from .database import SessionLocal, get_db, init_db
 from .exporter import create_emergency_export, safe_export_path
 from .parser import INVENTORY_COMMAND, parse_smart_paste
 from .security import (
-    challenge_ok,
+    challenge_match,
     decrypt_text,
     encrypt_text,
     hash_password,
     new_csrf_token,
     now_utc,
+    password_hash_needs_upgrade,
     unlock_expiry,
     verify_password,
 )
@@ -250,6 +251,136 @@ def bool_setting(db: Session, key: str, default: bool = False) -> bool:
     if raw is None:
         return default
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+DEFAULT_SECRET_VALUES = {
+    "opsbook": "dev-secret-change-before-real-use",
+    "export": "dev-export-secret-change-before-real-use",
+    "session": "dev-session-secret-change-before-real-use",
+}
+SECURITY_RATE_LIMITS: dict[str, dict[str, Any]] = {}
+SECURITY_RATE_LOCK = threading.Lock()
+
+
+def _client_rate_identity(request: Request) -> str:
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _rate_limit_key(request: Request, action: str, subject: str = "") -> str:
+    clean_subject = re.sub(r"[^a-z0-9_.:@-]+", "-", subject.strip().lower())[:96]
+    return f"{action}:{_client_rate_identity(request)}:{clean_subject}"
+
+
+def _rate_limited(key: str) -> bool:
+    now = now_utc()
+    with SECURITY_RATE_LOCK:
+        state = SECURITY_RATE_LIMITS.get(key)
+        if not state:
+            return False
+        locked_until = state.get("locked_until")
+        if isinstance(locked_until, datetime) and locked_until > now:
+            return True
+        if locked_until:
+            SECURITY_RATE_LIMITS.pop(key, None)
+        return False
+
+
+def _record_rate_failure(
+    key: str,
+    *,
+    max_failures: int = 8,
+    window_minutes: int = 10,
+    lock_minutes: int = 10,
+) -> bool:
+    now = now_utc()
+    with SECURITY_RATE_LOCK:
+        state = SECURITY_RATE_LIMITS.get(key)
+        if not state or not isinstance(state.get("first_seen"), datetime) or state["first_seen"] + timedelta(minutes=window_minutes) < now:
+            state = {"count": 0, "first_seen": now}
+        state["count"] = int(state.get("count") or 0) + 1
+        locked = state["count"] >= max_failures
+        if locked:
+            state["locked_until"] = now + timedelta(minutes=lock_minutes)
+            state["count"] = 0
+        SECURITY_RATE_LIMITS[key] = state
+        return locked
+
+
+def _clear_rate_limit(key: str) -> None:
+    with SECURITY_RATE_LOCK:
+        SECURITY_RATE_LIMITS.pop(key, None)
+
+
+def _secret_posture(value: str, default_value: str, label: str) -> dict[str, str]:
+    if value == default_value:
+        return {
+            "level": "danger",
+            "label": label,
+            "status": "Default value",
+            "detail": "Replace this with a long random value in Portainer before storing real secrets.",
+        }
+    if len(value.strip()) < 32:
+        return {
+            "level": "warning",
+            "label": label,
+            "status": "Short value",
+            "detail": "Use a long random value. Keep the same key on a standby mirror that imports this instance's encrypted backups.",
+        }
+    return {
+        "level": "good",
+        "label": label,
+        "status": "Configured",
+        "detail": "A non-default value is configured. Keep it backed up outside Opsbook.",
+    }
+
+
+def _posture_counts(items: list[dict[str, str]]) -> dict[str, int]:
+    return {
+        "danger": sum(1 for item in items if item["level"] == "danger"),
+        "warning": sum(1 for item in items if item["level"] == "warning"),
+        "good": sum(1 for item in items if item["level"] == "good"),
+    }
+
+
+def _upgrade_hash_if_needed(
+    db: Session,
+    user: models.User,
+    value: str,
+    *,
+    field: str = "password_hash",
+) -> bool:
+    current = getattr(user, field)
+    if not password_hash_needs_upgrade(current):
+        return False
+    setattr(user, field, hash_password(value))
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="password_hash_upgraded" if field == "password_hash" else "reveal_hash_upgraded",
+            object_type="user",
+            object_id=user.id,
+            details_json={"field": field},
+        )
+    )
+    return True
+
+
+def _account_password_ok_and_upgrade(db: Session, user: models.User, password: str) -> bool:
+    if not verify_password(password, user.password_hash):
+        return False
+    _upgrade_hash_if_needed(db, user, password)
+    return True
+
+
+def _challenge_ok_and_upgrade(db: Session, user: models.User, challenge: str) -> bool:
+    match = challenge_match(challenge, user.password_hash, user.secondary_password_hash)
+    if not match:
+        return False
+    field = "secondary_password_hash" if match == "secondary" else "password_hash"
+    _upgrade_hash_if_needed(db, user, challenge, field=field)
+    return True
 
 
 def _webhook_scope(db: Session) -> str:
@@ -752,6 +883,134 @@ def _credential_requires_totp(db: Session, user: models.User, credential: models
         and _totp_high_security_enabled(db)
         and credential.security_level in {"high", "extreme"}
     )
+
+
+def _security_posture(user: models.User, db: Session) -> list[dict[str, str]]:
+    items = [
+        _secret_posture(settings.opsbook_secret_key, DEFAULT_SECRET_VALUES["opsbook"], "Opsbook secret key"),
+        _secret_posture(settings.export_secret_key, DEFAULT_SECRET_VALUES["export"], "Export secret key"),
+        _secret_posture(settings.session_secret_key, DEFAULT_SECRET_VALUES["session"], "Session secret key"),
+    ]
+    if "change-me" in settings.database_url or not settings.database_url.strip():
+        items.append(
+            {
+                "level": "danger",
+                "label": "Database password",
+                "status": "Default or missing",
+                "detail": "Set a long POSTGRES_PASSWORD in Portainer and redeploy the stack.",
+            }
+        )
+    else:
+        items.append(
+            {
+                "level": "good",
+                "label": "Database password",
+                "status": "Configured",
+                "detail": "The database URL is not using the built-in development password.",
+            }
+        )
+    if settings.session_cookie_secure:
+        items.append(
+            {
+                "level": "good",
+                "label": "Secure session cookie",
+                "status": "On",
+                "detail": "Browsers will only send the session cookie over HTTPS.",
+            }
+        )
+    else:
+        items.append(
+            {
+                "level": "warning",
+                "label": "Secure session cookie",
+                "status": "Off",
+                "detail": "Leave off for plain HTTP LAN testing. Turn SESSION_COOKIE_SECURE=true when Opsbook is served through HTTPS.",
+            }
+        )
+    if password_hash_needs_upgrade(user.password_hash):
+        items.append(
+            {
+                "level": "warning",
+                "label": "Account password hash",
+                "status": "Legacy strength",
+                "detail": "It will upgrade automatically after a successful password check, or immediately when you change the password.",
+            }
+        )
+    else:
+        items.append(
+            {
+                "level": "good",
+                "label": "Account password hash",
+                "status": "Current strength",
+                "detail": "New password hashes use the current Opsbook work factor.",
+            }
+        )
+    if user.secondary_password_hash:
+        legacy = password_hash_needs_upgrade(user.secondary_password_hash)
+        items.append(
+            {
+                "level": "warning" if legacy else "good",
+                "label": "Reveal password",
+                "status": "Legacy strength" if legacy else "Configured",
+                "detail": "The reveal password can be upgraded by saving it again or by using Upgrade Existing Hashes. Prefer a phrase over a short PIN.",
+            }
+        )
+    else:
+        items.append(
+            {
+                "level": "warning",
+                "label": "Reveal password",
+                "status": "Not separate",
+                "detail": "Credential reveals fall back to the account password. Add a separate reveal phrase for stronger separation.",
+            }
+        )
+    if user.totp_enabled:
+        items.append(
+            {
+                "level": "good",
+                "label": "Two-factor authentication",
+                "status": _totp_scope_label(_totp_scope(db)).title(),
+                "detail": "2FA is enabled. Keep the recovery phrase configured before relying on it.",
+            }
+        )
+    else:
+        items.append(
+            {
+                "level": "warning",
+                "label": "Two-factor authentication",
+                "status": "Off",
+                "detail": "Enable 2FA for login, high-security reveals, or both.",
+            }
+        )
+    recovery_hash = _recovery_phrase_hash(db)
+    if recovery_hash:
+        recovery_legacy = password_hash_needs_upgrade(recovery_hash)
+        items.append(
+            {
+                "level": "warning" if recovery_legacy else "good",
+                "label": "Recovery phrase",
+                "status": "Legacy strength" if recovery_legacy else "Configured",
+                "detail": "The recovery phrase is hashed and can help recover access if 2FA is unavailable. Use Upgrade Existing Hashes if it shows legacy strength.",
+            }
+        )
+    else:
+        items.append(
+            {
+                "level": "warning",
+                "label": "Recovery phrase",
+                "status": "Missing",
+                "detail": "Set this before relying on 2FA so you have a controlled recovery path.",
+            }
+        )
+    items.append(
+        {
+            "level": "good",
+            "label": "Brute-force guard",
+            "status": "On",
+            "detail": "Login, 2FA, and recovery attempts are rate-limited per client while the app process is running.",
+        }
+    )
+    return items
 
 
 def _recovery_challenge_options(db: Session) -> tuple[list[int], list[dict[str, Any]]]:
@@ -2620,8 +2879,12 @@ AUDIT_ACTION_LABELS = {
     "totp_scope_changed": "2FA use changed",
     "totp_disabled": "2FA disabled",
     "password_changed": "Password changed",
+    "password_hash_upgraded": "Password hash upgraded",
     "reveal_pin_changed": "Reveal password changed",
     "reveal_pin_removed": "Reveal password removed",
+    "reveal_hash_upgraded": "Reveal password hash upgraded",
+    "recovery_hash_upgraded": "Recovery phrase hash upgraded",
+    "security_hash_upgrade_checked": "Security hashes checked",
     "recovery_phrase_updated": "Recovery phrase updated",
     "recovery_phrase_removed": "Recovery phrase removed",
     "recovery_login": "Recovery login",
@@ -3129,6 +3392,10 @@ def login(
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
     check_csrf(request, csrf)
+    login_key = _rate_limit_key(request, "login", username)
+    if _rate_limited(login_key):
+        flash(request, "Too many failed login attempts. Try again in a few minutes.", "danger")
+        return redirect("/login")
     locked_raw = request.session.get("login_locked_until")
     if locked_raw:
         try:
@@ -3147,8 +3414,15 @@ def login(
             request.session["login_locked_until"] = (now_utc() + timedelta(minutes=5)).isoformat()
             flash(request, "Too many failed login attempts. This browser is paused for 5 minutes.", "danger")
             return redirect("/login")
+        if _record_rate_failure(login_key):
+            flash(request, "Too many failed login attempts. Try again in a few minutes.", "danger")
+            return redirect("/login")
         flash(request, "Login failed. Check the username and password.", "danger")
         return redirect("/login")
+    _clear_rate_limit(login_key)
+    upgraded = _upgrade_hash_if_needed(db, user, password)
+    if upgraded:
+        db.commit()
     request.session.clear()
     if user.totp_enabled and _totp_login_enabled(db):
         request.session["pending_2fa_user_id"] = user.id
@@ -3191,9 +3465,17 @@ def login_2fa(
     if not user or not user.totp_secret_encrypted:
         request.session.clear()
         return redirect("/login")
+    totp_key = _rate_limit_key(request, "login-2fa", str(user.id))
+    if _rate_limited(totp_key):
+        flash(request, "Too many 2FA attempts. Try again in a few minutes.", "danger")
+        return redirect("/login/2fa")
     if not _verify_totp_code(user, code):
+        if _record_rate_failure(totp_key, max_failures=6):
+            flash(request, "Too many 2FA attempts. Try again in a few minutes.", "danger")
+            return redirect("/login/2fa")
         flash(request, "Incorrect 2FA code.", "danger")
         return redirect("/login/2fa")
+    _clear_rate_limit(totp_key)
     request.session.clear()
     request.session["user_id"] = user.id
     request.session["last_seen"] = now_utc().isoformat()
@@ -3223,6 +3505,10 @@ def recovery_start(
     if not recovery_hash:
         flash(request, "Recovery phrase is not configured yet.", "warning")
         return redirect("/login")
+    recovery_key = _rate_limit_key(request, "recovery", "phrase")
+    if _rate_limited(recovery_key):
+        flash(request, "Too many recovery attempts. Try again in a few minutes.", "danger")
+        return redirect("/recover")
     locked_raw = request.session.get("recovery_locked_until")
     if locked_raw:
         try:
@@ -3237,8 +3523,13 @@ def recovery_start(
         if failures >= 5:
             request.session["recovery_failures"] = 0
             request.session["recovery_locked_until"] = (now_utc() + timedelta(minutes=5)).isoformat()
+        _record_rate_failure(recovery_key, max_failures=5)
         flash(request, "Recovery phrase was not accepted.", "danger")
         return redirect("/recover")
+    _clear_rate_limit(recovery_key)
+    if password_hash_needs_upgrade(recovery_hash):
+        set_app_setting(db, RECOVERY_PHRASE_HASH_SETTING, hash_password(recovery_phrase.strip()))
+        db.commit()
     expected, options = _recovery_challenge_options(db)
     if not expected or not options:
         flash(request, "Recovery challenge needs at least six saved services. Log in normally and add more service records first.", "warning")
@@ -4823,9 +5114,7 @@ def credential_reveal_post(
     if needs_challenge and not challenge.strip():
         flash(request, "Enter your account password or reveal PIN.", "warning")
         return redirect(f"/credentials/{credential.id}/reveal")
-    if needs_challenge and not challenge_ok(
-        challenge, user.password_hash, user.secondary_password_hash
-    ):
+    if needs_challenge and not _challenge_ok_and_upgrade(db, user, challenge):
         return _reveal_failure_response(request)
     if needs_totp and not totp_code.strip():
         flash(request, "Enter your 2FA code.", "warning")
@@ -4894,9 +5183,7 @@ async def credential_reveal_json(
             },
             status_code=403,
         )
-    if needs_challenge and not challenge_ok(
-        challenge_value, user.password_hash, user.secondary_password_hash
-    ):
+    if needs_challenge and not _challenge_ok_and_upgrade(db, user, challenge_value):
         response = _reveal_failure_response(request, json_response=True)
         if isinstance(response, JSONResponse):
             return response
@@ -5294,7 +5581,7 @@ def tag_delete(
     tag = db.get(models.Tag, tag_id)
     if not tag:
         raise HTTPException(404, "Tag not found.")
-    if not verify_password(password, user.password_hash):
+    if not _account_password_ok_and_upgrade(db, user, password):
         flash(request, "Enter your account password to delete a tag from all records.", "danger")
         return redirect("/tags")
     link_count = db.query(models.TagLink).filter_by(tag_id=tag.id).count()
@@ -6583,6 +6870,7 @@ def settings_page(
         pending_totp_qr_svg = buffer.getvalue().decode("utf-8")
     totp_scope = _totp_scope(db)
     devices = _device_order_query(db).all()
+    security_posture = _security_posture(user, db)
     return render(
         request,
         "settings.html",
@@ -6600,6 +6888,8 @@ def settings_page(
             "suggested_recovery_phrase": _suggested_recovery_phrase(),
             "totp_scope": totp_scope,
             "totp_scope_label": _totp_scope_label(totp_scope),
+            "security_posture": security_posture,
+            "security_posture_counts": _posture_counts(security_posture),
         },
         user=user,
     )
@@ -6771,7 +7061,7 @@ def settings_password_change(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    if not verify_password(current_password, user.password_hash):
+    if not _account_password_ok_and_upgrade(db, user, current_password):
         flash(request, "Current password was incorrect.", "danger")
         return redirect("/settings#password-security")
     if new_password != confirm_password:
@@ -6799,7 +7089,7 @@ def settings_reveal_pin_change(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    if not verify_password(current_password, user.password_hash):
+    if not _account_password_ok_and_upgrade(db, user, current_password):
         flash(request, "Account password was incorrect.", "danger")
         return redirect("/settings#password-security")
     if new_reveal_pin != confirm_reveal_pin:
@@ -6822,6 +7112,73 @@ def settings_reveal_pin_change(
     return redirect("/settings#password-security")
 
 
+@app.post("/settings/security/hash-upgrade")
+def settings_hash_upgrade(
+    request: Request,
+    csrf: str = Form(...),
+    current_password: str = Form(...),
+    reveal_password: str = Form(""),
+    recovery_phrase: str = Form(""),
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    check_csrf(request, csrf)
+    ensure_writable()
+    if not verify_password(current_password, user.password_hash):
+        flash(request, "Account password was incorrect.", "danger")
+        return redirect("/settings#password-security")
+
+    reveal_value = reveal_password.strip()
+    recovery_value = recovery_phrase.strip()
+    recovery_hash = _recovery_phrase_hash(db)
+    if reveal_value:
+        if not user.secondary_password_hash:
+            flash(request, "No separate reveal password is configured.", "warning")
+            return redirect("/settings#password-security")
+        if not verify_password(reveal_value, user.secondary_password_hash):
+            flash(request, "Reveal password or PIN did not match.", "danger")
+            return redirect("/settings#password-security")
+    if recovery_value:
+        if not recovery_hash:
+            flash(request, "No recovery phrase is configured.", "warning")
+            return redirect("/settings#password-security")
+        if not verify_password(recovery_value, recovery_hash):
+            flash(request, "Recovery phrase did not match.", "danger")
+            return redirect("/settings#password-security")
+
+    upgraded: list[str] = []
+    if _upgrade_hash_if_needed(db, user, current_password):
+        upgraded.append("account password")
+    if reveal_value and _upgrade_hash_if_needed(db, user, reveal_value, field="secondary_password_hash"):
+        upgraded.append("reveal password")
+    if recovery_value and password_hash_needs_upgrade(recovery_hash):
+        set_app_setting(db, RECOVERY_PHRASE_HASH_SETTING, hash_password(recovery_value))
+        db.add(
+            models.AuditLog(
+                user_id=user.id,
+                action="recovery_hash_upgraded",
+                object_type="user",
+                object_id=user.id,
+            )
+        )
+        upgraded.append("recovery phrase")
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="security_hash_upgrade_checked",
+            object_type="user",
+            object_id=user.id,
+            details_json={"upgraded": upgraded, "checked_reveal": bool(reveal_value), "checked_recovery": bool(recovery_value)},
+        )
+    )
+    db.commit()
+    if upgraded:
+        flash(request, f"Upgraded {', '.join(upgraded)} hash strength.", "success")
+    else:
+        flash(request, "No legacy hashes needed upgrading for the values you entered.", "success")
+    return redirect("/settings#password-security")
+
+
 @app.post("/settings/security/recovery")
 def settings_recovery_change(
     request: Request,
@@ -6835,7 +7192,7 @@ def settings_recovery_change(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    if not verify_password(current_password, user.password_hash):
+    if not _account_password_ok_and_upgrade(db, user, current_password):
         flash(request, "Account password was incorrect.", "danger")
         return redirect("/settings#account-security")
     if clear_recovery.lower() in {"on", "true", "1", "yes"}:
@@ -6927,7 +7284,7 @@ def settings_2fa_start(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    if not verify_password(password, user.password_hash):
+    if not _account_password_ok_and_upgrade(db, user, password):
         flash(request, "Incorrect password. 2FA setup was not started.", "danger")
         return redirect("/settings#two-factor")
     scope = _set_totp_scope(db, _totp_scope_from_flags(totp_login, totp_high_security))
@@ -7001,7 +7358,7 @@ def settings_2fa_scope(
     if not user.totp_enabled:
         flash(request, "Enable 2FA before changing where it is used.", "warning")
         return redirect("/settings#two-factor")
-    if not verify_password(password, user.password_hash):
+    if not _account_password_ok_and_upgrade(db, user, password):
         flash(request, "Incorrect password. 2FA use was not changed.", "danger")
         return redirect("/settings#two-factor")
     if not _verify_totp_code(user, code):
@@ -7033,7 +7390,7 @@ def settings_2fa_disable(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    if not verify_password(password, user.password_hash):
+    if not _account_password_ok_and_upgrade(db, user, password):
         flash(request, "Incorrect password. 2FA was not changed.", "danger")
         return redirect("/settings#two-factor")
     if user.totp_enabled and not _verify_totp_code(user, code):
@@ -7348,7 +7705,7 @@ def exports_create(
     check_csrf(request, csrf)
     ensure_writable()
     include_secrets = include_credentials == "on"
-    if include_secrets and not challenge_ok(challenge, user.password_hash, user.secondary_password_hash):
+    if include_secrets and not _challenge_ok_and_upgrade(db, user, challenge):
         flash(request, "Credential export requires your account password or reveal password.", "danger")
         return redirect("/exports")
     created = create_emergency_export(db, include_credentials=include_secrets)
@@ -7426,7 +7783,7 @@ def export_delete(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    if not challenge_ok(password, user.password_hash, user.secondary_password_hash):
+    if not _challenge_ok_and_upgrade(db, user, password):
         flash(request, "Deleting emergency exports requires your account password or reveal PIN.", "danger")
         return redirect("/exports")
     export = db.get(models.BackupExport, export_id)
@@ -7465,7 +7822,7 @@ def exports_delete_old(
 ) -> RedirectResponse:
     check_csrf(request, csrf)
     ensure_writable()
-    if not challenge_ok(password, user.password_hash, user.secondary_password_hash):
+    if not _challenge_ok_and_upgrade(db, user, password):
         flash(request, "Deleting old emergency exports requires your account password or reveal PIN.", "danger")
         return redirect("/exports")
     days = max(1, min(99999, int(older_than_days or 90)))

@@ -28,6 +28,16 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      - name: Read app version
+        id: app-version
+        run: |
+          VERSION=$(grep -Eo 'app_version: str = os.getenv\("APP_VERSION", "[^"]+"\)' app/kairix/config.py | sed -E 's/.*"([^"]+)"\)$/\1/')
+          if [ -z "$VERSION" ]; then
+            echo "Could not find app version in app/kairix/config.py" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - name: Build and publish image
         uses: docker/build-push-action@v6
         with:
@@ -37,3 +47,4 @@ jobs:
           cache-to: type=gha,mode=max
           tags: |
             ghcr.io/dubcodes/kairix-opsbook:latest
+            ghcr.io/dubcodes/kairix-opsbook:${{ steps.app-version.outputs.version }}

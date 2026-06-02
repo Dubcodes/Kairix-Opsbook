@@ -11,7 +11,7 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from .config import settings
 
-HASH_ITERATIONS = 260_000
+HASH_ITERATIONS = 600_000
 
 
 def now_utc() -> datetime:
@@ -46,6 +46,24 @@ def verify_password(password: str, stored_hash: str | None) -> bool:
         return False
 
 
+def password_hash_needs_upgrade(stored_hash: str | None) -> bool:
+    if not stored_hash:
+        return False
+    try:
+        algorithm, iterations, _, _ = stored_hash.split("$", 3)
+        return algorithm != "pbkdf2_sha256" or int(iterations) < HASH_ITERATIONS
+    except (ValueError, TypeError):
+        return True
+
+
+def challenge_match(challenge: str, password_hash: str, secondary_hash: str | None) -> str:
+    if verify_password(challenge, secondary_hash):
+        return "secondary"
+    if verify_password(challenge, password_hash):
+        return "primary"
+    return ""
+
+
 def _fernet_from_secret(secret: str) -> Fernet:
     key = base64.urlsafe_b64encode(hashlib.sha256(secret.encode("utf-8")).digest())
     return Fernet(key)
@@ -73,9 +91,7 @@ def new_csrf_token() -> str:
 
 
 def challenge_ok(challenge: str, password_hash: str, secondary_hash: str | None) -> bool:
-    return verify_password(challenge, secondary_hash) or verify_password(
-        challenge, password_hash
-    )
+    return bool(challenge_match(challenge, password_hash, secondary_hash))
 
 
 def unlock_expiry(minutes: int | None = None) -> datetime:
@@ -84,4 +100,3 @@ def unlock_expiry(minutes: int | None = None) -> datetime:
 
 def random_secret(length: int = 32) -> str:
     return base64.urlsafe_b64encode(os.urandom(length)).decode("utf-8")
-

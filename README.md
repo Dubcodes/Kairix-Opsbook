@@ -75,6 +75,7 @@ On first run, create the owner account. Change the database password and all sec
 Important `.env` values:
 
 ```text
+OPSBOOK_IMAGE_TAG=0.1.9
 APP_PORT=8095
 INSTANCE_NAME=Opsbook
 INSTANCE_MODE=primary
@@ -191,6 +192,7 @@ Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
 6. Add environment variables before deploying:
 
 ```text
+OPSBOOK_IMAGE_TAG=0.1.9
 APP_PORT=8095
 POSTGRES_DB=opsbook
 POSTGRES_USER=opsbook
@@ -221,13 +223,23 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes `ghcr.io/dubcodes/kairix-opsbook:latest` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.9` on pushes to `main`.
 
-To update:
+For production, prefer a pinned version:
 
-1. Push or merge changes to `main`.
-2. Wait for the **Build and publish Docker image** action to pass.
-3. In Portainer, pull/redeploy the stack so it downloads the newest `latest` image.
+```text
+OPSBOOK_IMAGE_TAG=0.1.9
+```
+
+To update production safely:
+
+1. Make and test changes away from the production container.
+2. Push or merge changes to `main` only after checks pass.
+3. Wait for the **Build and publish Docker image** action to pass.
+4. Set `OPSBOOK_IMAGE_TAG` in Portainer to the tested version.
+5. Pull/redeploy the stack.
+
+Avoid using `latest` for production unless you intentionally want every redeploy to pull the newest image.
 
 If Portainer cannot pull the image, check that the GitHub Container Registry package is public or configure registry authentication in Portainer.
 

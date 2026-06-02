@@ -531,6 +531,93 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
   background: color-mix(in srgb, #f59e0b 8%, var(--surface));
 }
 
+.security-posture-panel .section-title {
+  align-items: flex-start;
+}
+
+.posture-summary {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.posture-count {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.posture-count.danger {
+  border-color: color-mix(in srgb, var(--red) 55%, var(--line));
+  color: var(--red);
+}
+
+.posture-count.warning {
+  border-color: color-mix(in srgb, var(--amber) 65%, var(--line));
+  color: #92400e;
+}
+
+.posture-count.good {
+  border-color: color-mix(in srgb, var(--green) 55%, var(--line));
+  color: var(--green);
+}
+
+.posture-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.posture-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: var(--surface-soft);
+}
+
+.posture-item strong,
+.posture-item small {
+  display: block;
+}
+
+.posture-item small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.posture-item > span {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  text-align: right;
+  text-transform: uppercase;
+}
+
+.posture-danger {
+  border-left-color: var(--red);
+}
+
+.posture-warning {
+  border-left-color: var(--amber);
+}
+
+.posture-good {
+  border-left-color: var(--green);
+}
+
 .security-access-grid {
   align-items: start;
 }
@@ -1859,7 +1946,20 @@ input[type="color"] {
     text-align: left;
     overflow-wrap: anywhere;
   }
-  .stats-grid, .two-col, .form-grid, .quick-grid, .summary-grid { grid-template-columns: 1fr; }
+  .stats-grid, .two-col, .form-grid, .quick-grid, .summary-grid, .posture-grid { grid-template-columns: 1fr; }
+  .security-posture-panel .section-title {
+    flex-direction: column;
+  }
+  .posture-summary {
+    justify-content: flex-start;
+  }
+  .posture-item {
+    flex-direction: column;
+  }
+  .posture-item > span {
+    max-width: 100%;
+    text-align: left;
+  }
   .span-2 { grid-column: auto; }
   .filter-bar { flex-direction: row; flex-wrap: wrap; gap: 6px; }
   .filter-bar .live-search-box,

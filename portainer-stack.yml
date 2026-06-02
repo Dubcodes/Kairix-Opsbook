@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/dubcodes/kairix-opsbook:latest
+    image: ghcr.io/dubcodes/kairix-opsbook:${OPSBOOK_IMAGE_TAG:-0.1.9}
     pull_policy: always
     container_name: kairix-opsbook-app
     restart: unless-stopped
@@ -8,7 +8,7 @@ services:
       - "${APP_PORT:-8095}:8000"
     environment:
       APP_NAME: "${APP_NAME:-Kairix Opsbook}"
-      APP_VERSION: "${APP_VERSION:-0.1.8}"
+      APP_VERSION: "${APP_VERSION:-0.1.9}"
       INSTANCE_NAME: "${INSTANCE_NAME:-Opsbook}"
       INSTANCE_MODE: "${INSTANCE_MODE:-primary}"
 

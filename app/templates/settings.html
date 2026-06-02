@@ -34,6 +34,31 @@
   <p class="muted">Mode is set with the <code>INSTANCE_MODE</code> environment variable. Use <code>primary</code> for the writable instance and <code>standby</code> for a read-only mirror. Temporary standby intake is planned, but not active in this version.</p>
 </section>
 
+<section class="panel security-posture-panel">
+  <div class="section-title">
+    <div>
+      <h2>Security Posture</h2>
+      <p class="muted">Compatibility-safe checks for secrets, sessions, password hashes, 2FA, and recovery.</p>
+    </div>
+    <div class="posture-summary" title="Critical items should be fixed before storing important secrets. Warnings are recommended hardening steps.">
+      {% if security_posture_counts.danger %}<span class="posture-count danger">{{ security_posture_counts.danger }} critical</span>{% endif %}
+      {% if security_posture_counts.warning %}<span class="posture-count warning">{{ security_posture_counts.warning }} warning</span>{% endif %}
+      <span class="posture-count good">{{ security_posture_counts.good }} good</span>
+    </div>
+  </div>
+  <div class="posture-grid">
+    {% for item in security_posture %}
+      <div class="posture-item posture-{{ item.level }}" title="{{ item.detail }}">
+        <div>
+          <strong>{{ item.label }}</strong>
+          <small>{{ item.detail }}</small>
+        </div>
+        <span>{{ item.status }}</span>
+      </div>
+    {% endfor %}
+  </div>
+</section>
+
 <details class="panel collapsible-panel">
   <summary><span><strong>Primary / Mirror Setup</strong><small>Current safe model and planned standby intake</small></span></summary>
   <p class="muted">Today, Opsbook supports a simple primary plus encrypted mirror model. The primary is where you write. The mirror imports emergency exports and stays read-only so two databases do not fight over encrypted secrets.</p>
@@ -194,6 +219,15 @@
       <div class="form-actions span-2"><button type="submit">Update Reveal PIN</button></div>
     </form>
   </section>
+  <form method="post" action="/settings/security/hash-upgrade" class="form-grid security-form">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <h3 class="span-2">Upgrade Existing Hashes</h3>
+    <p class="muted span-2">Password hashes are one-way, so Opsbook can only upgrade values you type here and successfully verify. Leave reveal or recovery blank if you do not use them.</p>
+    <label class="span-2">Account password <input name="current_password" type="password" required autocomplete="current-password"></label>
+    <label>Reveal password or PIN <input name="reveal_password" type="password" autocomplete="current-password"></label>
+    <label>Recovery phrase <input name="recovery_phrase" type="password" autocomplete="current-password"></label>
+    <div class="form-actions span-2"><button type="submit" title="Rehash verified account, reveal, and recovery secrets using the current work factor.">Upgrade Verified Hashes</button></div>
+  </form>
 </section>
 
 <section class="two-col security-access-grid">
