@@ -1,7 +1,15 @@
+import os
+from pathlib import Path
 import unittest
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+
+ROOT = Path(__file__).resolve().parents[1]
+APP_ROOT = ROOT / "app"
+os.environ.setdefault("DATABASE_URL", "sqlite:///:memory:")
+if not (Path.cwd() / "static").exists() and (APP_ROOT / "static").exists():
+    os.chdir(APP_ROOT)
 
 from kairix import models
 from kairix.main import _delete_service_tree
