@@ -1023,12 +1023,12 @@ code {
 
 .review-item {
   display: grid;
-  gap: 7px;
+  gap: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  padding: 9px;
+  padding: 12px;
   background: var(--surface-soft);
-  margin-bottom: 8px;
+  margin-bottom: 12px;
 }
 .missing-review {
   border-color: color-mix(in srgb, var(--red) 55%, var(--line));
@@ -1037,9 +1037,64 @@ code {
 
 .nested-review {
   display: grid;
-  gap: 5px;
+  gap: 8px;
   border-top: 1px solid var(--line);
-  padding-top: 7px;
+  margin-top: 4px;
+  padding-top: 10px;
+}
+
+.smart-paste-review-form {
+  padding-bottom: 18px;
+}
+
+.smart-paste-submitbar {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 18px 0 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 36%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  box-shadow: 0 -8px 24px color-mix(in srgb, var(--bg) 38%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.smart-paste-submitbar .form-actions {
+  margin: 0;
+}
+
+.smart-paste-submitbar-stats {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.smart-paste-submitbar-stats strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .smart-paste-submitbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .smart-paste-submitbar .form-actions {
+    justify-content: stretch;
+  }
+
+  .smart-paste-submitbar .form-actions > * {
+    flex: 1;
+  }
 }
 
 .review-diff-list {

@@ -2443,20 +2443,22 @@ def _favorite_credential_ids(db: Session) -> set[int]:
 
 
 def _delete_service_tree(db: Session, service: models.Service) -> None:
-    for credential in list(service.credentials):
+    for credential in db.query(models.Credential).filter_by(service_id=service.id).all():
         db.query(models.TagLink).filter_by(object_type="credential", object_id=credential.id).delete()
         db.delete(credential)
-    for port in list(service.ports):
+    for port in db.query(models.Port).filter_by(service_id=service.id).all():
         db.query(models.TagLink).filter_by(object_type="port", object_id=port.id).delete()
         db.delete(port)
-    for url in list(service.urls):
+    for url in db.query(models.Url).filter_by(service_id=service.id).all():
         db.query(models.TagLink).filter_by(object_type="url", object_id=url.id).delete()
         db.delete(url)
     db.query(models.Note).filter_by(object_type="service", object_id=service.id).delete()
     for command in db.query(models.Command).filter_by(applies_to_type="service", applies_to_id=service.id).all():
         db.query(models.TagLink).filter_by(object_type="command", object_id=command.id).delete()
+        db.query(models.RecipeStep).filter_by(command_id=command.id).update({"command_id": None}, synchronize_session=False)
         db.delete(command)
     db.query(models.TagLink).filter_by(object_type="service", object_id=service.id).delete()
+    db.flush()
     db.delete(service)
 
 

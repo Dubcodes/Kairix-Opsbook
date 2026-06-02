@@ -13,7 +13,7 @@
   </div>
   <a class="button secondary" href="/smart-paste">New paste</a>
 </section>
-<form method="post" action="/smart-paste/{{ record.id }}/apply" class="panel" data-confirm-checked-name="delete_missing_services" data-confirm-checked-delete="Apply Smart Paste and delete the selected missing service record(s)? This also removes their linked ports, URLs, notes, commands, and credentials.">
+<form method="post" action="/smart-paste/{{ record.id }}/apply" class="panel smart-paste-review-form" data-confirm-checked-name="delete_missing_services" data-confirm-checked-delete="Apply Smart Paste and delete the selected missing service record(s)? This also removes their linked ports, URLs, notes, commands, and credentials.">
   <input type="hidden" name="csrf" value="{{ csrf }}">
   {% set token_only = parsed.tokens and not parsed.device.name and not parsed.device.primary_ip and not parsed.services and not parsed.ports and not parsed.urls and not parsed.commands and not parsed.credentials %}
   <div class="form-actions">
@@ -291,9 +291,19 @@
       {% else %}<p class="empty">No paths detected.</p>{% endfor %}
     </section>
   </div>
-  <div class="form-actions">
-    <button type="submit">Apply selected items</button>
-    <a class="button secondary" href="/smart-paste">Cancel</a>
+  <div class="smart-paste-submitbar">
+    <div class="smart-paste-submitbar-stats">
+      <strong>Review ready</strong>
+      <span>{{ parsed.services|length }} services</span>
+      <span>{{ parsed.ports|length }} loose ports</span>
+      <span>{{ parsed.urls|length }} loose URLs</span>
+      <span>{{ parsed.commands|length }} commands</span>
+      {% if parsed.missing_services %}<span>{{ parsed.missing_services|length }} suggested deletes</span>{% endif %}
+    </div>
+    <div class="form-actions">
+      <button type="submit">Apply selected items</button>
+      <a class="button secondary" href="/smart-paste">Cancel</a>
+    </div>
   </div>
 </form>
 <section class="panel">
