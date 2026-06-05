@@ -2015,6 +2015,44 @@ def _service_alias(value: str) -> str:
     return clean.strip("-")
 
 
+GENERIC_SERVICE_ALIAS_TOKENS = {
+    "app",
+    "backend",
+    "container",
+    "frontend",
+    "git",
+    "main",
+    "server",
+    "service",
+    "ui",
+    "web",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+}
+
+
+def _service_alias_tokens(value: str) -> set[str]:
+    return {token for token in slugify(value).split("-") if token}
+
+
+def _service_aliases_compatible(import_alias: str, stored_alias: str) -> bool:
+    if import_alias == stored_alias:
+        return True
+    if len(import_alias) <= 4 or len(stored_alias) <= 4:
+        return False
+    if import_alias not in stored_alias and stored_alias not in import_alias:
+        return False
+    import_tokens = _service_alias_tokens(import_alias)
+    stored_tokens = _service_alias_tokens(stored_alias)
+    if not import_tokens or not stored_tokens or not (import_tokens & stored_tokens):
+        return False
+    meaningful_difference = (import_tokens ^ stored_tokens) - GENERIC_SERVICE_ALIAS_TOKENS
+    return not meaningful_difference
+
+
 def _match_service_for_import(db: Session, device_id: int, service_hint: dict[str, Any]) -> models.Service | None:
     name = str(service_hint.get("name", "")).strip()
     aliases = {_service_alias(name), slugify(name)}
@@ -2040,7 +2078,7 @@ def _match_service_for_import(db: Session, device_id: int, service_hint: dict[st
             service_aliases = {_service_alias(service.name), slugify(service.name)}
             if alias in service_aliases:
                 return service
-            if alias and any(alias in existing or existing in alias for existing in service_aliases if len(existing) > 4):
+            if alias and any(_service_aliases_compatible(alias, existing) for existing in service_aliases):
                 return service
     return None
 

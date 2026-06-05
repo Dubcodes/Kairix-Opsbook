@@ -61,6 +61,96 @@ beszel         henrygd/beszel:latest         Up 7 hours  0.0.0.0:8090->8090/tcp
         self.assertEqual(parsed["device"]["name"], "")
         self.assertIn("Beszel", {item["name"] for item in parsed["services"]})
 
+    def test_windows_systeminfo_style_host_and_os(self) -> None:
+        text = """Host Name:                 WIN-OPS-01
+OS Name:                   Microsoft Windows 11 Pro
+OS Version:                10.0.22631 N/A Build 22631
+IPv4 Address. . . . . . . . . . . : 192.168.1.42
+"""
+        parsed = parse_smart_paste(text)
+
+        self.assertEqual(parsed["device"]["name"], "WIN-OPS-01")
+        self.assertEqual(parsed["device"]["primary_ip"], "192.168.1.42")
+        self.assertIn("Microsoft Windows 11 Pro", parsed["device"]["os_name"])
+
+    def test_macos_sw_vers_style_host_and_os(self) -> None:
+        text = """ComputerName: Studio Mac
+ProductName: macOS
+ProductVersion: 14.5
+IPv4: 10.0.0.12
+"""
+        parsed = parse_smart_paste(text)
+
+        self.assertEqual(parsed["device"]["name"], "Studio Mac")
+        self.assertEqual(parsed["device"]["primary_ip"], "10.0.0.12")
+        self.assertEqual(parsed["device"]["os_name"], "macOS 14.5")
+
+    def test_default_docker_ps_rows_create_services_and_ports(self) -> None:
+        text = """=== HOST ===
+Hostname: docker-host
+
+=== IP ADDRESSES ===
+eth0 UP 192.168.1.20/24
+
+=== DOCKER CONTAINERS ===
+CONTAINER ID   IMAGE          COMMAND                  CREATED        STATUS        PORTS                                      NAMES
+2c3032c7d8a1   nginx:alpine   "/docker-entrypoint..."  2 hours ago    Up 2 hours    0.0.0.0:8088->80/tcp, :::8088->80/tcp      web-proxy
+"""
+        parsed = parse_smart_paste(text)
+        service = next(item for item in parsed["services"] if item["name"] == "Web Proxy")
+
+        self.assertEqual(service["container_name"], "web-proxy")
+        self.assertEqual(service["image"], "nginx:alpine")
+        self.assertEqual(service["ports"][0]["host_port"], 8088)
+        self.assertEqual(service["ports"][0]["internal_port"], 80)
+        self.assertEqual(service["urls"][0]["url"], "http://192.168.1.20:8088/")
+
+    def test_inventory_session_lines_do_not_create_login_credentials(self) -> None:
+        text = """login as: mainuser
+mainuser@192.168.0.238's password:
+Linux moxxie 6.1.0-48-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.172-1 (2026-05-15) x86_64
+Last login: Fri Jun  5 15:18:59 2026 from 192.168.0.244
+mainuser@moxxie:~$ printf '=== HOST ===\\n'; hostnamectl 2>/dev/null || hostname
+=== HOST ===
+ Static hostname: moxxie
+Operating System: Debian GNU/Linux 12 (bookworm)
+
+=== IP ADDRESSES ===
+eno1             UP             192.168.0.238/24
+
+=== DOCKER CONTAINERS ===
+NAMES              IMAGE                                      STATUS      PORTS
+kairix-opsbook-app ghcr.io/dubcodes/kairix-opsbook:latest     Up 7 hours  0.0.0.0:8095->8000/tcp
+"""
+        parsed = parse_smart_paste(text)
+
+        usernames = {item.get("username", "").lower() for item in parsed["credentials"]}
+        labels = {item.get("label", "").lower() for item in parsed["credentials"]}
+        self.assertNotIn("mainuser", usernames)
+        self.assertNotIn("fri", usernames)
+        self.assertNotIn("mainuser login", labels)
+        self.assertNotIn("fri login", labels)
+
+    def test_syncthing_relay_ports_do_not_create_web_urls(self) -> None:
+        text = """=== HOST ===
+ Static hostname: PortainServer
+
+=== IP ADDRESSES ===
+eno1             UP             192.168.0.205/24
+
+=== DOCKER CONTAINERS ===
+NAMES             IMAGE                         STATUS      PORTS
+syncthing-relay   syncthing/relaysrv:latest     Up 2 days   0.0.0.0:22067->22067/tcp, 0.0.0.0:22070->22070/tcp
+"""
+        parsed = parse_smart_paste(text)
+        relay = next(item for item in parsed["services"] if item["name"] == "Syncthing Relay")
+
+        self.assertEqual(relay["urls"], [])
+        self.assertEqual(
+            {(port["host_port"], port["internal_port"]) for port in relay["ports"]},
+            {(22067, 22067), (22070, 22070)},
+        )
+
     def test_cloudflare_tunnel_output_keeps_source_context(self) -> None:
         text = """=== CLOUDFLARE TUNNELS ===
 
@@ -208,6 +298,67 @@ https://microphone-acquisition-ons-spine.trycloudflare.com
             services_by_name["People App Christchurch"]["urls"][-1]["url"],
             "https://microphone-acquisition-ons-spine.trycloudflare.com",
         )
+
+    def test_syncthing_relay_does_not_match_syncthing_service(self) -> None:
+        session = self.Session()
+        try:
+            device = models.Device(name="PortainServer", slug="portainserver", primary_ip="192.168.0.205")
+            syncthing = models.Service(
+                device=device,
+                name="Syncthing",
+                slug="syncthing",
+                local_url="http://192.168.0.205:1834/",
+                container_name="syncthing",
+                image="syncthing/syncthing:latest",
+            )
+            session.add_all(
+                [
+                    device,
+                    syncthing,
+                    models.Port(device=device, service=syncthing, host_port=22067, internal_port=22067),
+                    models.Port(device=device, service=syncthing, host_port=22070, internal_port=22070),
+                ]
+            )
+            session.commit()
+
+            parsed = {
+                "device": {"name": "PortainServer", "primary_ip": "192.168.0.205", "confidence": "medium"},
+                "services": [
+                    {
+                        "name": "Syncthing Relay",
+                        "container_name": "syncthing-relay",
+                        "image": "syncthing/relaysrv:latest",
+                        "stack_group": "syncthing",
+                        "compose_path": "/data/compose/5/docker-compose.yml",
+                        "confidence": "medium",
+                        "urls": [
+                            {"url": "http://192.168.0.205:22067/", "url_type": "local", "confidence": "medium"},
+                            {"url": "http://192.168.0.205:22070/", "url_type": "local", "confidence": "medium"},
+                        ],
+                        "ports": [
+                            {"host_port": 22067, "internal_port": 22067, "protocol": "tcp"},
+                            {"host_port": 22070, "internal_port": 22070, "protocol": "tcp"},
+                        ],
+                        "credentials": [],
+                    }
+                ],
+                "ports": [],
+                "urls": [],
+                "commands": [],
+                "credentials": [],
+                "tokens": [],
+                "paths": [],
+                "extras": {},
+            }
+
+            annotated = _annotate_import_suggestions(session, parsed)
+            relay = annotated["services"][0]
+
+            self.assertIsNone(relay["duplicate_id"])
+            self.assertIn("New service", {badge["label"] for badge in relay["badges"]})
+            self.assertFalse(any(badge["kind"] == "conflict" for badge in relay["badges"]))
+        finally:
+            session.close()
 
     def test_credential_login_url_creates_service_url_and_port(self) -> None:
         session = self.Session()

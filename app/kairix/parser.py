@@ -38,6 +38,42 @@ COMMAND_RE = re.compile(
 USERNAME_RE = re.compile(r"\b(?:user(?:name)?|login|account)\s*(?:is|:)?\s*([a-z_][a-z0-9_-]{1,31})\b", re.IGNORECASE)
 PASSWORD_STYLE_USER_RE = re.compile(r"\b([a-z_][a-z0-9_-]{1,31})\s+password\b", re.IGNORECASE)
 GITHUB_TOKEN_RE = re.compile(r"\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b")
+USERNAME_NOISE_WORDS = {
+    "as",
+    "last",
+    "local",
+    "only",
+    "root",
+    "mon",
+    "monday",
+    "tue",
+    "tues",
+    "tuesday",
+    "wed",
+    "wednesday",
+    "thu",
+    "thurs",
+    "thursday",
+    "fri",
+    "friday",
+    "sat",
+    "saturday",
+    "sun",
+    "sunday",
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "sept",
+    "oct",
+    "nov",
+    "dec",
+}
 
 
 def _unique(items: list[str]) -> list[str]:
@@ -49,6 +85,82 @@ def _unique(items: list[str]) -> list[str]:
             seen.add(clean)
             result.append(clean)
     return result
+
+
+def _line_for_span(text: str, start: int, end: int) -> str:
+    line_start = text.rfind("\n", 0, start) + 1
+    line_end = text.find("\n", end)
+    if line_end == -1:
+        line_end = len(text)
+    return text[line_start:line_end].strip()
+
+
+def _is_session_noise_line(line: str) -> bool:
+    clean = line.strip()
+    lowered = clean.lower()
+    if not clean:
+        return False
+    if lowered.startswith(
+        (
+            "login as:",
+            "last login:",
+            "linux ",
+            "the programs included",
+            "debian gnu/linux comes",
+            "the exact distribution terms",
+            "warning:",
+            "host key verification",
+        )
+    ):
+        return True
+    return bool(re.match(r"^[A-Za-z0-9_.-]+@[A-Za-z0-9_.-]+:.*[$#]\s*", clean))
+
+
+def _safe_username_candidate(candidate: str) -> bool:
+    clean = candidate.strip().lower()
+    return bool(clean) and clean not in USERNAME_NOISE_WORDS
+
+
+def _field_value_from_line(line: str, labels: set[str]) -> str:
+    clean = line.strip()
+    if not clean:
+        return ""
+    for label in sorted(labels, key=len, reverse=True):
+        label_pattern = re.escape(label).replace(r"\ ", r"\s+")
+        match = re.match(rf"^\s*{label_pattern}(?:\s|\.)*(?::|=)\s*(.+?)\s*$", clean, re.IGNORECASE)
+        if match:
+            return _clean_field_value(match.group(1))
+    return ""
+
+
+def _clean_field_value(value: str) -> str:
+    clean = value.strip().strip('"').strip("'").strip()
+    if clean.lower() in {"", "<none>", "none", "n/a", "not available", "unknown"}:
+        return ""
+    return clean
+
+
+def _extract_labeled_value(text: str, labels: set[str]) -> str:
+    for line in text.splitlines():
+        value = _field_value_from_line(line, labels)
+        if value:
+            return value
+    return ""
+
+
+def _looks_like_device_name(value: str) -> bool:
+    clean = value.strip()
+    if (
+        not clean
+        or len(clean) > 80
+        or clean.startswith("===")
+        or IP_RE.search(clean)
+        or URL_RE.search(clean)
+        or COMMAND_RE.search(clean)
+        or _is_session_noise_line(clean)
+    ):
+        return False
+    return bool(re.search(r"[A-Za-z0-9]", clean))
 
 
 def _inventory_text(text: str) -> str:
@@ -152,15 +264,15 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         service_match = re.search(r"^([A-Z][\w .-]{2,60})\s+(?:is on|runs on|runs at|is in)\b", clean)
         if service_match:
             service_items.append({"name": service_match.group(1).strip(), "confidence": "medium"})
-        docker_row = re.match(r"^([a-zA-Z0-9_.-]+)\s+(\S+)\s+(Up|Exited|Created|Restarting)", clean)
-        if docker_row and docker_row.group(1).lower() not in {"names", "name"}:
-            container_name = docker_row.group(1)
+        docker_row = _container_row_from_line(clean)
+        if docker_row:
+            container_name = docker_row["container_name"]
             stack_group = _guess_stack_group(container_name, compose_projects)
             service_items.append(
                 {
                     "name": container_name.replace("-", " ").replace("_", " ").title(),
                     "container_name": container_name,
-                    "image": docker_row.group(2),
+                    "image": docker_row["image"],
                     "stack_group": stack_group,
                     "compose_path": compose_projects.get(stack_group, ""),
                     "ports": docker_port_map.get(container_name, []),
@@ -202,34 +314,14 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         if port.get("host_port")
     }
 
-    device_name = ""
-    if host_section:
-        static = re.search(r"Static hostname:\s*(.+)", host_section)
-        device_name = (static.group(1).strip() if static else host_section.splitlines()[0].strip())
-    if not device_name and not has_runtime_inventory:
-        for line in lines[:8]:
-            clean = line.strip()
-            if clean and not IP_RE.search(clean) and len(clean) < 80:
-                device_name = clean
-                break
-    if not is_inventory and primary_ip:
-        last_octet = primary_ip.rsplit(".", 1)[-1]
-        for line in lines[:20]:
-            match = re.match(rf"^([A-Za-z][\w .-]{{1,50}})\s+{re.escape(last_octet)}$", line.strip())
-            if match:
-                device_name = match.group(1).strip()
-                break
-
-    os_name = ""
-    if os_section:
-        pretty = re.search(r'PRETTY_NAME="?([^"\n]+)"?', os_section)
-        os_name = pretty.group(1) if pretty else os_section.splitlines()[0].strip()
-    if not os_name:
-        for line in lines[:12]:
-            clean = line.strip()
-            if re.search(r"\b(debian|ubuntu|windows|macos|raspbian|raspberry|pi os)\b", clean, re.IGNORECASE):
-                os_name = clean
-                break
+    device_name = _device_name_from_text(
+        host_section,
+        lines,
+        has_runtime_inventory=has_runtime_inventory,
+        is_inventory=is_inventory,
+        primary_ip=primary_ip,
+    )
+    os_name = _os_name_from_text(os_section, lines)
 
     final_device_name = "" if device_name == os_name else device_name
     if (
@@ -404,6 +496,93 @@ def _primary_ip(ips: list[str]) -> str:
     return ips[0] if ips else ""
 
 
+def _device_name_from_text(
+    host_section: str,
+    lines: list[str],
+    *,
+    has_runtime_inventory: bool,
+    is_inventory: bool,
+    primary_ip: str,
+) -> str:
+    host_labels = {
+        "static hostname",
+        "hostname",
+        "host name",
+        "computer name",
+        "computername",
+        "device name",
+        "machine name",
+        "local hostname",
+        "localhostname",
+        "node name",
+        "system name",
+    }
+    if host_section:
+        value = _extract_labeled_value(host_section, host_labels)
+        if value:
+            return value
+        for line in host_section.splitlines():
+            clean = line.strip()
+            if _looks_like_device_name(clean) and not re.search(r"\b(operating system|kernel|architecture|hardware|firmware)\b", clean, re.IGNORECASE):
+                return clean
+    value = _extract_labeled_value("\n".join(lines[:80]), host_labels)
+    if value:
+        return value
+    if not has_runtime_inventory:
+        for line in lines[:8]:
+            clean = line.strip()
+            if _looks_like_device_name(clean):
+                return clean
+    if not is_inventory and primary_ip:
+        last_octet = primary_ip.rsplit(".", 1)[-1]
+        for line in lines[:20]:
+            match = re.match(rf"^([A-Za-z][\w .-]{{1,50}})\s+{re.escape(last_octet)}$", line.strip())
+            if match:
+                return match.group(1).strip()
+    return ""
+
+
+def _os_name_from_text(os_section: str, lines: list[str]) -> str:
+    source = os_section or "\n".join(lines[:100])
+    if not source:
+        return ""
+    pretty = re.search(r'^\s*PRETTY_NAME="?([^"\n]+)"?', source, re.IGNORECASE | re.MULTILINE)
+    if pretty:
+        return _clean_field_value(pretty.group(1))
+    os_name = _extract_labeled_value(
+        source,
+        {
+            "os name",
+            "operating system",
+            "os",
+            "productname",
+            "product name",
+            "system version",
+            "platform",
+        },
+    )
+    product_version = _extract_labeled_value(source, {"productversion", "product version", "os version", "version"})
+    if os_name and product_version and product_version.lower() not in os_name.lower():
+        return f"{os_name} {product_version}"
+    if os_name:
+        return os_name
+    name = _extract_labeled_value(source, {"name"})
+    version = _extract_labeled_value(source, {"version", "version_id"})
+    if name and version and name.lower() not in {"name", "os"}:
+        return f"{name} {version}"
+    for line in source.splitlines():
+        clean = line.strip()
+        if _is_session_noise_line(clean) or COMMAND_RE.search(clean):
+            continue
+        if re.search(
+            r"\b(windows|debian|ubuntu|fedora|centos|red hat|rocky|almalinux|arch|opensuse|suse|macos|darwin|freebsd|openbsd|netbsd|raspbian|raspberry pi os|proxmox|synology|truenas|unraid)\b",
+            clean,
+            re.IGNORECASE,
+        ):
+            return clean
+    return ""
+
+
 def _local_urls_for_docker_ports(primary_ip: str, container_name: str, ports: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not primary_ip or _is_cloudflare_container({"container_name": container_name}):
         return []
@@ -450,6 +629,8 @@ def _port_looks_web_accessible(port: int, container_name: str) -> bool:
         1935,
         21027,
         22000,
+        22067,
+        22070,
         3306,
         5432,
         5433,
@@ -521,7 +702,8 @@ def _cloudflared_container_names(text: str) -> list[str]:
         clean = line.strip()
         if "cloudflare/cloudflared" not in clean.lower():
             continue
-        name = clean.split(None, 1)[0]
+        row = _container_row_from_line(clean)
+        name = row["container_name"] if row else clean.split(None, 1)[0]
         if name.lower() in {"names", "name"}:
             continue
         if re.fullmatch(r"[A-Za-z0-9_.-]+", name) and name not in names:
@@ -716,13 +898,36 @@ def _port_hint(port: int) -> dict[str, str]:
     return hints.get(port, {"purpose": "", "tags": ""})
 
 
+def _container_row_from_line(line: str) -> dict[str, str] | None:
+    clean = line.strip()
+    if not clean or clean.startswith("===") or _is_session_noise_line(clean):
+        return None
+    lower = clean.lower()
+    if lower.startswith(("names ", "name ", "container id ", "container_id ")) or lower in {"names", "name"}:
+        return None
+    status_pattern = r"(?:Up|Exited|Created|Restarting|Paused|Running|running|healthy|unhealthy)"
+    if not re.search(rf"\b{status_pattern}\b", clean, re.IGNORECASE):
+        return None
+    id_first = re.match(r"^(?P<id>[0-9a-f]{12,64})\s+(?P<image>\S+)\s+.+?\s(?P<name>[A-Za-z0-9_.-]+)$", clean, re.IGNORECASE)
+    if id_first:
+        return {"container_name": id_first.group("name"), "image": id_first.group("image")}
+    name_first = re.match(rf"^(?P<name>[A-Za-z0-9_.-]+)\s+(?P<image>\S+)\s+{status_pattern}\b", clean, re.IGNORECASE)
+    if name_first:
+        return {"container_name": name_first.group("name"), "image": name_first.group("image")}
+    compose_ps = re.match(rf"^(?P<name>[A-Za-z0-9_.-]+)\s+(?P<image>\S+)\s+.+?\b{status_pattern}\b", clean, re.IGNORECASE)
+    if compose_ps:
+        return {"container_name": compose_ps.group("name"), "image": compose_ps.group("image")}
+    return None
+
+
 def _docker_port_map(text: str) -> dict[str, list[dict[str, Any]]]:
     mapped: dict[str, list[dict[str, Any]]] = {}
     for line in text.splitlines():
         if "->" not in line:
             continue
-        container = line.split(None, 1)[0]
-        if container.lower() in {"names", "name"}:
+        row = _container_row_from_line(line)
+        container = row["container_name"] if row else line.split(None, 1)[0]
+        if container.lower() in {"names", "name"} or re.fullmatch(r"[0-9a-f]{12,64}", container, re.IGNORECASE):
             continue
         mapped[container] = _extract_mapped_ports(line)
     return mapped
@@ -732,7 +937,7 @@ def _extract_mapped_ports(line: str) -> list[dict[str, Any]]:
     ports: list[dict[str, Any]] = []
     seen: set[tuple[int, str]] = set()
     pattern = re.compile(
-        r"(?:(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|localhost):)"
+        r"(?:(?:0\.0\.0\.0|127\.0\.0\.1|\[::\]|::|localhost|\*):)?"
         r"(\d{2,5})(?:-(\d{2,5}))?->(\d{1,5})(?:-\d{1,5})?/(\w+)"
     )
     for match in pattern.finditer(line):
@@ -896,16 +1101,15 @@ def _safe_usernames(text: str) -> list[str]:
     usernames: list[str] = []
     for match in USERNAME_RE.finditer(text):
         candidate = match.group(1)
-        if candidate.lower() not in {"as", "thu", "may", "last", "root", "only", "local"}:
+        if _safe_username_candidate(candidate) and not _is_session_noise_line(_line_for_span(text, match.start(), match.end())):
             usernames.append(candidate)
     for match in PASSWORD_STYLE_USER_RE.finditer(text):
         candidate = match.group(1)
-        if candidate.lower() not in {"as", "thu", "may", "last", "only", "local"}:
+        if _safe_username_candidate(candidate) and not _is_session_noise_line(_line_for_span(text, match.start(), match.end())):
             usernames.append(candidate)
     for match in re.finditer(r"^User:\s*([a-z_][a-z0-9_-]{1,31})\s*$", text, re.IGNORECASE | re.MULTILINE):
-        usernames.append(match.group(1))
-    for match in re.finditer(r"^login as:\s*([a-z_][a-z0-9_-]{1,31})\s*$", text, re.IGNORECASE | re.MULTILINE):
-        usernames.append(match.group(1))
+        if _safe_username_candidate(match.group(1)):
+            usernames.append(match.group(1))
     return usernames
 
 
