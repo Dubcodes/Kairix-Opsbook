@@ -5,13 +5,14 @@ services:
     container_name: kairix-opsbook-app
     environment:
       APP_NAME: ${APP_NAME:-Kairix Opsbook}
-      APP_VERSION: ${APP_VERSION:-0.1.11}
+      APP_VERSION: ${APP_VERSION:-0.1.12}
       INSTANCE_NAME: ${INSTANCE_NAME:-Opsbook}
       INSTANCE_MODE: ${INSTANCE_MODE:-primary}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opsbook:change-me@db:5432/opsbook}
       OPSBOOK_SECRET_KEY: ${OPSBOOK_SECRET_KEY:-change-this-secret-encryption-key}
       EXPORT_SECRET_KEY: ${EXPORT_SECRET_KEY:-change-this-export-encryption-key}
       SESSION_SECRET_KEY: ${SESSION_SECRET_KEY:-change-this-session-signing-key}
+      OPSBOOK_AGENT_TOKEN: ${OPSBOOK_AGENT_TOKEN:-}
       SESSION_COOKIE_SECURE: ${SESSION_COOKIE_SECURE:-false}
       SESSION_TIMEOUT_MINUTES: ${SESSION_TIMEOUT_MINUTES:-20}
       MEDIUM_UNLOCK_MINUTES: ${MEDIUM_UNLOCK_MINUTES:-5}

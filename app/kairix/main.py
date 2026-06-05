@@ -110,8 +110,53 @@ def public_notes(value: str) -> str:
     return (value or "").replace(NO_CREDENTIALS_MARKER, "").strip()
 
 
+def stat_percent(value: float | int | None) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{float(value):.0f}%"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
+def stat_bytes(value: int | None) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        amount = float(value)
+    except (TypeError, ValueError):
+        return "n/a"
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    unit = units[0]
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            break
+        amount /= 1024
+    return f"{amount:.1f} {unit}" if unit != "B" else f"{int(amount)} B"
+
+
+def stat_duration(seconds: float | int | None) -> str:
+    if seconds is None:
+        return "n/a"
+    try:
+        total = int(float(seconds))
+    except (TypeError, ValueError):
+        return "n/a"
+    days, remainder = divmod(total, 86400)
+    hours, remainder = divmod(remainder, 3600)
+    minutes, _seconds = divmod(remainder, 60)
+    if days:
+        return f"{days}d {hours}h"
+    if hours:
+        return f"{hours}h {minutes}m"
+    return f"{minutes}m"
+
+
 templates.env.globals["service_no_credentials_needed"] = service_no_credentials_needed
 templates.env.globals["public_notes"] = public_notes
+templates.env.filters["stat_percent"] = stat_percent
+templates.env.filters["stat_bytes"] = stat_bytes
+templates.env.filters["stat_duration"] = stat_duration
 
 THEME_DEFAULTS = {
     "theme_mode": "auto",
@@ -1836,6 +1881,7 @@ IMPORT_MODELS = {
     "tag_links": models.TagLink,
     "notes": models.Note,
     "device_images": models.DeviceImage,
+    "device_stat_snapshots": models.DeviceStatSnapshot,
     "user_suggestions": models.UserSuggestion,
     "imports": models.ImportRecord,
 }
@@ -3578,6 +3624,140 @@ def _device_history(db: Session, device: models.Device, *, limit: int = 50) -> l
     return [_human_audit_log(db, log) for log in logs]
 
 
+AGENT_PAYLOAD_MAX_BYTES = 256 * 1024
+
+
+def _agent_token_from_request(request: Request) -> str:
+    auth = request.headers.get("authorization", "")
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return request.headers.get("x-opsbook-agent-token", "").strip()
+
+
+def _require_agent_token(request: Request) -> None:
+    expected = settings.agent_ingest_token.strip()
+    if settings.read_only:
+        raise HTTPException(403, "Stats agent intake is disabled on standby instances.")
+    if not expected:
+        raise HTTPException(503, "Stats agent intake is not configured. Set OPSBOOK_AGENT_TOKEN on the Opsbook server.")
+    supplied = _agent_token_from_request(request)
+    rate_key = _rate_limit_key(request, "agent_stats", "token")
+    if _rate_limited(rate_key):
+        raise HTTPException(429, "Too many failed agent submissions. Try again later.")
+    if not supplied or not secrets.compare_digest(supplied, expected):
+        locked = _record_rate_failure(rate_key, max_failures=12, window_minutes=10, lock_minutes=10)
+        raise HTTPException(429 if locked else 403, "Invalid stats agent token.")
+    _clear_rate_limit(rate_key)
+
+
+def _agent_string(value: Any, limit: int = 180) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()[:limit]
+
+
+def _agent_float(value: Any) -> float | None:
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _agent_int(value: Any) -> int | None:
+    number = _agent_float(value)
+    if number is None:
+        return None
+    return int(number)
+
+
+def _agent_percent(value: Any) -> float | None:
+    number = _agent_float(value)
+    if number is None:
+        return None
+    return max(0.0, min(100.0, number))
+
+
+def _parse_agent_datetime(value: Any) -> datetime:
+    if not value:
+        return now_utc()
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return now_utc()
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _agent_root_disk(disks: Any) -> dict[str, Any]:
+    if not isinstance(disks, list):
+        return {}
+    best: dict[str, Any] = {}
+    for item in disks:
+        if not isinstance(item, dict):
+            continue
+        mount = str(item.get("mountpoint") or item.get("mount") or "")
+        if mount in {"/", "C:\\", "C:/"}:
+            return item
+        if not best:
+            best = item
+    return best
+
+
+def _match_agent_device(db: Session, payload: dict[str, Any]) -> models.Device | None:
+    device_id = _agent_int(payload.get("device_id"))
+    if device_id:
+        device = db.get(models.Device, device_id)
+        if device:
+            return device
+    primary_ip = _agent_string(payload.get("primary_ip"), 80)
+    hostname = _agent_string(payload.get("hostname") or payload.get("device_name"), 180)
+    if primary_ip:
+        device = db.query(models.Device).filter(models.Device.primary_ip == primary_ip).order_by(models.Device.id).first()
+        if device:
+            return device
+    if hostname:
+        lowered = hostname.lower()
+        device = (
+            db.query(models.Device)
+            .filter(or_(func.lower(models.Device.hostname) == lowered, func.lower(models.Device.name) == lowered))
+            .order_by(models.Device.id)
+            .first()
+        )
+        if device:
+            return device
+    return None
+
+
+def _stats_snapshot_state(snapshot: models.DeviceStatSnapshot | None) -> dict[str, str]:
+    if not snapshot:
+        return {"state": "unknown", "label": "No agent data yet"}
+    age = now_utc() - snapshot.created_at
+    minutes = max(0, int(age.total_seconds() // 60))
+    if minutes < 15:
+        return {"state": "good", "label": f"Fresh · {minutes} min old"}
+    if minutes < 60:
+        return {"state": "slow", "label": f"Stale · {minutes} min old"}
+    hours = minutes // 60
+    return {"state": "bad", "label": f"Old · {hours}h old"}
+
+
+def _latest_stats_by_device(db: Session, devices: list[models.Device]) -> dict[int, models.DeviceStatSnapshot]:
+    latest: dict[int, models.DeviceStatSnapshot] = {}
+    for device in devices:
+        snapshot = (
+            db.query(models.DeviceStatSnapshot)
+            .filter(models.DeviceStatSnapshot.device_id == device.id)
+            .order_by(models.DeviceStatSnapshot.created_at.desc())
+            .first()
+        )
+        if snapshot:
+            latest[device.id] = snapshot
+    return latest
+
+
 def require_user(request: Request, db: Session = Depends(get_db)) -> models.User:
     user_id = request.session.get("user_id")
     if not user_id:
@@ -3606,6 +3786,8 @@ def require_user(request: Request, db: Session = Depends(get_db)) -> models.User
 
 @app.exception_handler(HTTPException)
 async def http_error(request: Request, exc: HTTPException) -> Response:
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
     if exc.status_code == 401:
         flash(request, "Please log in to continue.", "warning")
         return redirect("/login")
@@ -3716,6 +3898,70 @@ def healthz() -> dict[str, str]:
         "iteration": settings.app_build_iteration,
         "revision": settings.app_revision[:12],
     }
+
+
+@app.post("/api/agent/stats")
+async def agent_stats_ingest(request: Request, db: Session = Depends(get_db)) -> JSONResponse:
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > AGENT_PAYLOAD_MAX_BYTES:
+                raise HTTPException(413, "Stats payload is too large.")
+        except ValueError:
+            raise HTTPException(400, "Invalid Content-Length header.") from None
+    _require_agent_token(request)
+    try:
+        payload = await request.json()
+    except ValueError:
+        raise HTTPException(400, "Stats payload must be JSON.") from None
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "Stats payload must be a JSON object.")
+    device = _match_agent_device(db, payload)
+    if not device:
+        raise HTTPException(404, "No matching device found. Add the device first or set OPSBOOK_DEVICE_ID for the agent.")
+    cpu = payload.get("cpu") if isinstance(payload.get("cpu"), dict) else {}
+    memory = payload.get("memory") if isinstance(payload.get("memory"), dict) else {}
+    load_average = cpu.get("load_average") if isinstance(cpu.get("load_average"), list) else []
+    root_disk = _agent_root_disk(payload.get("disks"))
+    snapshot = models.DeviceStatSnapshot(
+        device_id=device.id,
+        source=_agent_string(payload.get("source") or "agent", 80),
+        agent_version=_agent_string(payload.get("agent_version"), 80),
+        hostname=_agent_string(payload.get("hostname") or payload.get("device_name"), 180),
+        primary_ip=_agent_string(payload.get("primary_ip"), 80),
+        os_name=_agent_string(payload.get("os_name") or payload.get("platform"), 180),
+        cpu_percent=_agent_percent(cpu.get("percent") if cpu else payload.get("cpu_percent")),
+        memory_percent=_agent_percent(memory.get("percent") if memory else payload.get("memory_percent")),
+        memory_used_bytes=_agent_int(memory.get("used_bytes") if memory else payload.get("memory_used_bytes")),
+        memory_total_bytes=_agent_int(memory.get("total_bytes") if memory else payload.get("memory_total_bytes")),
+        root_disk_percent=_agent_percent(root_disk.get("percent")),
+        root_disk_used_bytes=_agent_int(root_disk.get("used_bytes")),
+        root_disk_total_bytes=_agent_int(root_disk.get("total_bytes")),
+        uptime_seconds=_agent_float(payload.get("uptime_seconds")),
+        load_1=_agent_float(load_average[0] if len(load_average) > 0 else None),
+        load_5=_agent_float(load_average[1] if len(load_average) > 1 else None),
+        load_15=_agent_float(load_average[2] if len(load_average) > 2 else None),
+        observed_at=_parse_agent_datetime(payload.get("observed_at")),
+        payload_json=payload,
+    )
+    db.add(snapshot)
+    db.add(
+        models.AuditLog(
+            action="agent_stats_received",
+            object_type="device",
+            object_id=device.id,
+            details_json={
+                "hostname": snapshot.hostname,
+                "primary_ip": snapshot.primary_ip,
+                "cpu_percent": snapshot.cpu_percent,
+                "memory_percent": snapshot.memory_percent,
+                "root_disk_percent": snapshot.root_disk_percent,
+            },
+        )
+    )
+    db.commit()
+    db.refresh(snapshot)
+    return JSONResponse({"status": "ok", "device_id": device.id, "snapshot_id": snapshot.id})
 
 
 @app.get("/setup", response_class=HTMLResponse)
@@ -4031,6 +4277,38 @@ def dashboard(
     )
 
 
+@app.get("/stats", response_class=HTMLResponse)
+def stats_page(
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    devices = _device_order_query(db).all()
+    latest_stats = _latest_stats_by_device(db, devices)
+    reporting = [device for device in devices if device.id in latest_stats]
+    stale = [
+        device
+        for device in reporting
+        if _stats_snapshot_state(latest_stats.get(device.id)).get("state") in {"slow", "bad"}
+    ]
+    return render(
+        request,
+        "stats.html",
+        {
+            "devices": devices,
+            "latest_stats": latest_stats,
+            "stats_states": {device.id: _stats_snapshot_state(latest_stats.get(device.id)) for device in devices},
+            "counts": {
+                "devices": len(devices),
+                "reporting": len(reporting),
+                "stale": len(stale),
+            },
+            "agent_enabled": bool(settings.agent_ingest_token.strip()) and not settings.read_only,
+        },
+        user=user,
+    )
+
+
 @app.get("/devices", response_class=HTMLResponse)
 def devices_page(
     request: Request,
@@ -4183,6 +4461,13 @@ def device_detail(
         .order_by(models.DeviceImage.created_at.desc())
         .all()
     )
+    stat_snapshots = (
+        db.query(models.DeviceStatSnapshot)
+        .filter(models.DeviceStatSnapshot.device_id == device.id)
+        .order_by(models.DeviceStatSnapshot.created_at.desc())
+        .limit(24)
+        .all()
+    )
     grouped_services: dict[str, list[models.Service]] = {}
     for service in sorted(device.services, key=lambda item: (item.docker_project or "Ungrouped", item.name.lower())):
         grouped_services.setdefault(service.docker_project or "Ungrouped", []).append(service)
@@ -4234,6 +4519,10 @@ def device_detail(
             "history": _device_history(db, device),
             "notes": notes,
             "images": images,
+            "stat_snapshots": stat_snapshots,
+            "latest_stats": stat_snapshots[0] if stat_snapshots else None,
+            "stats_state": _stats_snapshot_state(stat_snapshots[0] if stat_snapshots else None),
+            "agent_enabled": bool(settings.agent_ingest_token.strip()) and not settings.read_only,
             "image_tags": tag_map(db, "device_image"),
             "tag_list": tags_for(db, "device", device.id),
             "service_groups": service_groups,

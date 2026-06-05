@@ -55,6 +55,7 @@ def build_backup_payload(db: Session) -> dict[str, Any]:
             "tag_links": table_dump(db, models.TagLink),
             "notes": table_dump(db, models.Note),
             "device_images": table_dump(db, models.DeviceImage),
+            "device_stat_snapshots": table_dump(db, models.DeviceStatSnapshot),
             "user_suggestions": table_dump(db, models.UserSuggestion),
             "imports": table_dump(db, models.ImportRecord),
             "audit_log": table_dump(db, models.AuditLog),

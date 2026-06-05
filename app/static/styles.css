@@ -413,6 +413,7 @@ button:hover, .button:hover { background: var(--accent-dark); text-decoration: n
 .stat strong { display: block; font-size: 28px; }
 .stat span { color: var(--muted); }
 .stat:hover { text-decoration: none; border-color: var(--accent); }
+.device-stats-grid .stat span { overflow-wrap: anywhere; }
 
 .two-col {
   display: grid;

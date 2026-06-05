@@ -75,7 +75,7 @@ On first run, create the owner account. Change the database password and all sec
 Important `.env` values:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.11
+OPSBOOK_IMAGE_TAG=0.1.12
 APP_PORT=8095
 INSTANCE_NAME=Opsbook
 INSTANCE_MODE=primary
@@ -83,10 +83,13 @@ POSTGRES_PASSWORD=change-this-database-password
 OPSBOOK_SECRET_KEY=change-this-secret-encryption-key
 EXPORT_SECRET_KEY=change-this-export-encryption-key
 SESSION_SECRET_KEY=change-this-session-signing-key
+OPSBOOK_AGENT_TOKEN=change-this-agent-token
 SESSION_COOKIE_SECURE=false
 ```
 
 Set `SESSION_COOKIE_SECURE=true` when serving Kairix Opsbook behind HTTPS.
+
+`OPSBOOK_AGENT_TOKEN` enables the read-only stats agent intake at `/api/agent/stats`. Leave it blank to disable agent submissions.
 
 To generate strong first-run values for Portainer or `.env`:
 
@@ -180,6 +183,23 @@ docker compose --env-file .env.example config --quiet
 
 This project does not include remote command execution. Commands are documented and copyable by design.
 
+## Read-Only Stats Agent
+
+Opsbook includes a dependency-free Python agent for reporting basic host stats. It reads local counters and posts snapshots to Opsbook; it does not accept commands from Opsbook.
+
+1. Set `OPSBOOK_AGENT_TOKEN` on the Opsbook server and redeploy.
+2. Copy `agents/opsbook_stats_agent.py` to the device you want to monitor.
+3. Run it once, or schedule it with cron, systemd, or Task Scheduler:
+
+```bash
+OPSBOOK_URL=http://OPSBOOK-IP:8095 \
+OPSBOOK_AGENT_TOKEN=the-same-token \
+OPSBOOK_DEVICE_ID=1 \
+python3 agents/opsbook_stats_agent.py
+```
+
+Use `OPSBOOK_INTERVAL_SECONDS=300` or `--interval 300` if you want the agent process to keep running and report every five minutes. If `OPSBOOK_DEVICE_ID` is omitted, Opsbook tries to match the device by primary IP, hostname, or device name.
+
 ## Portainer Install
 
 Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
@@ -192,7 +212,7 @@ Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
 6. Add environment variables before deploying:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.11
+OPSBOOK_IMAGE_TAG=0.1.12
 APP_PORT=8095
 POSTGRES_DB=opsbook
 POSTGRES_USER=opsbook
@@ -200,6 +220,7 @@ POSTGRES_PASSWORD=make-a-long-random-password
 OPSBOOK_SECRET_KEY=make-a-long-random-secret
 EXPORT_SECRET_KEY=make-another-long-random-secret
 SESSION_SECRET_KEY=make-one-more-long-random-secret
+OPSBOOK_AGENT_TOKEN=make-a-long-random-agent-token
 SESSION_COOKIE_SECURE=false
 ```
 
@@ -223,12 +244,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.11` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.12` on pushes to `main`.
 
 For production, prefer a pinned version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.11
+OPSBOOK_IMAGE_TAG=0.1.12
 ```
 
 To update production safely:

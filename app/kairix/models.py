@@ -4,9 +4,11 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     ForeignKey,
+    Float,
     Integer,
     String,
     Text,
@@ -69,6 +71,9 @@ class Device(Base, TimestampMixin):
     ports: Mapped[list["Port"]] = relationship(back_populates="device")
     urls: Mapped[list["Url"]] = relationship(back_populates="device")
     images: Mapped[list["DeviceImage"]] = relationship(
+        back_populates="device", cascade="all, delete-orphan"
+    )
+    stat_snapshots: Mapped[list["DeviceStatSnapshot"]] = relationship(
         back_populates="device", cascade="all, delete-orphan"
     )
 
@@ -256,6 +261,33 @@ class DeviceImage(Base, TimestampMixin):
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     notes: Mapped[str] = mapped_column(Text, default="")
     ocr_text: Mapped[str] = mapped_column(Text, default="")
+
+
+class DeviceStatSnapshot(Base):
+    __tablename__ = "device_stat_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[int] = mapped_column(ForeignKey("devices.id"), index=True)
+    device: Mapped[Device] = relationship(back_populates="stat_snapshots")
+    source: Mapped[str] = mapped_column(String(80), default="agent")
+    agent_version: Mapped[str] = mapped_column(String(80), default="")
+    hostname: Mapped[str] = mapped_column(String(180), default="")
+    primary_ip: Mapped[str] = mapped_column(String(80), default="")
+    os_name: Mapped[str] = mapped_column(String(180), default="")
+    cpu_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    memory_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    memory_used_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    memory_total_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    root_disk_percent: Mapped[float | None] = mapped_column(Float, nullable=True)
+    root_disk_used_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    root_disk_total_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    uptime_seconds: Mapped[float | None] = mapped_column(Float, nullable=True)
+    load_1: Mapped[float | None] = mapped_column(Float, nullable=True)
+    load_5: Mapped[float | None] = mapped_column(Float, nullable=True)
+    load_15: Mapped[float | None] = mapped_column(Float, nullable=True)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+    payload_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
 
 
 class UserSuggestion(Base, TimestampMixin):

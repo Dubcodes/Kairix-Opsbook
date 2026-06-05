@@ -14,7 +14,7 @@ def _bool_env(name: str, default: bool = False) -> bool:
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "Kairix Opsbook")
-    app_version: str = os.getenv("APP_VERSION", "0.1.11")
+    app_version: str = os.getenv("APP_VERSION", "0.1.12")
     app_build: str = os.getenv("APP_BUILD", "")
     app_build_iteration: str = os.getenv("APP_BUILD_ITERATION", "")
     app_revision: str = os.getenv("APP_REVISION", "")
@@ -36,6 +36,7 @@ class Settings:
     session_cookie_secure: bool = _bool_env("SESSION_COOKIE_SECURE", False)
     session_timeout_minutes: int = int(os.getenv("SESSION_TIMEOUT_MINUTES", "20"))
     medium_unlock_minutes: int = int(os.getenv("MEDIUM_UNLOCK_MINUTES", "5"))
+    agent_ingest_token: str = os.getenv("OPSBOOK_AGENT_TOKEN", "")
     export_dir: str = os.getenv("EXPORT_DIR", "/app/exports")
     backup_dir: str = os.getenv("BACKUP_DIR", "/app/backups")
 

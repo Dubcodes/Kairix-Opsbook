@@ -13,7 +13,7 @@ def main() -> None:
         description="Generate first-run environment variables for a Kairix Opsbook Portainer stack."
     )
     parser.add_argument("--port", default="8095", help="Host port to publish the web app on.")
-    parser.add_argument("--image-tag", default="0.1.10", help="Versioned Opsbook image tag to deploy.")
+    parser.add_argument("--image-tag", default="0.1.12", help="Versioned Opsbook image tag to deploy.")
     parser.add_argument("--instance", default="Opsbook", help="Instance name shown in the app header.")
     parser.add_argument("--mode", default="primary", choices=["primary", "standby"], help="Instance mode.")
     parser.add_argument(
@@ -34,6 +34,7 @@ def main() -> None:
         "OPSBOOK_SECRET_KEY": secret_value(),
         "EXPORT_SECRET_KEY": secret_value(),
         "SESSION_SECRET_KEY": secret_value(),
+        "OPSBOOK_AGENT_TOKEN": secret_value(),
         "SESSION_COOKIE_SECURE": "true" if args.secure_cookie else "false",
         "SESSION_TIMEOUT_MINUTES": "20",
         "MEDIUM_UNLOCK_MINUTES": "5",
