@@ -1431,6 +1431,12 @@ code {
   background: color-mix(in srgb, var(--green) 9%, var(--surface));
 }
 
+.import-badge-latest {
+  color: color-mix(in srgb, var(--amber) 82%, var(--text));
+  border-color: color-mix(in srgb, var(--amber) 58%, var(--line));
+  background: color-mix(in srgb, var(--amber) 9%, var(--surface));
+}
+
 .field-highlight {
   border-color: var(--accent) !important;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);

@@ -267,7 +267,11 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                     "confidence": "medium",
                 }
             )
-    grouped_cloudflare_urls = {entry["url"] for entry in cloudflare_tunnel_entries}
+    grouped_cloudflare_urls = {
+        url
+        for entry in cloudflare_tunnel_entries
+        for url in (entry.get("history_urls") or [entry["url"]])
+    }
     suggested_urls = [
         {"url": url, "url_type": "public" if not _is_private_url(url) else "local", "confidence": "high"}
         for url in urls
@@ -459,29 +463,45 @@ def _port_looks_web_accessible(port: int, container_name: str) -> bool:
 def _cloudflare_tunnel_entries(text: str) -> list[dict[str, Any]]:
     entries: list[dict[str, Any]] = []
     current = ""
+    current_urls: list[str] = []
+
+    def flush_current() -> None:
+        if not current_urls:
+            return
+        source_label = current or "cloudflare tunnel output"
+        latest_url = current_urls[-1]
+        recent_urls = current_urls[-5:]
+        excerpt_lines = [f"--- {source_label} ---", *recent_urls]
+        unique_urls = _unique(current_urls)
+        if len(unique_urls) > 1:
+            excerpt_lines.append(f"Selected latest URL: {latest_url}")
+        entries.append(
+            {
+                "url": latest_url,
+                "url_type": "public",
+                "confidence": "high",
+                "source_label": source_label,
+                "source_excerpt": "\n".join(excerpt_lines),
+                "service_hint": _cloudflare_target_hint(source_label),
+                "history_urls": unique_urls,
+            }
+        )
+
     for line in text.splitlines():
         clean = line.strip()
         if not clean:
             continue
         header = re.match(r"^-{3,}\s*(.+?)\s*-{3,}$", clean)
         if header:
+            flush_current()
             current = header.group(1).strip()
+            current_urls = []
             continue
         urls = [url for url in _normalized_urls_from_text(clean) if "trycloudflare.com" in url.lower()]
         if not urls:
             continue
-        source_label = current or "cloudflare tunnel output"
-        for url in _unique(urls):
-            entries.append(
-                {
-                    "url": url,
-                    "url_type": "public",
-                    "confidence": "high",
-                    "source_label": source_label,
-                    "source_excerpt": f"--- {source_label} ---\n{url}",
-                    "service_hint": _cloudflare_target_hint(source_label),
-                }
-            )
+        current_urls.extend(urls)
+    flush_current()
     return entries
 
 
@@ -541,6 +561,7 @@ def _attach_cloudflare_urls(services: list[dict[str, Any]], tunnel_entries: list
             source_label=container_name,
             source_excerpt=str(entry.get("source_excerpt") or ""),
             service_hint=str(entry.get("service_hint") or ""),
+            history_urls=list(entry.get("history_urls") or []),
         )
 
 
@@ -571,6 +592,17 @@ def _cloudflare_target_service(services: list[dict[str, Any]], container_name: s
         if not any(marker in _norm_name(str(item.get("name", "") + " " + item.get("container_name", ""))) for marker in db_markers)
     ]
     candidates = non_db_candidates or candidates
+    distinctive_terms = _cloudflare_distinctive_terms(container_name)
+    if distinctive_terms:
+        matching_distinctive = [
+            item
+            for item in candidates
+            if distinctive_terms & set(_service_tokens(str(item.get("name", "") + " " + item.get("container_name", ""))))
+        ]
+        if matching_distinctive:
+            candidates = matching_distinctive
+        elif source:
+            return source
     preferred_terms: list[str] = []
     if "public" in descriptor:
         preferred_terms = ["public"]
@@ -607,6 +639,29 @@ def _cloudflare_target_hint(container_name: str) -> str:
     return hint.strip()
 
 
+def _service_tokens(value: str) -> list[str]:
+    return [token for token in re.split(r"[^a-z0-9]+", value.lower()) if token]
+
+
+def _cloudflare_distinctive_terms(container_name: str) -> set[str]:
+    broad_terms = {
+        "cloudflare",
+        "cloudflared",
+        "trycloudflare",
+        "temporary",
+        "temp",
+        "tunnel",
+        "url",
+        "urls",
+        "quick",
+        "container",
+        "people",
+        "kairix",
+    }
+    role_terms = {"public", "control", "admin", "web", "app"}
+    return {token for token in _service_tokens(container_name) if token not in broad_terms and token not in role_terms}
+
+
 def _is_cloudflare_container(item: dict[str, Any]) -> bool:
     text = " ".join(str(item.get(key, "")) for key in ["name", "container_name", "image"]).lower()
     return "cloudflared" in text or "cloudflare/cloudflared" in text
@@ -625,6 +680,7 @@ def _append_service_url(
     source_label: str = "",
     source_excerpt: str = "",
     service_hint: str = "",
+    history_urls: list[str] | None = None,
 ) -> None:
     clean = url.strip().strip(",.;")
     if not clean:
@@ -638,6 +694,8 @@ def _append_service_url(
             item["source_excerpt"] = source_excerpt
         if service_hint:
             item["service_hint"] = service_hint
+        if history_urls:
+            item["history_urls"] = history_urls
         service["urls"].append(item)
 
 

@@ -115,6 +115,100 @@ https://shower-centers-occupational-fax.trycloudflare.com
         finally:
             session.close()
 
+    def test_cloudflare_tunnel_output_keeps_latest_url_per_container(self) -> None:
+        parsed = parse_smart_paste(
+            """=== CLOUDFLARE TUNNELS ===
+
+--- kairix-temp-tunnel ---
+https://involved-risks-roger-salad.trycloudflare.com
+https://involved-risks-roger-salad.trycloudflare.com
+
+--- people-temp-tunnel-central ---
+https://clusters-component-barrier-clearing.trycloudflare.com
+https://sparc-sustainable-bracket-eden.trycloudflare.com
+
+--- people-temp-tunnel-dunedin ---
+https://objects-chances-journalism-repairs.trycloudflare.com
+https://riding-stable-hair-biggest.trycloudflare.com
+"""
+        )
+
+        urls_by_source = {item["source_label"]: item for item in parsed["urls"]}
+        self.assertEqual(len(parsed["urls"]), 3)
+        self.assertEqual(
+            urls_by_source["people-temp-tunnel-central"]["url"],
+            "https://sparc-sustainable-bracket-eden.trycloudflare.com",
+        )
+        self.assertEqual(
+            urls_by_source["people-temp-tunnel-dunedin"]["url"],
+            "https://riding-stable-hair-biggest.trycloudflare.com",
+        )
+        self.assertEqual(
+            urls_by_source["people-temp-tunnel-central"]["history_urls"],
+            [
+                "https://clusters-component-barrier-clearing.trycloudflare.com",
+                "https://sparc-sustainable-bracket-eden.trycloudflare.com",
+            ],
+        )
+
+    def test_cloudflare_tunnels_do_not_collapse_people_regions(self) -> None:
+        text = """=== HOST ===
+ Static hostname: PortainServer
+
+=== IP ADDRESSES ===
+eno1 UP 192.168.0.205/24
+
+=== DOCKER CONTAINERS ===
+NAMES                             IMAGE                         STATUS      PORTS
+people-temp-tunnel-central        cloudflare/cloudflared:latest Up 11 days
+people-temp-tunnel-dunedin        cloudflare/cloudflared:latest Up 11 days
+people-temp-tunnel-northern       cloudflare/cloudflared:latest Up 11 days
+people-temp-tunnel-christchurch   cloudflare/cloudflared:latest Up 11 days
+people-app-northern               python:3.11-slim              Up 7 minutes 0.0.0.0:8090->8000/tcp
+people-app-christchurch           python:3.11-slim              Up 21 minutes 0.0.0.0:8092->8000/tcp
+people-db                         postgres:15                   Up 4 days    0.0.0.0:5433->5432/tcp
+
+=== DOCKER COMPOSE PROJECTS ===
+NAME                STATUS              CONFIG FILES
+people-system       running(7)          /data/compose/39/docker-compose.yml
+
+=== CLOUDFLARE TUNNELS ===
+
+--- people-temp-tunnel-central ---
+https://clusters-component-barrier-clearing.trycloudflare.com
+https://sparc-sustainable-bracket-eden.trycloudflare.com
+
+--- people-temp-tunnel-dunedin ---
+https://objects-chances-journalism-repairs.trycloudflare.com
+https://riding-stable-hair-biggest.trycloudflare.com
+
+--- people-temp-tunnel-northern ---
+https://tips-eco-lot-hunter.trycloudflare.com
+
+--- people-temp-tunnel-christchurch ---
+https://replied-dust-calculator-weblog.trycloudflare.com
+https://microphone-acquisition-ons-spine.trycloudflare.com
+"""
+        parsed = parse_smart_paste(text)
+        services_by_name = {item["name"]: item for item in parsed["services"]}
+
+        self.assertEqual(
+            services_by_name["People Temp Tunnel Central"]["urls"][0]["url"],
+            "https://sparc-sustainable-bracket-eden.trycloudflare.com",
+        )
+        self.assertEqual(
+            services_by_name["People Temp Tunnel Dunedin"]["urls"][0]["url"],
+            "https://riding-stable-hair-biggest.trycloudflare.com",
+        )
+        self.assertEqual(
+            services_by_name["People App Northern"]["urls"][-1]["url"],
+            "https://tips-eco-lot-hunter.trycloudflare.com",
+        )
+        self.assertEqual(
+            services_by_name["People App Christchurch"]["urls"][-1]["url"],
+            "https://microphone-acquisition-ons-spine.trycloudflare.com",
+        )
+
     def test_credential_login_url_creates_service_url_and_port(self) -> None:
         session = self.Session()
         try:

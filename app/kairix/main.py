@@ -2555,6 +2555,14 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
                 url["badges"].append(_import_badge("new", "New URL", "This URL is not stored yet and will be linked to the service if selected."))
             if "trycloudflare.com" in url_value.lower():
                 url["badges"].append(_import_badge("temp", "Temporary tunnel", "Quick TryCloudflare URLs are temporary and may change when cloudflared restarts."))
+            if len(url.get("history_urls") or []) > 1:
+                url["badges"].append(
+                    _import_badge(
+                        "latest",
+                        "Latest from log",
+                        "This tunnel section contained older URLs. Smart Paste kept the final URL from that section.",
+                    )
+                )
             if url.get("source_label"):
                 url["badges"].append(
                     _import_badge(
@@ -2629,6 +2637,14 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
         ]
         if "trycloudflare.com" in url_value.lower():
             url["badges"].append(_import_badge("temp", "Temporary tunnel", "Quick TryCloudflare URLs are temporary and may change when cloudflared restarts."))
+        if len(url.get("history_urls") or []) > 1:
+            url["badges"].append(
+                _import_badge(
+                    "latest",
+                    "Latest from log",
+                    "This tunnel section contained older URLs. Smart Paste kept the final URL from that section.",
+                )
+            )
         if url.get("source_label"):
             url["badges"].append(
                 _import_badge(
