@@ -52,9 +52,9 @@
   <form method="post" action="/delete/device/{{ device.id }}" class="panel danger-panel" data-confirm-delete="Delete this device? Review the linked-record options first.">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <strong>Delete device</strong>
-    <p class="muted">Use this for duplicates or early cleanup. Services must be moved first if you do not delete them here.</p>
-    <label class="check-row"><input type="checkbox" name="delete_services" checked> Delete linked services, ports, URLs, notes, and service commands</label>
-    <label class="check-row"><input type="checkbox" name="delete_credentials" checked> Delete linked credentials too</label>
+    <p class="muted">Use this for duplicates or early cleanup. By default, linked services, credentials, ports, URLs, notes, and images are preserved on an Unassigned / Needs Reassignment device so they can be moved safely.</p>
+    <label class="check-row"><input type="checkbox" name="delete_services"> Also delete linked services, ports, URLs, notes, and service commands</label>
+    <label class="check-row"><input type="checkbox" name="delete_credentials"> Also delete linked credentials</label>
     <button class="ghost" type="submit">Delete {{ device.name }}</button>
   </form>
 {% endif %}

@@ -45,6 +45,11 @@ jobs:
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          build-args: |
+            APP_VERSION=${{ steps.app-version.outputs.version }}
+            APP_BUILD=${{ github.run_number }}
+            APP_BUILD_ITERATION=${{ github.run_attempt }}
+            APP_REVISION=${{ github.sha }}
           tags: |
             ghcr.io/dubcodes/kairix-opsbook:latest
             ghcr.io/dubcodes/kairix-opsbook:${{ steps.app-version.outputs.version }}

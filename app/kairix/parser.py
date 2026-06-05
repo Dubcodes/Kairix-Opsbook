@@ -85,6 +85,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     cloudflare_tunnels = _section(effective_text, "CLOUDFLARE TUNNELS")
     listening_ports = _section(effective_text, "LISTENING PORTS")
     is_cloudflare_output_only = bool(cloudflare_tunnels) and not docker_containers and not is_inventory
+    has_runtime_inventory = bool(docker_containers or docker_compose or cloudflare_tunnels or listening_ports)
 
     ips = _unique(IP_RE.findall(ip_section or effective_text))
     urls = _normalized_urls_from_text(effective_text if not is_inventory else "")
@@ -167,7 +168,8 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                     "confidence": "medium",
                 }
             )
-    _attach_cloudflare_urls(service_items, _cloudflare_tunnel_urls(cloudflare_tunnels))
+    cloudflare_tunnel_entries = _cloudflare_tunnel_entries(cloudflare_tunnels)
+    _attach_cloudflare_urls(service_items, cloudflare_tunnel_entries)
     service_items = [item for item in service_items if not _is_detached_cloudflared_placeholder(item)]
     if not is_inventory:
         service_items.extend(_note_services(raw_text))
@@ -204,7 +206,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     if host_section:
         static = re.search(r"Static hostname:\s*(.+)", host_section)
         device_name = (static.group(1).strip() if static else host_section.splitlines()[0].strip())
-    if not device_name:
+    if not device_name and not has_runtime_inventory:
         for line in lines[:8]:
             clean = line.strip()
             if clean and not IP_RE.search(clean) and len(clean) < 80:
@@ -265,11 +267,17 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                     "confidence": "medium",
                 }
             )
+    grouped_cloudflare_urls = {entry["url"] for entry in cloudflare_tunnel_entries}
     suggested_urls = [
         {"url": url, "url_type": "public" if not _is_private_url(url) else "local", "confidence": "high"}
         for url in urls
-        if url not in grouped_urls
+        if url not in grouped_urls and url not in grouped_cloudflare_urls
     ]
+    suggested_urls.extend(
+        entry
+        for entry in cloudflare_tunnel_entries
+        if entry["url"] not in grouped_urls
+    )
     suggested_services = service_items
     suggested_commands = [
         {
@@ -448,8 +456,8 @@ def _port_looks_web_accessible(port: int, container_name: str) -> bool:
     return port not in non_web_ports
 
 
-def _cloudflare_tunnel_urls(text: str) -> dict[str, list[str]]:
-    tunnels: dict[str, list[str]] = {}
+def _cloudflare_tunnel_entries(text: str) -> list[dict[str, Any]]:
+    entries: list[dict[str, Any]] = []
     current = ""
     for line in text.splitlines():
         clean = line.strip()
@@ -458,15 +466,23 @@ def _cloudflare_tunnel_urls(text: str) -> dict[str, list[str]]:
         header = re.match(r"^-{3,}\s*(.+?)\s*-{3,}$", clean)
         if header:
             current = header.group(1).strip()
-            tunnels.setdefault(current, [])
             continue
         urls = [url for url in _normalized_urls_from_text(clean) if "trycloudflare.com" in url.lower()]
         if not urls:
             continue
-        key = current or "cloudflare"
-        tunnels.setdefault(key, [])
-        tunnels[key].extend(_unique(urls))
-    return {name: _unique(urls) for name, urls in tunnels.items() if urls}
+        source_label = current or "cloudflare tunnel output"
+        for url in _unique(urls):
+            entries.append(
+                {
+                    "url": url,
+                    "url_type": "public",
+                    "confidence": "high",
+                    "source_label": source_label,
+                    "source_excerpt": f"--- {source_label} ---\n{url}",
+                    "service_hint": _cloudflare_target_hint(source_label),
+                }
+            )
+    return entries
 
 
 def _looks_like_temporary_cloudflared(text: str) -> bool:
@@ -510,13 +526,22 @@ def _cloudflared_url_command(container_names: list[str]) -> str:
     )
 
 
-def _attach_cloudflare_urls(services: list[dict[str, Any]], tunnels: dict[str, list[str]]) -> None:
-    for container_name, urls in tunnels.items():
+def _attach_cloudflare_urls(services: list[dict[str, Any]], tunnel_entries: list[dict[str, Any]]) -> None:
+    for entry in tunnel_entries:
+        container_name = str(entry.get("source_label") or "")
+        url = str(entry.get("url") or "")
         target = _cloudflare_target_service(services, container_name)
         if not target:
             continue
-        for url in urls:
-            _append_service_url(target, url, "public", "high")
+        _append_service_url(
+            target,
+            url,
+            "public",
+            "high",
+            source_label=container_name,
+            source_excerpt=str(entry.get("source_excerpt") or ""),
+            service_hint=str(entry.get("service_hint") or ""),
+        )
 
 
 def _cloudflare_target_service(services: list[dict[str, Any]], container_name: str) -> dict[str, Any] | None:
@@ -591,13 +616,29 @@ def _is_detached_cloudflared_placeholder(item: dict[str, Any]) -> bool:
     return _is_cloudflare_container(item) and not item.get("ports") and not item.get("urls") and not item.get("credentials")
 
 
-def _append_service_url(service: dict[str, Any], url: str, url_type: str, confidence: str) -> None:
+def _append_service_url(
+    service: dict[str, Any],
+    url: str,
+    url_type: str,
+    confidence: str,
+    *,
+    source_label: str = "",
+    source_excerpt: str = "",
+    service_hint: str = "",
+) -> None:
     clean = url.strip().strip(",.;")
     if not clean:
         return
     existing = {str(item.get("url", "")).strip() for item in service.setdefault("urls", [])}
     if clean not in existing:
-        service["urls"].append({"url": clean, "url_type": url_type, "confidence": confidence})
+        item = {"url": clean, "url_type": url_type, "confidence": confidence}
+        if source_label:
+            item["source_label"] = source_label
+        if source_excerpt:
+            item["source_excerpt"] = source_excerpt
+        if service_hint:
+            item["service_hint"] = service_hint
+        service["urls"].append(item)
 
 
 def _port_hint(port: int) -> dict[str, str]:

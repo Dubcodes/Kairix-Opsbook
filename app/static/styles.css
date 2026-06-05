@@ -1238,6 +1238,29 @@ code {
   overflow-wrap: anywhere;
 }
 
+.source-context {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 7px 8px;
+  background: color-mix(in srgb, var(--surface) 76%, var(--bg));
+}
+
+.source-context small {
+  color: var(--muted);
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.source-context pre {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .inline-warning {
   border: 1px solid color-mix(in srgb, var(--amber) 60%, var(--line));
   border-radius: 8px;
@@ -1394,6 +1417,18 @@ code {
   color: color-mix(in srgb, var(--accent) 72%, var(--text));
   border-color: color-mix(in srgb, var(--accent) 58%, var(--line));
   background: color-mix(in srgb, var(--accent) 10%, var(--surface));
+}
+
+.import-badge-source {
+  color: color-mix(in srgb, var(--blue) 70%, var(--text));
+  border-color: color-mix(in srgb, var(--blue) 46%, var(--line));
+  background: color-mix(in srgb, var(--blue) 7%, var(--surface));
+}
+
+.import-badge-link {
+  color: color-mix(in srgb, var(--green) 72%, var(--text));
+  border-color: color-mix(in srgb, var(--green) 58%, var(--line));
+  background: color-mix(in srgb, var(--green) 9%, var(--surface));
 }
 
 .field-highlight {

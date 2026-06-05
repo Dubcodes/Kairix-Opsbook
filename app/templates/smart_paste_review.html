@@ -43,11 +43,15 @@
         <h2>Detected device</h2>
         <label class="check-row">
           <input type="checkbox" name="apply_device" {% if apply_device_default %}checked data-useful="true"{% endif %}>
-          Create or update this device <small>uncheck for notes, commands, or tokens only</small>
+          Create or fill this device <small>existing device identity is preserved unless explicitly overwritten</small>
         </label>
         <label>Name <input name="device_name" value="{{ parsed.device.name or '' }}" spellcheck="true"></label>
         <label>IP <input name="device_ip" value="{{ parsed.device.primary_ip or '' }}"></label>
         <label>OS <input name="device_os" value="{{ parsed.device.os_name or '' }}" spellcheck="true"></label>
+        <label class="check-row span-2">
+          <input type="checkbox" name="update_device_identity">
+          Overwrite existing device name, IP, or OS if they differ
+        </label>
         <p class="muted">Confidence: {{ parsed.device.confidence }}</p>
         <label class="check-row"><input type="checkbox" name="apply_hardware" {% if apply_device_default and parsed.extras %}checked data-useful="true"{% endif %}> Apply hardware summaries if detected</label>
       </section>
@@ -103,6 +107,12 @@
                 {% endif %}
                 {% if url.review_note %}
                   <p class="url-review-note">{{ url.review_note }}</p>
+                {% endif %}
+                {% if url.source_excerpt %}
+                  <div class="source-context">
+                    <small>Detected from</small>
+                    <pre>{{ url.source_excerpt }}</pre>
+                  </div>
                 {% endif %}
               {% endfor %}
             </div>
@@ -191,10 +201,19 @@
             <select name="url_service_{{ loop.index0 }}">
               <option value="">Device only / choose later</option>
               {% for service in services %}
-                <option value="{{ service.id }}">{{ service.device.name if service.device else 'No device' }} · {{ service.name }}</option>
+                <option value="{{ service.id }}" {% if item.suggested_service_id == service.id %}selected{% endif %}>{{ service.device.name if service.device else 'No device' }} · {{ service.name }}</option>
               {% endfor %}
             </select>
           </label>
+          {% if item.suggested_service_name %}
+            <p class="url-review-note">Suggested link: {{ item.suggested_device_name }} · {{ item.suggested_service_name }}. Change the dropdown if that is not the right service.</p>
+          {% endif %}
+          {% if item.source_excerpt %}
+            <div class="source-context">
+              <small>Detected from</small>
+              <pre>{{ item.source_excerpt }}</pre>
+            </div>
+          {% endif %}
         </div>
       {% else %}<p class="empty">No URLs detected.</p>{% endfor %}
     </section>
@@ -232,9 +251,6 @@
             </label>
           </div>
           <label class="span-2">Short help <input name="command_help_low_{{ loop.index0 }}" value="{{ item.help_low or 'Imported from pasted notes. Review before running.' }}" spellcheck="true"></label>
-          {% if item.help_low %}
-            <p class="command-help span-2">{{ item.help_low }}</p>
-          {% endif %}
           <label class="span-2 command-text-label">Command <textarea class="command-textarea" name="command_text_{{ loop.index0 }}" spellcheck="false">{{ item.command_template }}</textarea></label>
           <label class="span-2">Notes <textarea class="command-notes-textarea" name="command_notes_{{ loop.index0 }}" spellcheck="true" placeholder="When to use this, what folder it expects, or what script it triggers.">{{ item.notes or '' }}</textarea></label>
         </div>

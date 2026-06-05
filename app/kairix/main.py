@@ -253,6 +253,17 @@ def bool_setting(db: Session, key: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _app_version_label() -> str:
+    parts = [settings.app_version]
+    if settings.app_build:
+        parts.append(f"build {settings.app_build}")
+    if settings.app_build_iteration:
+        parts.append(f"iteration {settings.app_build_iteration}")
+    if settings.app_revision:
+        parts.append(settings.app_revision[:7])
+    return " · ".join(parts)
+
+
 DEFAULT_SECRET_VALUES = {
     "opsbook": "dev-secret-change-before-real-use",
     "export": "dev-export-secret-change-before-real-use",
@@ -2260,6 +2271,94 @@ def _import_list_label(values: list[str], *, empty: str = "") -> str:
     return f"{', '.join(clean[:2])}, and {len(clean) - 2} more"
 
 
+TUNNEL_MATCH_STOP_WORDS = {
+    "cloudflare",
+    "cloudflared",
+    "trycloudflare",
+    "temporary",
+    "temp",
+    "tunnel",
+    "url",
+    "urls",
+    "quick",
+    "container",
+}
+
+
+def _service_match_tokens(value: str, *, keep_role_words: bool = True) -> list[str]:
+    tokens = [token for token in slugify(value).split("-") if token]
+    if keep_role_words:
+        return [token for token in tokens if token not in TUNNEL_MATCH_STOP_WORDS]
+    role_words = {"public", "control", "admin", "web", "app", "db", "database", "postgres", "redis", "mysql"}
+    return [token for token in tokens if token not in TUNNEL_MATCH_STOP_WORDS and token not in role_words]
+
+
+def _service_tunnel_match_score(url_hint: dict[str, Any], service: models.Service) -> int:
+    source_label = str(url_hint.get("source_label") or "")
+    service_hint = str(url_hint.get("service_hint") or "")
+    if not source_label and not service_hint:
+        return 0
+
+    source_text = f"{source_label} {service_hint}"
+    source_tokens = _service_match_tokens(source_text)
+    source_core_tokens = _service_match_tokens(source_text, keep_role_words=False)
+    if not source_core_tokens:
+        return 0
+
+    service_text = " ".join(
+        str(value or "")
+        for value in [
+            service.name,
+            service.docker_project,
+            service.container_name,
+            service.image,
+            service.local_url,
+            service.public_url,
+        ]
+    )
+    service_tokens = _service_match_tokens(service_text)
+    service_core_tokens = _service_match_tokens(service_text, keep_role_words=False)
+    if not service_core_tokens:
+        return 0
+
+    common_core = set(source_core_tokens) & set(service_core_tokens)
+    score = len(common_core) * 4
+    service_slug = slugify(service_text)
+    hint_slug = slugify(service_hint)
+    if hint_slug and len(hint_slug) > 4 and hint_slug in service_slug:
+        score += 7
+    if all(token in service_core_tokens for token in source_core_tokens):
+        score += 5
+
+    source_roles = set(source_tokens) - set(source_core_tokens)
+    service_roles = set(service_tokens) - set(service_core_tokens)
+    if "public" in source_roles and "public" in service_roles:
+        score += 8
+    if {"control", "admin"} & source_roles and {"web", "app", "admin", "control"} & service_roles:
+        score += 6
+    if "web" in source_roles and {"web", "app"} & service_roles:
+        score += 5
+
+    database_roles = {"db", "database", "postgres", "redis", "mysql"}
+    if database_roles & service_roles and not (database_roles & source_roles):
+        score -= 5
+    if "agent" in service_tokens and "agent" not in source_tokens:
+        score -= 3
+    return score
+
+
+def _suggest_service_for_tunnel_url(db: Session, url_hint: dict[str, Any]) -> models.Service | None:
+    candidates: list[tuple[int, models.Service]] = []
+    for service in db.query(models.Service).all():
+        score = _service_tunnel_match_score(url_hint, service)
+        if score >= 8:
+            candidates.append((score, service))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1].id), reverse=True)
+    return candidates[0][1]
+
+
 def _suggested_url_field(url_hint: dict[str, Any]) -> str:
     return "public_url" if str(url_hint.get("url_type") or "").lower() == "public" else "local_url"
 
@@ -2456,6 +2555,14 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
                 url["badges"].append(_import_badge("new", "New URL", "This URL is not stored yet and will be linked to the service if selected."))
             if "trycloudflare.com" in url_value.lower():
                 url["badges"].append(_import_badge("temp", "Temporary tunnel", "Quick TryCloudflare URLs are temporary and may change when cloudflared restarts."))
+            if url.get("source_label"):
+                url["badges"].append(
+                    _import_badge(
+                        "source",
+                        f"From: {url['source_label']}",
+                        "This shows the container/log heading Smart Paste found immediately before the URL.",
+                    )
+                )
         for port in service.get("ports", []):
             duplicate_port = None
             if existing_device_id and port.get("host_port"):
@@ -2512,6 +2619,7 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
     for url in parsed.get("urls", []):
         url_value = str(url.get("url", "")).strip()
         duplicate = _duplicate_url_record(db, url_value)
+        suggested_service = _suggest_service_for_tunnel_url(db, url) if "trycloudflare.com" in url_value.lower() else None
         url["duplicate_id"] = duplicate.id if duplicate else None
         url["selected"] = duplicate is None
         url["badges"] = [
@@ -2521,6 +2629,25 @@ def _annotate_import_suggestions(db: Session, parsed: dict[str, Any]) -> dict[st
         ]
         if "trycloudflare.com" in url_value.lower():
             url["badges"].append(_import_badge("temp", "Temporary tunnel", "Quick TryCloudflare URLs are temporary and may change when cloudflared restarts."))
+        if url.get("source_label"):
+            url["badges"].append(
+                _import_badge(
+                    "source",
+                    f"From: {url['source_label']}",
+                    "This shows the container/log heading Smart Paste found immediately before the URL.",
+                )
+            )
+        if suggested_service:
+            url["suggested_service_id"] = suggested_service.id
+            url["suggested_service_name"] = suggested_service.name
+            url["suggested_device_name"] = suggested_service.device.name if suggested_service.device else ""
+            url["badges"].append(
+                _import_badge(
+                    "link",
+                    f"Suggested link: {suggested_service.name}",
+                    "Smart Paste matched the tunnel container/source label to this existing service. You can still choose a different service.",
+                )
+            )
     for credential in parsed.get("credentials", []):
         duplicate = None
         label = str(credential.get("label", ""))
@@ -2659,13 +2786,16 @@ def _apply_loose_urls_from_import(
                 linked_service.public_url = url_value
             elif url_type == "local":
                 linked_service.local_url = url_value
+        url_notes = f"Imported from Smart Paste {record.id}."
+        if item.get("source_label"):
+            url_notes += f" Source: {item['source_label']}."
         db.add(
             models.Url(
                 device_id=url_device_id,
                 service_id=linked_service.id if linked_service else None,
                 url=url_value,
                 url_type=url_type,
-                notes=f"Imported from Smart Paste {record.id}.",
+                notes=url_notes,
             )
         )
         created_urls += 1
@@ -3047,6 +3177,199 @@ def _resolve_service_for_credential(
     return device_id, None, ""
 
 
+def _append_note_once(notes: str, line: str) -> str:
+    clean_notes = public_notes(notes)
+    clean_line = line.strip()
+    if not clean_line or clean_line in clean_notes:
+        return clean_notes
+    return f"{clean_notes}\n{clean_line}".strip()
+
+
+def _is_private_host(host: str) -> bool:
+    clean = host.strip().lower()
+    if clean in {"localhost", "127.0.0.1"}:
+        return True
+    if "." not in clean or clean.endswith(".local"):
+        return True
+    if clean.startswith("192.168.") or clean.startswith("10."):
+        return True
+    if clean.startswith("172."):
+        parts = clean.split(".")
+        if len(parts) >= 2 and parts[1].isdigit():
+            return 16 <= int(parts[1]) <= 31
+    return False
+
+
+def _normalize_login_url_for_network(raw_url: str) -> str:
+    clean = str(raw_url or "").strip()
+    if not clean:
+        return ""
+    if "://" not in clean and re.match(r"^[A-Za-z0-9_.-]+:\d{2,5}(?:/|$)", clean):
+        clean = f"http://{clean}"
+    return clean
+
+
+def _sync_credential_login_endpoint(
+    db: Session,
+    credential: models.Credential,
+    *,
+    default_device: models.Device | None = None,
+) -> dict[str, int]:
+    login_url = _normalize_login_url_for_network(credential.login_url)
+    if not login_url:
+        return {"urls": 0, "ports": 0, "devices": 0}
+    credential.login_url = login_url
+    try:
+        parsed = urlparse(login_url)
+    except ValueError:
+        return {"urls": 0, "ports": 0, "devices": 0}
+    host = parsed.hostname or ""
+    if not host:
+        return {"urls": 0, "ports": 0, "devices": 0}
+    service = credential.service
+    device = service.device if service and service.device else credential.device or default_device
+    if not device and re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", host):
+        device = db.query(models.Device).filter(models.Device.primary_ip == host).first()
+    changed = {"urls": 0, "ports": 0, "devices": 0}
+    if device and not device.primary_ip and re.fullmatch(r"(?:\d{1,3}\.){3}\d{1,3}", host):
+        device.primary_ip = host
+        changed["devices"] += 1
+    if credential.device_id is None and device:
+        credential.device_id = device.id
+    url_type = "local" if _is_private_host(host) else "public"
+    if service:
+        primary_attr = "public_url" if url_type == "public" else "local_url"
+        current_primary = str(getattr(service, primary_attr) or "").strip()
+        if not current_primary:
+            setattr(service, primary_attr, login_url)
+            changed["urls"] += 1
+        elif not any(_url_values_match(value, login_url) for value in _service_known_url_values(service)):
+            duplicate_url = _duplicate_url_record(db, login_url)
+            duplicate_service = _duplicate_service_url(db, device.id if device else service.device_id, login_url)
+            if duplicate_url:
+                if duplicate_url.service_id is None:
+                    duplicate_url.service_id = service.id
+                if duplicate_url.device_id is None and device:
+                    duplicate_url.device_id = device.id
+            elif not duplicate_service:
+                db.add(
+                    models.Url(
+                        device_id=device.id if device else service.device_id,
+                        service_id=service.id,
+                        label=service.name,
+                        url=login_url,
+                        url_type=url_type,
+                        notes=f"Inferred from credential {credential.label}.",
+                    )
+                )
+                changed["urls"] += 1
+    elif device:
+        duplicate_url = _duplicate_url_record(db, login_url)
+        if duplicate_url:
+            if duplicate_url.device_id is None:
+                duplicate_url.device_id = device.id
+        else:
+            db.add(
+                models.Url(
+                    device_id=device.id,
+                    label=credential.label,
+                    url=login_url,
+                    url_type=url_type,
+                    notes=f"Inferred from credential {credential.label}.",
+                )
+            )
+            changed["urls"] += 1
+    port_number = _url_port(login_url)
+    if device and port_number:
+        duplicate_port = (
+            db.query(models.Port)
+            .filter(
+                models.Port.device_id == device.id,
+                models.Port.host_port == port_number,
+                models.Port.protocol == "tcp",
+            )
+            .first()
+        )
+        if duplicate_port:
+            if service and duplicate_port.service_id is None:
+                duplicate_port.service_id = service.id
+            if service and not duplicate_port.purpose:
+                duplicate_port.purpose = service.name
+        else:
+            db.add(
+                models.Port(
+                    device_id=device.id,
+                    service_id=service.id if service else None,
+                    host_port=port_number,
+                    protocol="tcp",
+                    purpose=service.name if service else credential.label,
+                    notes=f"Inferred from credential {credential.label} login URL.",
+                )
+            )
+            changed["ports"] += 1
+    return changed
+
+
+def _preserved_records_device(db: Session, *, excluding_id: int | None = None) -> models.Device:
+    name = "Unassigned / Needs Reassignment"
+    slug = slugify(name)
+    excluded = db.get(models.Device, excluding_id) if excluding_id else None
+    if excluded and excluded.slug == slug:
+        name = "Preserved Records"
+        slug = slugify(name)
+    query = db.query(models.Device).filter(models.Device.slug == slug)
+    if excluding_id:
+        query = query.filter(models.Device.id != excluding_id)
+    device = query.first()
+    if device:
+        return device
+    device = models.Device(
+        name=name,
+        slug=unique_slug(db, models.Device, name, existing_id=excluding_id),
+        type="holding",
+        purpose="Preserves records from deleted devices until they are moved to the right machine.",
+        display_order=999999,
+    )
+    db.add(device)
+    db.flush()
+    return device
+
+
+def _move_device_records_to_preserved_device(db: Session, device: models.Device) -> models.Device:
+    holding = _preserved_records_device(db, excluding_id=device.id)
+    note = f"Moved here when device {device.name} was deleted."
+    for service in list(device.services):
+        service.device = holding
+        service.device_id = holding.id
+        service.notes = _append_note_once(service.notes, note)
+    for credential in list(device.credentials):
+        credential.device = holding
+        credential.device_id = holding.id
+        credential.notes = _append_note_once(credential.notes, note)
+    for port in list(device.ports):
+        port.device = holding
+        port.device_id = holding.id
+        port.notes = _append_note_once(port.notes, note)
+    for url in list(device.urls):
+        url.device = holding
+        url.device_id = holding.id
+        url.notes = _append_note_once(url.notes, note)
+    for image in list(device.images):
+        image.device = holding
+        image.device_id = holding.id
+        image.notes = _append_note_once(image.notes, note)
+    db.query(models.Note).filter_by(object_type="device", object_id=device.id).update(
+        {"object_id": holding.id, "body": models.Note.body + f"\n\n{note}"},
+        synchronize_session=False,
+    )
+    db.query(models.Command).filter_by(applies_to_type="device", applies_to_id=device.id).update(
+        {"applies_to_id": holding.id},
+        synchronize_session=False,
+    )
+    db.flush()
+    return holding
+
+
 def _delete_redirect_target(request: Request, object_type: str, object_id: int) -> str:
     referer = request.headers.get("referer") or ""
     if object_type == "service" and f"/services/{object_id}" in referer:
@@ -3264,6 +3587,7 @@ def render(
         "instance_mode": settings.instance_mode,
         "instance_name": settings.instance_name,
         "app_version": settings.app_version,
+        "app_version_label": _app_version_label(),
     }
     payload.update(context or {})
     return templates.TemplateResponse(request, template_name, payload)
@@ -3330,7 +3654,14 @@ textarea.paste-box { min-height: 240px; }
 
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
-    return {"status": "ok", "app": settings.app_name, "version": settings.app_version}
+    return {
+        "status": "ok",
+        "app": settings.app_name,
+        "version": settings.app_version,
+        "build": settings.app_build,
+        "iteration": settings.app_build_iteration,
+        "revision": settings.app_revision[:12],
+    }
 
 
 @app.get("/setup", response_class=HTMLResponse)
@@ -4785,6 +5116,7 @@ def credential_create(
     resolved_service = db.get(models.Service, resolved_service_id) if resolved_service_id else None
     if not login_url and resolved_service:
         login_url = resolved_service.local_url or resolved_service.public_url or ""
+    login_url = _normalize_login_url_for_network(login_url)
     credential = models.Credential(
         label=label.strip(),
         username=username.strip(),
@@ -4801,7 +5133,16 @@ def credential_create(
     db.add(credential)
     db.flush()
     set_tags(db, "credential", credential.id, tags)
-    db.add(models.AuditLog(user_id=user.id, action="credential_created", object_type="credential", object_id=credential.id))
+    sync_details = _sync_credential_login_endpoint(db, credential)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="credential_created",
+            object_type="credential",
+            object_id=credential.id,
+            details_json=sync_details,
+        )
+    )
     db.commit()
     flash(request, "Credential stored encrypted at rest.", "success")
     return redirect(return_target)
@@ -4892,12 +5233,21 @@ def credential_update(
     credential.security_level = security_level
     credential.device_id = resolved_device_id
     credential.service_id = resolved_service_id
-    credential.login_url = login_url
+    credential.login_url = _normalize_login_url_for_network(login_url)
     credential.expires_at = _parse_optional_datetime(expires_at)
     credential.notes = notes
     credential.active = active == "on"
     set_tags(db, "credential", credential.id, tags)
-    db.add(models.AuditLog(user_id=user.id, action="credential_edited", object_type="credential", object_id=credential.id))
+    sync_details = _sync_credential_login_endpoint(db, credential)
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="credential_edited",
+            object_type="credential",
+            object_id=credential.id,
+            details_json=sync_details,
+        )
+    )
     db.commit()
     flash(request, "Credential saved.", "success")
     return redirect(_safe_return_to(return_to, f"/credentials/{credential.id}"))
@@ -4936,28 +5286,24 @@ def delete_object(
         remove_services = delete_services.lower() in {"on", "true", "1", "yes"}
         remove_credentials = delete_credentials.lower() in {"on", "true", "1", "yes"}
         service_ids = [service.id for service in obj.services]
-        if service_ids and not remove_services:
-            flash(
-                request,
-                "This device still has linked services. Check Delete linked services, or move those services before deleting the device.",
-                "warning",
-            )
-            return redirect(f"/devices/{obj.id}/edit")
         credential_filter = models.Credential.device_id == obj.id
         if service_ids:
             credential_filter = or_(credential_filter, models.Credential.service_id.in_(service_ids))
         related_credentials = db.query(models.Credential).filter(credential_filter).all()
+        preserved_device = None if remove_services else _move_device_records_to_preserved_device(db, obj)
         if remove_credentials:
             for credential in related_credentials:
                 db.query(models.TagLink).filter_by(object_type="credential", object_id=credential.id).delete()
                 db.delete(credential)
         else:
             for credential in related_credentials:
-                credential.device_id = None
-                if credential.service_id in service_ids:
+                if preserved_device:
+                    credential.device_id = preserved_device.id
+                else:
+                    credential.device_id = None
+                if not preserved_device and credential.service_id in service_ids:
                     credential.service_id = None
-                note = public_notes(credential.notes)
-                credential.notes = f"{note}\nUnlinked when device {obj.name} was deleted.".strip()
+                credential.notes = _append_note_once(credential.notes, f"Unlinked when device {obj.name} was deleted.")
         if remove_services:
             for service_id in service_ids:
                 db.query(models.TagLink).filter_by(object_type="service", object_id=service_id).delete()
@@ -4966,12 +5312,18 @@ def delete_object(
                     db.query(models.TagLink).filter_by(object_type="command", object_id=command.id).delete()
                     db.delete(command)
         for port in list(obj.ports):
+            if port.device_id != obj.id:
+                continue
             db.query(models.TagLink).filter_by(object_type="port", object_id=port.id).delete()
             db.delete(port)
         for url in list(obj.urls):
+            if url.device_id != obj.id:
+                continue
             db.query(models.TagLink).filter_by(object_type="url", object_id=url.id).delete()
             db.delete(url)
         for image in list(obj.images):
+            if image.device_id != obj.id:
+                continue
             db.query(models.TagLink).filter_by(object_type="device_image", object_id=image.id).delete()
             try:
                 _stored_upload_path(DEVICE_IMAGE_DIR, image.stored_filename).unlink(missing_ok=True)
@@ -6224,12 +6576,13 @@ async def smart_paste_apply(
         db.flush()
         _ensure_device_hardware(db, device)
     else:
-        if apply_device and form.get("device_name"):
+        overwrite_identity = form.get("update_device_identity") == "on"
+        if apply_device and overwrite_identity and form.get("device_name"):
             device.name = str(form.get("device_name")).strip()
             device.slug = unique_slug(db, models.Device, device.name, existing_id=device.id)
-        if apply_device and form.get("device_ip"):
+        if apply_device and form.get("device_ip") and (overwrite_identity or not device.primary_ip):
             device.primary_ip = str(form.get("device_ip")).strip()
-        if apply_device and form.get("device_os"):
+        if apply_device and form.get("device_os") and (overwrite_identity or not device.os_name):
             device.os_name = str(form.get("device_os")).strip()
     note_body, secrets_redacted = _redact_sensitive_text(record.raw_text, parsed)
     db.add(
@@ -6244,10 +6597,14 @@ async def smart_paste_apply(
     extras = parsed.get("extras", {})
     if apply_device and form.get("apply_hardware"):
         hardware = _ensure_device_hardware(db, device)
-        hardware.model = extras.get("model_summary") or hardware.model
-        hardware.cpu = extras.get("cpu_summary") or hardware.cpu
-        hardware.ram = extras.get("memory_summary") or hardware.ram
-        hardware.storage_summary = extras.get("disk_summary") or hardware.storage_summary
+        if extras.get("model_summary") and not hardware.model:
+            hardware.model = extras["model_summary"]
+        if extras.get("cpu_summary") and not hardware.cpu:
+            hardware.cpu = extras["cpu_summary"]
+        if extras.get("memory_summary") and not hardware.ram:
+            hardware.ram = extras["memory_summary"]
+        if extras.get("disk_summary") and not hardware.storage_summary:
+            hardware.storage_summary = extras["disk_summary"]
     for index_raw in form.getlist("services"):
         item = parsed.get("services", [])[int(index_raw)]
         service_name = str(form.get(f"service_name_{index_raw}") or item["name"]).strip()
@@ -6297,6 +6654,9 @@ async def smart_paste_apply(
             duplicate_url = _duplicate_url_record(db, url_value)
             duplicate_service = _duplicate_service_url(db, device.id, url_value)
             if not duplicate_url and not duplicate_service:
+                url_notes = f"Imported from Smart Paste {record.id}."
+                if url_item.get("source_label"):
+                    url_notes += f" Source: {url_item['source_label']}."
                 db.add(
                     models.Url(
                         device_id=device.id,
@@ -6304,7 +6664,7 @@ async def smart_paste_apply(
                         label=service_name,
                         url=url_value,
                         url_type=url_type,
-                        notes=f"Imported from Smart Paste {record.id}.",
+                        notes=url_notes,
                     )
                 )
         for port_value in form.getlist(f"service_port_{index_raw}"):
@@ -6378,13 +6738,14 @@ async def smart_paste_apply(
             )
             db.add(credential)
             db.flush()
+            endpoint_sync = _sync_credential_login_endpoint(db, credential, default_device=device)
             db.add(
                 models.AuditLog(
                     user_id=user.id,
                     action="credential_created",
                     object_type="credential",
                     object_id=credential.id,
-                    details_json={"source": f"smart_paste:{record.id}"},
+                    details_json={"source": f"smart_paste:{record.id}", **endpoint_sync},
                 )
             )
     for index_raw in form.getlist("ports"):
@@ -6482,13 +6843,14 @@ async def smart_paste_apply(
         )
         db.add(credential)
         db.flush()
+        endpoint_sync = _sync_credential_login_endpoint(db, credential, default_device=device)
         db.add(
             models.AuditLog(
                 user_id=user.id,
                 action="credential_created",
                 object_type="credential",
                 object_id=credential.id,
-                details_json={"source": f"smart_paste:{record.id}"},
+                details_json={"source": f"smart_paste:{record.id}", **endpoint_sync},
             )
         )
     for index_raw in form.getlist("tokens"):

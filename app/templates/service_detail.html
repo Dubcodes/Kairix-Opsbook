@@ -78,6 +78,9 @@
               <span>{{ credential.username or "No account" }} · {{ credential.security_level|title }} security{% if credential.expires_at %} · expires {{ credential.expires_at|date_input }}{% endif %}</span>
             </a>
             <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
+            {% if credential.login_url %}
+              <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
+            {% endif %}
           </div>
         {% endfor %}
       {% endif %}
