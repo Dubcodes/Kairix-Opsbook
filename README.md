@@ -75,7 +75,7 @@ On first run, create the owner account. Change the database password and all sec
 Important `.env` values:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.12
+OPSBOOK_IMAGE_TAG=0.1.13
 APP_PORT=8095
 INSTANCE_NAME=Opsbook
 INSTANCE_MODE=primary
@@ -188,14 +188,27 @@ This project does not include remote command execution. Commands are documented 
 Opsbook includes a dependency-free Python agent for reporting basic host stats. It reads local counters and posts snapshots to Opsbook; it does not accept commands from Opsbook.
 
 1. Set `OPSBOOK_AGENT_TOKEN` on the Opsbook server and redeploy.
-2. Copy `agents/opsbook_stats_agent.py` to the device you want to monitor.
-3. Run it once, or schedule it with cron, systemd, or Task Scheduler:
+2. Copy `agents/opsbook_stats_agent.py` to the device you want to monitor, or run it from the published Opsbook image.
+3. Run it once, schedule it with cron/systemd/Task Scheduler, or deploy `agents/portainer-agent-stack.yml` in Portainer:
 
 ```bash
 OPSBOOK_URL=http://OPSBOOK-IP:8095 \
 OPSBOOK_AGENT_TOKEN=the-same-token \
 OPSBOOK_DEVICE_ID=1 \
 python3 agents/opsbook_stats_agent.py
+```
+
+Container agent example:
+
+```bash
+docker run --rm --network host \
+  -v /:/host:ro \
+  -e OPSBOOK_URL=http://127.0.0.1:8095 \
+  -e OPSBOOK_AGENT_TOKEN=the-same-token \
+  -e OPSBOOK_DEVICE_ID=1 \
+  -e OPSBOOK_HOST_ROOT=/host \
+  ghcr.io/dubcodes/kairix-opsbook:0.1.13 \
+  python -m kairix.stats_agent
 ```
 
 Use `OPSBOOK_INTERVAL_SECONDS=300` or `--interval 300` if you want the agent process to keep running and report every five minutes. If `OPSBOOK_DEVICE_ID` is omitted, Opsbook tries to match the device by primary IP, hostname, or device name.
@@ -212,7 +225,7 @@ Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
 6. Add environment variables before deploying:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.12
+OPSBOOK_IMAGE_TAG=0.1.13
 APP_PORT=8095
 POSTGRES_DB=opsbook
 POSTGRES_USER=opsbook
@@ -244,12 +257,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.12` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.13` on pushes to `main`.
 
 For production, prefer a pinned version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.12
+OPSBOOK_IMAGE_TAG=0.1.13
 ```
 
 To update production safely:

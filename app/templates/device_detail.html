@@ -303,6 +303,7 @@
 OPSBOOK_AGENT_TOKEN=your-configured-token
 OPSBOOK_DEVICE_ID={{ device.id }}
 python3 agents/opsbook_stats_agent.py</pre>
+      <p class="muted">For a Portainer agent container, use <code>python -m kairix.stats_agent</code> from the published Opsbook image and mount the host at <code>/host</code> read-only.</p>
     {% else %}
       <p class="empty">Stats intake is not active. Set <code>OPSBOOK_AGENT_TOKEN</code> on the Opsbook server, redeploy, then run the agent with the same token.</p>
     {% endif %}
