@@ -1,11 +1,12 @@
+name: kairix-opsbook-dev
+
 services:
   app:
     build:
       context: ./app
-    container_name: kairix-opsbook-app
     environment:
       APP_NAME: ${APP_NAME:-Kairix Opsbook}
-      APP_VERSION: ${APP_VERSION:-0.1.13}
+      APP_VERSION: ${APP_VERSION:-0.1.14}
       INSTANCE_NAME: ${INSTANCE_NAME:-Opsbook}
       INSTANCE_MODE: ${INSTANCE_MODE:-primary}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opsbook:change-me@db:5432/opsbook}
@@ -30,7 +31,6 @@ services:
 
   db:
     image: postgres:16-alpine
-    container_name: kairix-opsbook-db
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-opsbook}
       POSTGRES_USER: ${POSTGRES_USER:-opsbook}

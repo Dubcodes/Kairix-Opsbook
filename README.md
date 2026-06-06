@@ -75,7 +75,7 @@ On first run, create the owner account. Change the database password and all sec
 Important `.env` values:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.13
+OPSBOOK_IMAGE_TAG=0.1.14
 APP_PORT=8095
 INSTANCE_NAME=Opsbook
 INSTANCE_MODE=primary
@@ -207,7 +207,7 @@ docker run --rm --network host \
   -e OPSBOOK_AGENT_TOKEN=the-same-token \
   -e OPSBOOK_DEVICE_ID=1 \
   -e OPSBOOK_HOST_ROOT=/host \
-  ghcr.io/dubcodes/kairix-opsbook:0.1.13 \
+  ghcr.io/dubcodes/kairix-opsbook:0.1.14 \
   python -m kairix.stats_agent
 ```
 
@@ -225,7 +225,7 @@ Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
 6. Add environment variables before deploying:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.13
+OPSBOOK_IMAGE_TAG=0.1.14
 APP_PORT=8095
 POSTGRES_DB=opsbook
 POSTGRES_USER=opsbook
@@ -257,12 +257,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.13` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.14` on pushes to `main`.
 
 For production, prefer a pinned version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.13
+OPSBOOK_IMAGE_TAG=0.1.14
 ```
 
 To update production safely:

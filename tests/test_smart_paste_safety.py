@@ -12,7 +12,7 @@ if not (Path.cwd() / "static").exists() and (APP_ROOT / "static").exists():
     os.chdir(APP_ROOT)
 
 from kairix import models
-from kairix.main import _annotate_import_suggestions, _move_device_records_to_preserved_device, _sync_credential_login_endpoint
+from kairix.main import _annotate_import_suggestions, _move_device_records_to_preserved_device, _secure_parsed_for_storage, _sync_credential_login_endpoint
 from kairix.parser import parse_smart_paste
 
 
@@ -298,6 +298,74 @@ https://microphone-acquisition-ons-spine.trycloudflare.com
             services_by_name["People App Christchurch"]["urls"][-1]["url"],
             "https://microphone-acquisition-ons-spine.trycloudflare.com",
         )
+
+    def test_cloudflare_tunnel_shell_output_with_duplicate_urls_is_safe(self) -> None:
+        text = """mainuser@PortainServer:~$ printf '=== CLOUDFLARE TUNNELS ===\\n'
+for container in 'kairix-temp-tunnel' 'people-temp-tunnel-central' 'people-temp-tunnel-dunedin' 'people-temp-tunnel-northern' 'people-temp-tunnel-christchurch'; do
+  printf '\\n--- %s ---\\n' "$container"
+  docker logs --tail 300 "$container" 2>&1 | grep -Eo 'https://[-A-Za-z0-9.]+\\.trycloudflare\\.com' | tail -n 3
+done
+=== CLOUDFLARE TUNNELS ===
+
+--- kairix-temp-tunnel ---
+https://involved-risks-roger-salad.trycloudflare.com
+https://involved-risks-roger-salad.trycloudflare.com
+https://involved-risks-roger-salad.trycloudflare.com
+
+--- people-temp-tunnel-central ---
+https://sparc-sustainable-bracket-eden.trycloudflare.com
+https://sparc-sustainable-bracket-eden.trycloudflare.com
+https://sparc-sustainable-bracket-eden.trycloudflare.com
+
+--- people-temp-tunnel-dunedin ---
+https://riding-stable-hair-biggest.trycloudflare.com
+https://riding-stable-hair-biggest.trycloudflare.com
+https://riding-stable-hair-biggest.trycloudflare.com
+
+--- people-temp-tunnel-northern ---
+https://tips-eco-lot-hunter.trycloudflare.com
+https://tips-eco-lot-hunter.trycloudflare.com
+https://tips-eco-lot-hunter.trycloudflare.com
+
+--- people-temp-tunnel-christchurch ---
+https://microphone-acquisition-ons-spine.trycloudflare.com
+https://microphone-acquisition-ons-spine.trycloudflare.com
+https://microphone-acquisition-ons-spine.trycloudflare.com
+mainuser@PortainServer:~$
+"""
+        session = self.Session()
+        try:
+            device = models.Device(name="PortainServer", slug="portainserver", primary_ip="192.168.0.205")
+            services = [
+                models.Service(device=device, name="Kairix Temp Tunnel", slug="kairix-temp-tunnel"),
+                models.Service(device=device, name="People Temp Tunnel Central", slug="people-temp-tunnel-central"),
+                models.Service(device=device, name="People Temp Tunnel Dunedin", slug="people-temp-tunnel-dunedin"),
+                models.Service(device=device, name="People Temp Tunnel Northern", slug="people-temp-tunnel-northern"),
+                models.Service(device=device, name="People Temp Tunnel Christchurch", slug="people-temp-tunnel-christchurch"),
+            ]
+            session.add_all([device, *services])
+            session.commit()
+
+            parsed = parse_smart_paste(text)
+            annotated = _annotate_import_suggestions(session, parsed)
+            stored = _secure_parsed_for_storage(annotated)
+
+            urls_by_source = {item["source_label"]: item for item in annotated["urls"]}
+            self.assertNotIn("parse_warning", annotated)
+            self.assertEqual(len(urls_by_source), 5)
+            self.assertEqual(
+                urls_by_source["kairix-temp-tunnel"]["url"],
+                "https://involved-risks-roger-salad.trycloudflare.com",
+            )
+            self.assertEqual(
+                urls_by_source["people-temp-tunnel-central"]["url"],
+                "https://sparc-sustainable-bracket-eden.trycloudflare.com",
+            )
+            self.assertEqual(urls_by_source["people-temp-tunnel-central"]["history_urls"], ["https://sparc-sustainable-bracket-eden.trycloudflare.com"])
+            self.assertEqual(urls_by_source["people-temp-tunnel-christchurch"]["suggested_service_id"], services[-1].id)
+            self.assertEqual(stored["urls"][0]["url_type"], "public")
+        finally:
+            session.close()
 
     def test_syncthing_relay_does_not_match_syncthing_service(self) -> None:
         session = self.Session()
