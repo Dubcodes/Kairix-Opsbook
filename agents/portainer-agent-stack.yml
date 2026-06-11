@@ -1,6 +1,6 @@
 services:
   opsbook-stats-agent:
-    image: ghcr.io/dubcodes/kairix-opsbook:0.1.15
+    image: ghcr.io/dubcodes/kairix-opsbook:0.1.16
     container_name: opsbook-stats-agent
     restart: unless-stopped
     network_mode: host

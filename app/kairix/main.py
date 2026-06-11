@@ -30,7 +30,7 @@ from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import models
+from . import __version__ as package_version, models
 from .config import settings
 from .database import SessionLocal, get_db, init_db
 from .exporter import create_emergency_export, safe_export_path
@@ -299,7 +299,10 @@ def bool_setting(db: Session, key: str, default: bool = False) -> bool:
 
 
 def _app_version_label() -> str:
-    parts = [settings.app_version]
+    parts = [package_version]
+    configured_version = str(settings.app_version or "").strip()
+    if configured_version and configured_version != package_version:
+        parts.append(f"configured {configured_version}")
     if settings.app_build:
         parts.append(f"build {settings.app_build}")
     if settings.app_build_iteration:

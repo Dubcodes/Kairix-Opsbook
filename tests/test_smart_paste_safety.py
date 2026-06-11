@@ -498,7 +498,7 @@ mainuser@PortainServer:~$
                     {
                         "name": "Kairix Opsbook App",
                         "container_name": "kairix-opsbook-app",
-                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.15",
+                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.16",
                         "stack_group": "kairix-opsbook",
                         "compose_path": "/srv/storage/projects/kairix-opsbook/portainer-stack.yml",
                         "confidence": "medium",

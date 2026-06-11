@@ -75,7 +75,7 @@ On first run, create the owner account. Change the database password and all sec
 Important `.env` values:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.15
+OPSBOOK_IMAGE_TAG=0.1.16
 APP_PORT=8095
 INSTANCE_NAME=Opsbook
 INSTANCE_MODE=primary
@@ -90,6 +90,8 @@ SESSION_COOKIE_SECURE=false
 Set `SESSION_COOKIE_SECURE=true` when serving Kairix Opsbook behind HTTPS.
 
 `OPSBOOK_AGENT_TOKEN` enables the read-only stats agent intake at `/api/agent/stats`. Leave it blank to disable agent submissions.
+
+Do not normally set `APP_VERSION` yourself in Portainer. The Docker image supplies the runtime version. Use `OPSBOOK_IMAGE_TAG` to choose which image is deployed.
 
 To generate strong first-run values for Portainer or `.env`:
 
@@ -207,7 +209,7 @@ docker run --rm --network host \
   -e OPSBOOK_AGENT_TOKEN=the-same-token \
   -e OPSBOOK_DEVICE_ID=1 \
   -e OPSBOOK_HOST_ROOT=/host \
-  ghcr.io/dubcodes/kairix-opsbook:0.1.15 \
+  ghcr.io/dubcodes/kairix-opsbook:0.1.16 \
   python -m kairix.stats_agent
 ```
 
@@ -225,7 +227,7 @@ Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
 6. Add environment variables before deploying:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.15
+OPSBOOK_IMAGE_TAG=0.1.16
 APP_PORT=8095
 POSTGRES_DB=opsbook
 POSTGRES_USER=opsbook
@@ -257,12 +259,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.15` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.16` on pushes to `main`.
 
 For production, prefer a pinned version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.15
+OPSBOOK_IMAGE_TAG=0.1.16
 ```
 
 To update production safely:
@@ -277,7 +279,7 @@ Avoid using `latest` for production unless you intentionally want every redeploy
 
 If Portainer cannot pull the image, check that the GitHub Container Registry package is public or configure registry authentication in Portainer.
 
-If Settings still shows an old version after redeploying, check whether `APP_VERSION` was manually set in the Portainer environment variables. A pinned value such as `APP_VERSION=0.1.0` overrides the image default.
+If Settings shows `configured ...` after the version, Portainer has an `APP_VERSION` environment value that differs from the image itself. Remove `APP_VERSION` from Portainer unless you are deliberately testing version-label behavior, then set `OPSBOOK_IMAGE_TAG` to the image you actually want and redeploy.
 
 ## Primary And Mirror
 
