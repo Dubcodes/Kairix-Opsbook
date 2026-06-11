@@ -2550,7 +2550,7 @@ def _service_url_review_details(existing: models.Service, service_hint: dict[str
     return details
 
 
-def _service_metadata_changes(existing: models.Service, service_hint: dict[str, Any]) -> tuple[list[str], list[dict[str, str]]]:
+def _service_metadata_changes(existing: models.Service, service_hint: dict[str, Any]) -> tuple[list[str], list[str], list[dict[str, str]]]:
     fields = [
         ("docker_project", "stack/group", "stack_group"),
         ("compose_path", "compose path", "compose_path"),
@@ -2558,6 +2558,7 @@ def _service_metadata_changes(existing: models.Service, service_hint: dict[str, 
         ("image", "image", "image"),
     ]
     fills: list[str] = []
+    updates: list[str] = []
     conflicts: list[dict[str, str]] = []
     for attr, label, hint_key in fields:
         suggested = str(service_hint.get(hint_key) or "").strip()
@@ -2566,6 +2567,9 @@ def _service_metadata_changes(existing: models.Service, service_hint: dict[str, 
             continue
         if not current:
             fills.append(label)
+        elif attr == "image" and _image_repo(current) and _image_repo(current) == _image_repo(suggested):
+            if current != suggested:
+                updates.append(label)
         elif current != suggested:
             conflicts.append(
                 {
@@ -2576,7 +2580,7 @@ def _service_metadata_changes(existing: models.Service, service_hint: dict[str, 
                     "note": "Smart Paste matched this service, but this stored metadata differs from the latest paste. Review before applying.",
                 }
             )
-    return fills, conflicts
+    return fills, updates, conflicts
 
 
 def _annotate_service_import_badges(service: dict[str, Any], duplicate: models.Service | None) -> None:
@@ -2588,7 +2592,7 @@ def _annotate_service_import_badges(service: dict[str, Any], duplicate: models.S
         url_adds = sum(1 for url in service.get("urls", []) if url.get("selected"))
         port_adds = sum(1 for port in service.get("ports", []) if port.get("selected"))
         credential_adds = sum(1 for credential in service.get("credentials", []) if credential.get("selected"))
-        metadata_fills, metadata_conflicts = _service_metadata_changes(duplicate, service)
+        metadata_fills, metadata_updates, metadata_conflicts = _service_metadata_changes(duplicate, service)
         conflict_details = _service_url_review_details(duplicate, service) + metadata_conflicts
         service["review_details"] = conflict_details
         conflicts = [detail["label"] for detail in conflict_details]
@@ -2602,13 +2606,14 @@ def _annotate_service_import_badges(service: dict[str, Any], duplicate: models.S
         if conflicts:
             label = f"Conflict: {_import_list_label(conflicts)}"
             badges.append(_import_badge("conflict", label, "Smart Paste found a matching service, but the pasted value differs from a value already stored. Review before applying."))
-        if metadata_fills:
-            label = f"Updating entry: {_import_list_label(metadata_fills)}"
-            badges.append(_import_badge("update", label, "A matching service exists and Smart Paste can fill these blank metadata fields."))
+        metadata_changes = metadata_fills + metadata_updates
+        if metadata_changes:
+            label = f"Updating entry: {_import_list_label(metadata_changes)}"
+            badges.append(_import_badge("update", label, "A matching service exists and Smart Paste can fill blank Docker metadata or refresh the stored image tag."))
         if additions:
             label = f"Partially exists; adds {_import_list_label(additions)}"
             badges.append(_import_badge("partial", label, "A matching service already exists. Only the listed missing details are new or blank-field fills."))
-        elif not conflicts and not metadata_fills:
+        elif not conflicts and not metadata_changes:
             badges.append(_import_badge("exists", "Already exists", "A matching service already exists and Smart Paste did not find obvious new details for it."))
     if any("trycloudflare.com" in str(url.get("url") or "").lower() for url in service.get("urls", [])):
         badges.append(_import_badge("temp", "Temporary tunnel", "This service includes a trycloudflare.com quick tunnel URL. It may change after the cloudflared container restarts."))
@@ -7050,6 +7055,8 @@ async def smart_paste_apply(
             if container_value and not exists.container_name:
                 exists.container_name = container_value
             if image_value and not exists.image:
+                exists.image = image_value
+            elif image_value and _image_repo(exists.image) and _image_repo(exists.image) == _image_repo(image_value):
                 exists.image = image_value
         merge_tags(db, "service", exists.id, _infer_tags_for_service(exists))
         for url_value_raw in form.getlist("service_urls"):

@@ -17,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-AGENT_VERSION = "0.1.16"
+AGENT_VERSION = "0.1.17"
 
 
 def _host_root() -> str:

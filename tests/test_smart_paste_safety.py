@@ -367,6 +367,70 @@ mainuser@PortainServer:~$
         finally:
             session.close()
 
+    def test_inventory_with_captured_cloudflare_urls_does_not_repeat_lookup_helper(self) -> None:
+        text = """=== HOST ===
+ Static hostname: moxxie
+
+=== IP ADDRESSES ===
+eno1 UP 192.168.0.238/24
+
+=== DOCKER CONTAINERS ===
+NAMES                                     IMAGE                         STATUS      PORTS
+temp-deputy-roster-view-url               cloudflare/cloudflared:latest Up 10 days
+deputy-roster-view-deputy-roster-view-1   deputy-roster-view:local      Up 1 hour   0.0.0.0:8096->8000/tcp
+
+=== DOCKER COMPOSE PROJECTS ===
+NAME                 STATUS              CONFIG FILES
+deputy-roster-view   running(1)          /data/compose/14/docker-compose.yml
+
+=== CLOUDFLARE TUNNELS ===
+
+--- temp-deputy-roster-view-url ---
+https://bloggers-cst-segments-disposal.trycloudflare.com
+"""
+        parsed = parse_smart_paste(text)
+
+        command_names = {item["name"] for item in parsed["commands"]}
+        self.assertNotIn("Find temporary Cloudflare tunnel URLs", command_names)
+
+    def test_inventory_with_cloudflared_container_without_urls_suggests_lookup_helper(self) -> None:
+        text = """=== HOST ===
+ Static hostname: moxxie
+
+=== IP ADDRESSES ===
+eno1 UP 192.168.0.238/24
+
+=== DOCKER CONTAINERS ===
+NAMES                       IMAGE                         STATUS      PORTS
+temp-deputy-roster-view-url cloudflare/cloudflared:latest Up 10 days
+"""
+        parsed = parse_smart_paste(text)
+
+        helper = next(item for item in parsed["commands"] if item["name"] == "Find temporary Cloudflare tunnel URLs")
+        self.assertIn("temp-deputy-roster-view-url", helper["command_template"])
+
+    def test_opsbook_stats_agent_uses_compose_project_name(self) -> None:
+        text = """=== HOST ===
+ Static hostname: moxxie
+
+=== IP ADDRESSES ===
+eno1 UP 192.168.0.238/24
+
+=== DOCKER CONTAINERS ===
+NAMES                 IMAGE                                  STATUS         PORTS
+opsbook-stats-agent   ghcr.io/dubcodes/kairix-opsbook:0.1.17 Up 12 minutes
+
+=== DOCKER COMPOSE PROJECTS ===
+NAME            STATUS              CONFIG FILES
+kairix-opsbook  running(2)          /data/compose/5/portainer-stack.yml
+opsbook-agent   running(1)          /data/compose/18/docker-compose.yml
+"""
+        parsed = parse_smart_paste(text)
+        service = next(item for item in parsed["services"] if item["name"] == "Opsbook Stats Agent")
+
+        self.assertEqual(service["stack_group"], "opsbook-agent")
+        self.assertEqual(service["compose_path"], "/data/compose/18/docker-compose.yml")
+
     def test_syncthing_relay_does_not_match_syncthing_service(self) -> None:
         session = self.Session()
         try:
@@ -498,7 +562,7 @@ mainuser@PortainServer:~$
                     {
                         "name": "Kairix Opsbook App",
                         "container_name": "kairix-opsbook-app",
-                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.16",
+                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.17",
                         "stack_group": "kairix-opsbook",
                         "compose_path": "/srv/storage/projects/kairix-opsbook/portainer-stack.yml",
                         "confidence": "medium",
@@ -522,6 +586,57 @@ mainuser@PortainServer:~$
             self.assertIsNone(service["duplicate_id"])
             self.assertIn("New service", {badge["label"] for badge in service["badges"]})
             self.assertFalse(any("container name" in badge["label"] for badge in service["badges"]))
+        finally:
+            session.close()
+
+    def test_same_container_image_tag_change_is_update_not_conflict(self) -> None:
+        session = self.Session()
+        try:
+            device = models.Device(name="Moxxie", slug="moxxie", primary_ip="192.168.0.238")
+            service = models.Service(
+                device=device,
+                name="Kairix Opsbook",
+                slug="kairix-opsbook",
+                local_url="http://192.168.0.238:8095/",
+                docker_project="kairix-opsbook",
+                compose_path="/data/compose/5/portainer-stack.yml",
+                container_name="kairix-opsbook-app",
+                image="ghcr.io/dubcodes/kairix-opsbook:0.1.16",
+            )
+            session.add_all([device, service])
+            session.commit()
+
+            parsed = {
+                "device": {"name": "moxxie", "primary_ip": "192.168.0.238", "confidence": "medium"},
+                "services": [
+                    {
+                        "name": "Kairix Opsbook App",
+                        "container_name": "kairix-opsbook-app",
+                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.17",
+                        "stack_group": "kairix-opsbook",
+                        "compose_path": "/data/compose/5/portainer-stack.yml",
+                        "confidence": "medium",
+                        "urls": [{"url": "http://192.168.0.238:8095/", "url_type": "local", "confidence": "medium"}],
+                        "ports": [{"host_port": 8095, "internal_port": 8000, "protocol": "tcp"}],
+                        "credentials": [],
+                    }
+                ],
+                "ports": [],
+                "urls": [],
+                "commands": [],
+                "credentials": [],
+                "tokens": [],
+                "paths": [],
+                "extras": {},
+            }
+
+            annotated = _annotate_import_suggestions(session, parsed)
+            service_hint = annotated["services"][0]
+
+            self.assertEqual(service_hint["duplicate_id"], service.id)
+            self.assertIn("Updating entry: image", {badge["label"] for badge in service_hint["badges"]})
+            self.assertFalse(any(badge["kind"] == "conflict" for badge in service_hint["badges"]))
+            self.assertFalse(service_hint["review_details"])
         finally:
             session.close()
 

@@ -236,7 +236,12 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
             previous_label = stripped.strip(":")
     commands = _unique_commands(commands)
     cloudflared_containers = _cloudflared_container_names(docker_containers)
-    if not is_cloudflare_output_only and (_looks_like_temporary_cloudflared(effective_text) or cloudflared_containers):
+    cloudflare_tunnel_entries = _cloudflare_tunnel_entries(cloudflare_tunnels)
+    if (
+        not is_cloudflare_output_only
+        and not cloudflare_tunnel_entries
+        and (_looks_like_temporary_cloudflared(effective_text) or cloudflared_containers)
+    ):
         command_template = _cloudflared_url_command(cloudflared_containers)
         container_note = ", ".join(cloudflared_containers) if cloudflared_containers else "running cloudflared containers"
         commands = _unique_commands(
@@ -280,7 +285,6 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
                     "confidence": "medium",
                 }
             )
-    cloudflare_tunnel_entries = _cloudflare_tunnel_entries(cloudflare_tunnels)
     _attach_cloudflare_urls(service_items, cloudflare_tunnel_entries)
     service_items = [item for item in service_items if not _is_detached_cloudflared_placeholder(item)]
     if not is_inventory:
@@ -1307,6 +1311,25 @@ def _norm_name(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", value.lower())
 
 
+def _stack_match_tokens(value: str) -> set[str]:
+    generic = {
+        "app",
+        "container",
+        "containers",
+        "db",
+        "database",
+        "latest",
+        "project",
+        "running",
+        "server",
+        "service",
+        "services",
+        "stats",
+        "web",
+    }
+    return {token for token in _service_tokens(value) if token not in generic and not token.isdigit()}
+
+
 def _guess_stack_group(container_name: str, projects: dict[str, str]) -> str:
     normalized = _norm_name(container_name)
     known_prefixes = {
@@ -1326,6 +1349,7 @@ def _guess_stack_group(container_name: str, projects: dict[str, str]) -> str:
         "filebrowser": "filebrowser",
         "frigate": "frigatenvr",
         "mqtt": "frigatenvr",
+        "opsbookstatsagent": "opsbook-agent",
     }
     for prefix, project in known_prefixes.items():
         if normalized.startswith(prefix) and project in projects:
@@ -1338,6 +1362,16 @@ def _guess_stack_group(container_name: str, projects: dict[str, str]) -> str:
                 best = project
     if best:
         return best
+    container_tokens = _stack_match_tokens(container_name)
+    scored_projects: list[tuple[int, int, str]] = []
+    for project in projects:
+        project_tokens = _stack_match_tokens(project)
+        overlap = container_tokens & project_tokens
+        if overlap:
+            score = (len(overlap) * 10) + sum(len(token) for token in overlap)
+            scored_projects.append((score, len(project), project))
+    if scored_projects:
+        return sorted(scored_projects, reverse=True)[0][2]
     if "cloudflared" in normalized or "tunnel" in normalized:
         return "cloudflare-tunnels"
     return ""
