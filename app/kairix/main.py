@@ -2099,9 +2099,73 @@ def _service_aliases_compatible(import_alias: str, stored_alias: str) -> bool:
     return not meaningful_difference
 
 
+def _url_host(raw_url: str) -> str:
+    try:
+        return (urlparse(str(raw_url or "").strip()).hostname or "").lower()
+    except ValueError:
+        return ""
+
+
+def _service_hint_local_hosts(service_hint: dict[str, Any]) -> set[str]:
+    hosts: set[str] = set()
+    for url_hint in service_hint.get("urls", []):
+        url_value = str(url_hint.get("url") or "").strip()
+        url_type = str(url_hint.get("url_type") or "local").lower()
+        host = _url_host(url_value)
+        if host and (url_type == "local" or host.startswith(("192.168.", "10.", "172."))):
+            hosts.add(host)
+    return hosts
+
+
+def _service_local_hosts(service: models.Service) -> set[str]:
+    hosts = {_url_host(service.local_url)}
+    for url in service.urls:
+        url_type = str(url.url_type or "local").lower()
+        host = _url_host(url.url)
+        if host and (url_type == "local" or host.startswith(("192.168.", "10.", "172."))):
+            hosts.add(host)
+    return {host for host in hosts if host}
+
+
+def _service_host_context_conflicts(device: models.Device | None, service: models.Service, service_hint: dict[str, Any]) -> bool:
+    hint_hosts = _service_hint_local_hosts(service_hint)
+    stored_hosts = _service_local_hosts(service)
+    if not hint_hosts or not stored_hosts or hint_hosts & stored_hosts:
+        return False
+    device_hosts = {str(getattr(device, "primary_ip", "") or "").lower(), str(getattr(device, "hostname", "") or "").lower()}
+    device_hosts = {host for host in device_hosts if host}
+    return bool(device_hosts and hint_hosts & device_hosts and not stored_hosts & device_hosts)
+
+
+def _image_repo(value: str) -> str:
+    clean = str(value or "").strip().lower()
+    if not clean:
+        return ""
+    if "/" in clean.rsplit(":", 1)[-1]:
+        return clean
+    return clean.rsplit(":", 1)[0]
+
+
+def _service_docker_identity_conflicts(service: models.Service, service_hint: dict[str, Any]) -> bool:
+    hinted_container = str(service_hint.get("container_name") or "").strip().lower()
+    stored_container = str(service.container_name or "").strip().lower()
+    if hinted_container and stored_container and hinted_container != stored_container:
+        return True
+    hinted_image = _image_repo(str(service_hint.get("image") or ""))
+    stored_image = _image_repo(service.image)
+    return bool(hinted_image and stored_image and hinted_image != stored_image)
+
+
 def _match_service_for_import(db: Session, device_id: int, service_hint: dict[str, Any]) -> models.Service | None:
     name = str(service_hint.get("name", "")).strip()
     aliases = {_service_alias(name), slugify(name)}
+    device = db.get(models.Device, device_id)
+    device_services = db.query(models.Service).filter(models.Service.device_id == device_id).all()
+    hinted_container = str(service_hint.get("container_name") or "").strip().lower()
+    if hinted_container:
+        for service in device_services:
+            if str(service.container_name or "").strip().lower() == hinted_container and not _service_host_context_conflicts(device, service, service_hint):
+                return service
     for url in service_hint.get("urls", []):
         value = str(url.get("url", ""))
         existing_url = db.query(models.Url).filter(models.Url.url == value).first()
@@ -2120,7 +2184,11 @@ def _match_service_for_import(db: Session, device_id: int, service_hint: dict[st
     for alias in aliases:
         if not alias:
             continue
-        for service in db.query(models.Service).filter(models.Service.device_id == device_id).all():
+        for service in device_services:
+            if _service_host_context_conflicts(device, service, service_hint):
+                continue
+            if _service_docker_identity_conflicts(service, service_hint):
+                continue
             service_aliases = {_service_alias(service.name), slugify(service.name)}
             if alias in service_aliases:
                 return service
@@ -6970,10 +7038,16 @@ async def smart_paste_apply(
         else:
             group_value = str(form.get(f"service_group_{index_raw}") or item.get("stack_group", "")).strip()
             compose_value = str(form.get(f"service_compose_{index_raw}") or item.get("compose_path", "")).strip()
-            exists.docker_project = group_value or exists.docker_project
-            exists.compose_path = compose_value or exists.compose_path
-            exists.container_name = item.get("container_name", "") or exists.container_name
-            exists.image = item.get("image", "") or exists.image
+            if group_value and not exists.docker_project:
+                exists.docker_project = group_value
+            if compose_value and not exists.compose_path:
+                exists.compose_path = compose_value
+            container_value = str(item.get("container_name", "") or "").strip()
+            image_value = str(item.get("image", "") or "").strip()
+            if container_value and not exists.container_name:
+                exists.container_name = container_value
+            if image_value and not exists.image:
+                exists.image = image_value
         merge_tags(db, "service", exists.id, _infer_tags_for_service(exists))
         for url_value_raw in form.getlist("service_urls"):
             try:

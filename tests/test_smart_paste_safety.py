@@ -428,6 +428,103 @@ mainuser@PortainServer:~$
         finally:
             session.close()
 
+    def test_same_service_name_on_different_host_is_not_collapsed(self) -> None:
+        session = self.Session()
+        try:
+            device = models.Device(name="Moxxie", slug="moxxie", primary_ip="192.168.0.238")
+            old_host_service = models.Service(
+                device=device,
+                name="Kairix Graphics Builder",
+                slug="kairix-graphics-builder",
+                local_url="http://192.168.0.205:3010/controller",
+                container_name="kairix-graphics-builder",
+                image="ghcr.io/dubcodes/kairix-graphics-builder:latest",
+            )
+            session.add_all([device, old_host_service])
+            session.commit()
+
+            parsed = {
+                "device": {"name": "moxxie", "primary_ip": "192.168.0.238", "confidence": "medium"},
+                "services": [
+                    {
+                        "name": "Kairix Graphics Builder",
+                        "container_name": "kairix-graphics-builder",
+                        "image": "ghcr.io/dubcodes/kairix-graphics-builder:latest",
+                        "stack_group": "kairix-graphics-builder",
+                        "compose_path": "/data/compose/4/portainer-stack.yml",
+                        "confidence": "medium",
+                        "urls": [{"url": "http://192.168.0.238:3010/controller", "url_type": "local", "confidence": "medium"}],
+                        "ports": [{"host_port": 3010, "internal_port": 3010, "protocol": "tcp"}],
+                        "credentials": [],
+                    }
+                ],
+                "ports": [],
+                "urls": [],
+                "commands": [],
+                "credentials": [],
+                "tokens": [],
+                "paths": [],
+                "extras": {},
+            }
+
+            annotated = _annotate_import_suggestions(session, parsed)
+            service = annotated["services"][0]
+
+            self.assertIsNone(service["duplicate_id"])
+            self.assertIn("New service", {badge["label"] for badge in service["badges"]})
+            self.assertFalse(any(detail.get("label") == "local URL" for detail in service.get("review_details", [])))
+        finally:
+            session.close()
+
+    def test_stack_role_mismatch_does_not_match_app_to_db_service(self) -> None:
+        session = self.Session()
+        try:
+            device = models.Device(name="Moxxie", slug="moxxie", primary_ip="192.168.0.238")
+            db_service = models.Service(
+                device=device,
+                name="Kairix Opsbook Db",
+                slug="kairix-opsbook-db",
+                docker_project="kairix-opsbook",
+                compose_path="/data/compose/5/portainer-stack.yml",
+                container_name="kairix-opsbook-db",
+                image="postgres:16-alpine",
+            )
+            session.add_all([device, db_service])
+            session.commit()
+
+            parsed = {
+                "device": {"name": "moxxie", "primary_ip": "192.168.0.238", "confidence": "medium"},
+                "services": [
+                    {
+                        "name": "Kairix Opsbook App",
+                        "container_name": "kairix-opsbook-app",
+                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.15",
+                        "stack_group": "kairix-opsbook",
+                        "compose_path": "/srv/storage/projects/kairix-opsbook/portainer-stack.yml",
+                        "confidence": "medium",
+                        "urls": [{"url": "http://192.168.0.238:8095/", "url_type": "local", "confidence": "medium"}],
+                        "ports": [{"host_port": 8095, "internal_port": 8000, "protocol": "tcp"}],
+                        "credentials": [],
+                    }
+                ],
+                "ports": [],
+                "urls": [],
+                "commands": [],
+                "credentials": [],
+                "tokens": [],
+                "paths": [],
+                "extras": {},
+            }
+
+            annotated = _annotate_import_suggestions(session, parsed)
+            service = annotated["services"][0]
+
+            self.assertIsNone(service["duplicate_id"])
+            self.assertIn("New service", {badge["label"] for badge in service["badges"]})
+            self.assertFalse(any("container name" in badge["label"] for badge in service["badges"]))
+        finally:
+            session.close()
+
     def test_credential_login_url_creates_service_url_and_port(self) -> None:
         session = self.Session()
         try:

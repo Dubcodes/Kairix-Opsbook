@@ -13,7 +13,7 @@ def main() -> None:
         description="Generate first-run environment variables for a Kairix Opsbook Portainer stack."
     )
     parser.add_argument("--port", default="8095", help="Host port to publish the web app on.")
-    parser.add_argument("--image-tag", default="0.1.14", help="Versioned Opsbook image tag to deploy.")
+    parser.add_argument("--image-tag", default="0.1.15", help="Versioned Opsbook image tag to deploy.")
     parser.add_argument("--instance", default="Opsbook", help="Instance name shown in the app header.")
     parser.add_argument("--mode", default="primary", choices=["primary", "standby"], help="Instance mode.")
     parser.add_argument(
