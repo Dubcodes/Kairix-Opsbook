@@ -165,6 +165,22 @@
     <input name="stats_window_hours" type="number" min="1" max="168" value="{{ app_settings.stats_window_hours or '8' }}">
     <small>How many hours to show in the compact Stats graphs.</small>
   </label>
+  <label>Expected agent interval minutes
+    <input name="stats_expected_interval_minutes" type="number" min="1" max="1440" value="{{ app_settings.stats_expected_interval_minutes or '5' }}">
+    <small>Used for stale-agent warnings and missed report counts.</small>
+  </label>
+  <fieldset class="span-2 stats-metric-picker">
+    <legend>Stats overview tiles</legend>
+    <p class="muted">Choose up to four metrics for the Stats landing page. Device Stats still shows every metric.</p>
+    <div class="check-grid compact-check-grid">
+      {% for metric in stats_metric_catalog %}
+        <label class="check-row">
+          <input type="checkbox" name="stats_overview_metrics" value="{{ metric.key }}" {% if metric.selected %}checked{% endif %}>
+          <span><strong>{{ metric.label }}</strong><small>{{ metric.detail }}</small></span>
+        </label>
+      {% endfor %}
+    </div>
+  </fieldset>
 
   <h3 class="span-2">Light Mode</h3>
   <label>Background <input type="color" name="light_bg" value="{{ app_settings.light_bg }}"></label>

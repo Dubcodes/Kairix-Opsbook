@@ -16,7 +16,7 @@
   <div class="stat"><strong data-stats-count="window">{{ stats_window_label }}</strong><span>Graph window</span></div>
 </section>
 
-<section class="panel stats-live-panel" data-stats-live data-stats-window-hours="{{ stats_window_hours }}">
+<section class="panel stats-live-panel" data-stats-live data-stats-window-hours="{{ stats_window_hours }}" data-stats-metrics="{{ stats_overview_metric_keys|join(',') }}">
   <div class="section-title">
     <div>
       <h2>Monitored Devices</h2>
@@ -26,7 +26,7 @@
   </div>
   <div class="stats-device-grid" data-stats-device-grid>
     {% for device in devices %}
-      {{ stats_device_card(device, latest_stats.get(device.id), stats_states.get(device.id, {"state": "unknown", "label": "No agent data yet"}), href="/devices/" ~ device.id ~ "?tab=stats") }}
+      {{ stats_device_card(device, latest_stats.get(device.id), stats_states.get(device.id, {"state": "unknown", "label": "No agent data yet"}), href="/devices/" ~ device.id ~ "?tab=stats", metrics=stats_overview_metric_keys) }}
     {% endfor %}
   </div>
   <p class="empty" data-stats-empty {% if devices %}hidden{% endif %}>No devices have reported stats yet.</p>

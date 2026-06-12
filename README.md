@@ -75,7 +75,7 @@ On first run, create the owner account. Change the database password and all sec
 Important `.env` values:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.19
+OPSBOOK_IMAGE_TAG=0.1.20
 APP_PORT=8095
 INSTANCE_NAME=Opsbook
 INSTANCE_MODE=primary
@@ -209,11 +209,15 @@ docker run --rm --network host \
   -e OPSBOOK_AGENT_TOKEN=the-same-token \
   -e OPSBOOK_DEVICE_ID=1 \
   -e OPSBOOK_HOST_ROOT=/host \
-  ghcr.io/dubcodes/kairix-opsbook:0.1.19 \
+  ghcr.io/dubcodes/kairix-opsbook:0.1.20 \
   python -m kairix.stats_agent
 ```
 
 Use `OPSBOOK_INTERVAL_SECONDS=300` or `--interval 300` if you want the agent process to keep running and report every five minutes. If `OPSBOOK_DEVICE_ID` is omitted, Opsbook tries to match the device by primary IP, hostname, or device name.
+
+The agent reports CPU, RAM, swap/pagefile, load, per-mount disk use, network byte counters, and uptime. Opsbook calculates network throughput from consecutive reports, so the first snapshot after startup may show no upload/download rate until another snapshot arrives. Use `OPSBOOK_DISK_MOUNTS=/,/mnt/share` to restrict noisy mount lists and `OPSBOOK_NETWORK_INTERFACES=eno1,wlan0` to choose exact network interfaces.
+
+Docker health is off by default. To collect running/stopped/unhealthy container counts, set `OPSBOOK_DOCKER_HEALTH=on` and mount the Docker socket read-only into the agent container with `/var/run/docker.sock:/var/run/docker.sock:ro`.
 
 ## Portainer Install
 
@@ -227,7 +231,7 @@ Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
 6. Add environment variables before deploying:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.19
+OPSBOOK_IMAGE_TAG=0.1.20
 APP_PORT=8095
 POSTGRES_DB=opsbook
 POSTGRES_USER=opsbook
@@ -259,12 +263,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.19` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.20` on pushes to `main`.
 
 For production, prefer a pinned version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.19
+OPSBOOK_IMAGE_TAG=0.1.20
 ```
 
 To update production safely:

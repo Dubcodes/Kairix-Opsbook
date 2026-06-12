@@ -17,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-AGENT_VERSION = "0.1.19"
+AGENT_VERSION = "0.1.20"
 
 
 def _host_root() -> str:
@@ -44,6 +44,10 @@ def _run_text(command: list[str], timeout: float = 3.0) -> str:
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return result.stdout.strip()
+
+
+def _env_enabled(name: str) -> bool:
+    return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _primary_ip() -> str:
@@ -83,7 +87,19 @@ def _linux_memory() -> dict[str, int | float] | None:
     if not total or available is None:
         return None
     used = max(0, total - available)
-    return {"total_bytes": total, "used_bytes": used, "percent": round((used / total) * 100, 2)}
+    stats: dict[str, int | float] = {"total_bytes": total, "used_bytes": used, "percent": round((used / total) * 100, 2)}
+    swap_total = values.get("SwapTotal")
+    swap_free = values.get("SwapFree")
+    if swap_total is not None and swap_free is not None:
+        swap_used = max(0, swap_total - swap_free)
+        stats.update(
+            {
+                "swap_total_bytes": swap_total,
+                "swap_used_bytes": swap_used,
+                "swap_percent": round((swap_used / swap_total) * 100, 2) if swap_total else 0.0,
+            }
+        )
+    return stats
 
 
 def _windows_memory() -> dict[str, int | float] | None:
@@ -109,7 +125,51 @@ def _windows_memory() -> dict[str, int | float] | None:
         return None
     used = int(status.ullTotalPhys - status.ullAvailPhys)
     total = int(status.ullTotalPhys)
-    return {"total_bytes": total, "used_bytes": used, "percent": float(status.dwMemoryLoad)}
+    stats: dict[str, int | float] = {"total_bytes": total, "used_bytes": used, "percent": float(status.dwMemoryLoad)}
+    page_total = int(status.ullTotalPageFile)
+    page_available = int(status.ullAvailPageFile)
+    if page_total > 0 and page_available >= 0:
+        page_used = max(0, page_total - page_available)
+        stats.update(
+            {
+                "swap_total_bytes": page_total,
+                "swap_used_bytes": page_used,
+                "swap_percent": round((page_used / page_total) * 100, 2),
+            }
+        )
+    return stats
+
+
+def _size_to_bytes(value: str) -> int | None:
+    clean = value.strip().replace(",", "")
+    if not clean:
+        return None
+    number = ""
+    unit = ""
+    for char in clean:
+        if char.isdigit() or char == ".":
+            number += char
+        elif not char.isspace():
+            unit += char
+    if not number:
+        return None
+    try:
+        amount = float(number)
+    except ValueError:
+        return None
+    multipliers = {
+        "": 1,
+        "b": 1,
+        "k": 1024,
+        "kb": 1024,
+        "m": 1024**2,
+        "mb": 1024**2,
+        "g": 1024**3,
+        "gb": 1024**3,
+        "t": 1024**4,
+        "tb": 1024**4,
+    }
+    return int(amount * multipliers.get(unit.lower(), 1))
 
 
 def _mac_memory() -> dict[str, int | float] | None:
@@ -133,7 +193,29 @@ def _mac_memory() -> dict[str, int | float] | None:
             if raw.isdigit():
                 free_pages += int(raw)
     used = max(0, total - free_pages * page_size)
-    return {"total_bytes": total, "used_bytes": used, "percent": round((used / total) * 100, 2)}
+    stats: dict[str, int | float] = {"total_bytes": total, "used_bytes": used, "percent": round((used / total) * 100, 2)}
+    swap_raw = _run_text(["sysctl", "-n", "vm.swapusage"])
+    if swap_raw:
+        swap_values: dict[str, int] = {}
+        tokens = [part.strip(":,") for part in swap_raw.replace("=", " ").split()]
+        for index, part in enumerate(tokens[:-1]):
+            key = part.lower()
+            if key not in {"total", "used", "free"}:
+                continue
+            parsed = _size_to_bytes(tokens[index + 1])
+            if parsed is not None:
+                swap_values[key] = parsed
+        swap_total = swap_values.get("total")
+        swap_used = swap_values.get("used")
+        if swap_total is not None and swap_used is not None:
+            stats.update(
+                {
+                    "swap_total_bytes": swap_total,
+                    "swap_used_bytes": swap_used,
+                    "swap_percent": round((swap_used / swap_total) * 100, 2) if swap_total else 0.0,
+                }
+            )
+    return stats
 
 
 def memory_stats() -> dict[str, int | float] | None:
@@ -228,6 +310,145 @@ def disk_stats() -> list[dict[str, int | float | str]]:
     return results
 
 
+def network_stats() -> dict[str, object] | None:
+    configured = {part.strip() for part in os.getenv("OPSBOOK_NETWORK_INTERFACES", "").split(",") if part.strip()}
+    text = _read_text("/proc/net/dev")
+    if not text:
+        return None
+    interfaces: list[dict[str, int | str]] = []
+    total_rx = 0
+    total_tx = 0
+    skipped_prefixes = ("lo", "docker", "br-", "veth", "virbr", "tun", "tap")
+    for line in text.splitlines()[2:]:
+        if ":" not in line:
+            continue
+        iface, raw_values = line.split(":", 1)
+        iface = iface.strip()
+        if configured:
+            if iface not in configured:
+                continue
+        elif iface.startswith(skipped_prefixes):
+            continue
+        parts = raw_values.split()
+        if len(parts) < 16:
+            continue
+        try:
+            rx_bytes = int(parts[0])
+            tx_bytes = int(parts[8])
+        except ValueError:
+            continue
+        total_rx += rx_bytes
+        total_tx += tx_bytes
+        interfaces.append({"name": iface, "rx_bytes": rx_bytes, "tx_bytes": tx_bytes})
+    if not interfaces:
+        return None
+    return {"rx_bytes": total_rx, "tx_bytes": total_tx, "interfaces": interfaces[:32]}
+
+
+def _decode_chunked(body: bytes) -> bytes:
+    decoded = bytearray()
+    index = 0
+    while index < len(body):
+        line_end = body.find(b"\r\n", index)
+        if line_end < 0:
+            break
+        raw_size = body[index:line_end].split(b";", 1)[0].strip()
+        try:
+            size = int(raw_size, 16)
+        except ValueError:
+            break
+        index = line_end + 2
+        if size == 0:
+            break
+        decoded.extend(body[index : index + size])
+        index += size + 2
+    return bytes(decoded)
+
+
+def _docker_api_json(path: str) -> object | None:
+    if os.name == "nt" or not hasattr(socket, "AF_UNIX"):
+        return None
+    configured = os.getenv("OPSBOOK_DOCKER_SOCKET", "").strip()
+    candidates = [configured] if configured else []
+    candidates.extend(["/var/run/docker.sock", str(_host_path("/var/run/docker.sock"))])
+    for socket_path in dict.fromkeys(candidate for candidate in candidates if candidate):
+        try:
+            client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            client.settimeout(2.5)
+            client.connect(socket_path)
+            request = f"GET {path} HTTP/1.1\r\nHost: docker\r\nConnection: close\r\n\r\n"
+            client.sendall(request.encode("ascii"))
+            chunks: list[bytes] = []
+            while True:
+                chunk = client.recv(65536)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            client.close()
+        except OSError:
+            continue
+        raw = b"".join(chunks)
+        header, sep, body = raw.partition(b"\r\n\r\n")
+        status_line = header.splitlines()[0] if header.splitlines() else b""
+        if not sep or b" 200 " not in status_line:
+            continue
+        if b"transfer-encoding: chunked" in header.lower():
+            body = _decode_chunked(body)
+        try:
+            return json.loads(body.decode("utf-8", "replace"))
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
+def docker_health() -> dict[str, object] | None:
+    if not _env_enabled("OPSBOOK_DOCKER_HEALTH"):
+        return None
+    containers = _docker_api_json("/containers/json?all=1")
+    if not isinstance(containers, list):
+        output = _run_text(["docker", "ps", "-a", "--format", "{{json .}}"], timeout=4.0)
+        parsed: list[dict[str, object]] = []
+        for line in output.splitlines():
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                parsed.append(item)
+        containers = parsed
+    if not isinstance(containers, list):
+        return None
+    cleaned: list[dict[str, str]] = []
+    running = 0
+    unhealthy = 0
+    for item in containers[:100]:
+        if not isinstance(item, dict):
+            continue
+        names = item.get("Names") or item.get("names") or item.get("Name") or item.get("name")
+        if isinstance(names, list):
+            name = str(names[0]).lstrip("/") if names else ""
+        else:
+            name = str(names or item.get("Names") or "").lstrip("/")
+        state = str(item.get("State") or item.get("state") or "").lower()
+        status = str(item.get("Status") or item.get("status") or "")
+        image = str(item.get("Image") or item.get("image") or "")
+        is_running = state == "running" or status.lower().startswith("up")
+        if is_running:
+            running += 1
+        if "unhealthy" in status.lower():
+            unhealthy += 1
+        cleaned.append({"name": name, "state": state or ("running" if is_running else ""), "status": status, "image": image})
+    total = len(cleaned)
+    return {
+        "enabled": True,
+        "total": total,
+        "running": running,
+        "stopped": max(0, total - running),
+        "unhealthy": unhealthy,
+        "containers": cleaned,
+    }
+
+
 def uptime_seconds() -> float | None:
     text = _read_text("/proc/uptime")
     if text:
@@ -271,6 +492,8 @@ def collect_payload(device_id: str = "") -> dict[str, object]:
         },
         "memory": memory_stats(),
         "disks": disk_stats(),
+        "network": network_stats(),
+        "docker": docker_health(),
     }
     return {key: value for key, value in payload.items() if value is not None}
 

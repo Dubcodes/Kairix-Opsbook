@@ -135,6 +135,15 @@ def stat_bytes(value: int | None) -> str:
     return f"{amount:.1f} {unit}" if unit != "B" else f"{int(amount)} B"
 
 
+def stat_rate(value: float | int | None) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        return f"{stat_bytes(int(float(value)))}/s"
+    except (TypeError, ValueError):
+        return "n/a"
+
+
 def stat_duration(seconds: float | int | None) -> str:
     if seconds is None:
         return "n/a"
@@ -156,6 +165,7 @@ templates.env.globals["service_no_credentials_needed"] = service_no_credentials_
 templates.env.globals["public_notes"] = public_notes
 templates.env.filters["stat_percent"] = stat_percent
 templates.env.filters["stat_bytes"] = stat_bytes
+templates.env.filters["stat_rate"] = stat_rate
 templates.env.filters["stat_duration"] = stat_duration
 
 THEME_DEFAULTS = {
@@ -185,6 +195,8 @@ THEME_DEFAULTS = {
     "ping_orange_ms": "10",
     "history_retention_days": "90",
     "stats_window_hours": "8",
+    "stats_expected_interval_minutes": "5",
+    "stats_overview_metrics": "cpu,memory,disk,load",
 }
 
 PING_THREAD_STARTED = False
@@ -201,6 +213,20 @@ DEVICE_IMAGE_DIR = "device-images"
 SUGGESTION_IMAGE_DIR = "suggestion-images"
 MAX_IMAGE_UPLOAD_BYTES = 12 * 1024 * 1024
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+STATS_METRIC_CATALOG = [
+    {"key": "cpu", "label": "CPU", "detail": "Processor use", "chart": "cpu_percent"},
+    {"key": "memory", "label": "Memory", "detail": "RAM use", "chart": "memory_percent"},
+    {"key": "disk", "label": "Root disk", "detail": "Main filesystem", "chart": "root_disk_percent"},
+    {"key": "load", "label": "Load 1 min", "detail": "Raw system load", "chart": "load_1"},
+    {"key": "swap", "label": "Swap", "detail": "Swap or pagefile use", "chart": "swap_percent"},
+    {"key": "load_core", "label": "Load/core", "detail": "Load divided by CPU cores", "chart": "load_per_core"},
+    {"key": "network", "label": "Network", "detail": "Combined RX/TX rate", "chart": "network_bps"},
+    {"key": "freshness", "label": "Agent", "detail": "Freshness and missed reports", "chart": "missed_reports"},
+    {"key": "docker", "label": "Docker", "detail": "Container health, opt-in", "chart": "docker_unhealthy_count"},
+]
+STATS_METRIC_KEYS = {item["key"] for item in STATS_METRIC_CATALOG}
+STATS_DEFAULT_OVERVIEW_METRICS = ["cpu", "memory", "disk", "load"]
+STATS_DETAIL_METRICS = [item["key"] for item in STATS_METRIC_CATALOG]
 
 
 @app.on_event("startup")
@@ -290,6 +316,34 @@ def int_setting(db: Session, key: str, default: int, *, minimum: int = 1, maximu
     except (TypeError, ValueError):
         value = default
     return max(minimum, min(maximum, value))
+
+
+def _clean_stats_metric_keys(raw_keys: list[str] | tuple[str, ...] | str | None, *, limit: int | None = None) -> list[str]:
+    if isinstance(raw_keys, str):
+        candidates = [part.strip() for part in raw_keys.split(",")]
+    else:
+        candidates = [str(part).strip() for part in (raw_keys or [])]
+    keys: list[str] = []
+    for key in candidates:
+        if key in STATS_METRIC_KEYS and key not in keys:
+            keys.append(key)
+    if not keys:
+        keys = list(STATS_DEFAULT_OVERVIEW_METRICS)
+    return keys[:limit] if limit else keys
+
+
+def _stats_overview_metric_keys(db: Session) -> list[str]:
+    raw = get_app_settings(db).get("stats_overview_metrics", ",".join(STATS_DEFAULT_OVERVIEW_METRICS))
+    return _clean_stats_metric_keys(raw, limit=4)
+
+
+def _stats_expected_interval_minutes(db: Session) -> int:
+    return int_setting(db, "stats_expected_interval_minutes", 5, minimum=1, maximum=1440)
+
+
+def _stats_metric_catalog(selected: list[str] | None = None) -> list[dict[str, str]]:
+    selected_set = set(selected or [])
+    return [{**item, "selected": "true" if item["key"] in selected_set else ""} for item in STATS_METRIC_CATALOG]
 
 
 def bool_setting(db: Session, key: str, default: bool = False) -> bool:
@@ -3649,6 +3703,7 @@ def _service_history(db: Session, service: models.Service, *, limit: int = 50) -
     logs = (
         db.query(models.AuditLog)
         .filter(or_(*filters))
+        .filter(models.AuditLog.action != "agent_stats_received")
         .order_by(models.AuditLog.created_at.desc())
         .limit(limit)
         .all()
@@ -3694,6 +3749,7 @@ def _device_history(db: Session, device: models.Device, *, limit: int = 50) -> l
     logs = (
         db.query(models.AuditLog)
         .filter(or_(*filters))
+        .filter(models.AuditLog.action != "agent_stats_received")
         .order_by(models.AuditLog.created_at.desc())
         .limit(limit)
         .all()
@@ -3756,6 +3812,15 @@ def _agent_percent(value: Any) -> float | None:
     return max(0.0, min(100.0, number))
 
 
+def _agent_rate_per_second(current: int | None, previous: int | None, elapsed_seconds: float | None) -> float | None:
+    if current is None or previous is None or not elapsed_seconds or elapsed_seconds <= 0:
+        return None
+    delta = current - previous
+    if delta < 0:
+        return None
+    return round(delta / elapsed_seconds, 2)
+
+
 def _parse_agent_datetime(value: Any) -> datetime:
     if not value:
         return now_utc()
@@ -3808,14 +3873,16 @@ def _match_agent_device(db: Session, payload: dict[str, Any]) -> models.Device |
     return None
 
 
-def _stats_snapshot_state(snapshot: models.DeviceStatSnapshot | None) -> dict[str, str]:
+def _stats_snapshot_state(snapshot: models.DeviceStatSnapshot | None, *, expected_minutes: int = 5) -> dict[str, str]:
     if not snapshot:
         return {"state": "unknown", "label": "No agent data yet"}
     age = now_utc() - _utc(snapshot.created_at)
     minutes = max(0, int(age.total_seconds() // 60))
-    if minutes < 15:
+    fresh_limit = max(15, expected_minutes * 3)
+    stale_limit = max(60, expected_minutes * 12)
+    if minutes < fresh_limit:
         return {"state": "good", "label": f"Fresh · {minutes} min old"}
-    if minutes < 60:
+    if minutes < stale_limit:
         return {"state": "slow", "label": f"Stale · {minutes} min old"}
     hours = minutes // 60
     return {"state": "bad", "label": f"Old · {hours}h old"}
@@ -3839,6 +3906,13 @@ def _stats_window_hours(db: Session) -> int:
     return int_setting(db, "stats_window_hours", 8, minimum=1, maximum=168)
 
 
+def _missed_report_count(snapshot: models.DeviceStatSnapshot | None, expected_minutes: int) -> int:
+    if not snapshot:
+        return 0
+    minutes = max(0, int((now_utc() - _utc(snapshot.created_at)).total_seconds() // 60))
+    return max(0, minutes // max(1, expected_minutes) - 1)
+
+
 def _stat_float(value: float | int | None) -> float | None:
     if value is None:
         return None
@@ -3848,29 +3922,143 @@ def _stat_float(value: float | int | None) -> float | None:
         return None
 
 
-def _stat_snapshot_payload(snapshot: models.DeviceStatSnapshot) -> dict[str, Any]:
+def _stat_int(value: float | int | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stat_rate_value(*values: float | int | None) -> float | None:
+    numbers = [float(value) for value in values if value is not None]
+    if not numbers:
+        return None
+    return round(sum(numbers), 2)
+
+
+def _payload_mapping(snapshot: models.DeviceStatSnapshot, key: str) -> dict[str, Any]:
+    payload = snapshot.payload_json if isinstance(snapshot.payload_json, dict) else {}
+    value = payload.get(key)
+    return value if isinstance(value, dict) else {}
+
+
+def _payload_list(snapshot: models.DeviceStatSnapshot, key: str) -> list[Any]:
+    payload = snapshot.payload_json if isinstance(snapshot.payload_json, dict) else {}
+    value = payload.get(key)
+    return value if isinstance(value, list) else []
+
+
+def _stat_disk_details(snapshot: models.DeviceStatSnapshot) -> list[dict[str, str]]:
+    disks: list[dict[str, str]] = []
+    for item in _payload_list(snapshot, "disks")[:24]:
+        if not isinstance(item, dict):
+            continue
+        mount = str(item.get("mountpoint") or item.get("mount") or "Disk").strip() or "Disk"
+        used = _stat_int(item.get("used_bytes"))
+        total = _stat_int(item.get("total_bytes"))
+        disks.append(
+            {
+                "label": mount,
+                "percent": stat_percent(_stat_float(item.get("percent"))),
+                "detail": f"{stat_bytes(used)} / {stat_bytes(total)}",
+            }
+        )
+    return disks
+
+
+def _stat_network_details(snapshot: models.DeviceStatSnapshot) -> list[dict[str, str]]:
+    network = _payload_mapping(snapshot, "network")
+    interfaces = network.get("interfaces") if isinstance(network.get("interfaces"), list) else []
+    details: list[dict[str, str]] = []
+    for item in interfaces[:32]:
+        if not isinstance(item, dict):
+            continue
+        details.append(
+            {
+                "label": str(item.get("name") or "interface"),
+                "detail": f"RX {stat_bytes(_stat_int(item.get('rx_bytes')))} · TX {stat_bytes(_stat_int(item.get('tx_bytes')))}",
+            }
+        )
+    return details
+
+
+def _stat_docker_details(snapshot: models.DeviceStatSnapshot) -> dict[str, Any]:
+    docker = _payload_mapping(snapshot, "docker")
+    containers = docker.get("containers") if isinstance(docker.get("containers"), list) else []
+    return {
+        "enabled": bool(docker.get("enabled")),
+        "running": _stat_int(docker.get("running")),
+        "stopped": _stat_int(docker.get("stopped")),
+        "unhealthy": _stat_int(docker.get("unhealthy")),
+        "total": _stat_int(docker.get("total")),
+        "containers": [
+            {
+                "name": str(item.get("name") or "container") if isinstance(item, dict) else "container",
+                "state": str(item.get("state") or "") if isinstance(item, dict) else "",
+                "status": str(item.get("status") or "") if isinstance(item, dict) else "",
+                "image": str(item.get("image") or "") if isinstance(item, dict) else "",
+            }
+            for item in containers[:30]
+            if isinstance(item, dict)
+        ],
+    }
+
+
+def _stat_snapshot_payload(snapshot: models.DeviceStatSnapshot, *, expected_minutes: int = 5) -> dict[str, Any]:
     memory_detail = ""
     if snapshot.memory_used_bytes and snapshot.memory_total_bytes:
         memory_detail = f"{stat_bytes(snapshot.memory_used_bytes)} / {stat_bytes(snapshot.memory_total_bytes)}"
+    swap_detail = ""
+    if snapshot.swap_total_bytes is not None:
+        swap_detail = f"{stat_bytes(snapshot.swap_used_bytes)} / {stat_bytes(snapshot.swap_total_bytes)}"
     disk_detail = ""
     if snapshot.root_disk_used_bytes and snapshot.root_disk_total_bytes:
         disk_detail = f"{stat_bytes(snapshot.root_disk_used_bytes)} / {stat_bytes(snapshot.root_disk_total_bytes)}"
+    network_bps = _stat_rate_value(snapshot.network_rx_bps, snapshot.network_tx_bps)
+    network_detail = ""
+    if snapshot.network_rx_bps is not None or snapshot.network_tx_bps is not None:
+        network_detail = f"RX {stat_rate(snapshot.network_rx_bps)} · TX {stat_rate(snapshot.network_tx_bps)}"
+    state = _stats_snapshot_state(snapshot, expected_minutes=expected_minutes)
+    missed_reports = _missed_report_count(snapshot, expected_minutes)
+    docker_detail = ""
+    if snapshot.docker_total_count is not None:
+        docker_detail = f"{snapshot.docker_running_count or 0} running · {snapshot.docker_stopped_count or 0} stopped"
     return {
         "id": snapshot.id,
         "created_at": iso_dt(snapshot.created_at),
         "observed_at": iso_dt(snapshot.observed_at),
         "cpu_percent": _stat_float(snapshot.cpu_percent),
+        "cpu_count": snapshot.cpu_count,
         "memory_percent": _stat_float(snapshot.memory_percent),
         "memory_used_bytes": snapshot.memory_used_bytes,
         "memory_total_bytes": snapshot.memory_total_bytes,
+        "swap_percent": _stat_float(snapshot.swap_percent),
+        "swap_used_bytes": snapshot.swap_used_bytes,
+        "swap_total_bytes": snapshot.swap_total_bytes,
         "root_disk_percent": _stat_float(snapshot.root_disk_percent),
         "root_disk_used_bytes": snapshot.root_disk_used_bytes,
         "root_disk_total_bytes": snapshot.root_disk_total_bytes,
         "load_1": _stat_float(snapshot.load_1),
         "load_5": _stat_float(snapshot.load_5),
         "load_15": _stat_float(snapshot.load_15),
+        "load_per_core": _stat_float(snapshot.load_per_core),
+        "network_rx_bps": _stat_float(snapshot.network_rx_bps),
+        "network_tx_bps": _stat_float(snapshot.network_tx_bps),
+        "network_bps": network_bps,
+        "missed_reports": missed_reports,
+        "docker_unhealthy_count": snapshot.docker_unhealthy_count,
+        "docker_running_count": snapshot.docker_running_count,
+        "docker_stopped_count": snapshot.docker_stopped_count,
+        "docker_total_count": snapshot.docker_total_count,
         "uptime_seconds": _stat_float(snapshot.uptime_seconds),
         "agent_version": snapshot.agent_version,
+        "details": {
+            "disks": _stat_disk_details(snapshot),
+            "network": _stat_network_details(snapshot),
+            "docker": _stat_docker_details(snapshot),
+        },
         "labels": {
             "cpu": stat_percent(snapshot.cpu_percent),
             "memory": stat_percent(snapshot.memory_percent),
@@ -3878,6 +4066,16 @@ def _stat_snapshot_payload(snapshot: models.DeviceStatSnapshot) -> dict[str, Any
             "disk": stat_percent(snapshot.root_disk_percent),
             "disk_detail": disk_detail,
             "load": f"{snapshot.load_1:.2f}" if snapshot.load_1 is not None else "n/a",
+            "load_core": f"{snapshot.load_per_core:.2f}" if snapshot.load_per_core is not None else "n/a",
+            "load_core_detail": f"{snapshot.cpu_count} core(s)" if snapshot.cpu_count else "",
+            "swap": stat_percent(snapshot.swap_percent),
+            "swap_detail": swap_detail,
+            "network": stat_rate(network_bps),
+            "network_detail": network_detail,
+            "freshness": state["label"].split(" · ", 1)[0],
+            "freshness_detail": f"{missed_reports} missed report(s)" if missed_reports else "On schedule",
+            "docker": f"{snapshot.docker_unhealthy_count or 0} bad" if snapshot.docker_total_count is not None else "n/a",
+            "docker_detail": docker_detail,
             "uptime": stat_duration(snapshot.uptime_seconds),
         },
     }
@@ -3887,6 +4085,8 @@ def _stats_monitor_payload(db: Session, devices: list[models.Device], window_hou
     window_hours = max(1, min(168, int(window_hours or 8)))
     window_end = now_utc()
     window_start = window_end - timedelta(hours=window_hours)
+    expected_minutes = _stats_expected_interval_minutes(db)
+    overview_metrics = _stats_overview_metric_keys(db)
     latest_stats = _latest_stats_by_device(db, devices)
     reporting_devices = [device for device in devices if device.id in latest_stats]
     histories: dict[int, list[models.DeviceStatSnapshot]] = {device.id: [] for device in reporting_devices}
@@ -3906,7 +4106,7 @@ def _stats_monitor_payload(db: Session, devices: list[models.Device], window_hou
     stale_count = 0
     for device in reporting_devices:
         latest = latest_stats[device.id]
-        state = _stats_snapshot_state(latest)
+        state = _stats_snapshot_state(latest, expected_minutes=expected_minutes)
         if state.get("state") in {"slow", "bad"}:
             stale_count += 1
         device_payloads.append(
@@ -3915,8 +4115,11 @@ def _stats_monitor_payload(db: Session, devices: list[models.Device], window_hou
                 "name": device.name,
                 "href": f"/devices/{device.id}?tab=stats",
                 "state": state,
-                "latest": _stat_snapshot_payload(latest),
-                "series": [_stat_snapshot_payload(snapshot) for snapshot in histories.get(device.id, [])],
+                "latest": _stat_snapshot_payload(latest, expected_minutes=expected_minutes),
+                "series": [
+                    _stat_snapshot_payload(snapshot, expected_minutes=expected_minutes)
+                    for snapshot in histories.get(device.id, [])
+                ],
             }
         )
     return {
@@ -3929,6 +4132,8 @@ def _stats_monitor_payload(db: Session, devices: list[models.Device], window_hou
             "reporting": len(reporting_devices),
             "stale": stale_count,
         },
+        "overview_metrics": overview_metrics,
+        "detail_metrics": STATS_DETAIL_METRICS,
         "devices": device_payloads,
     }
 
@@ -4096,8 +4301,27 @@ async def agent_stats_ingest(request: Request, db: Session = Depends(get_db)) ->
         raise HTTPException(404, "No matching device found. Add the device first or set OPSBOOK_DEVICE_ID for the agent.")
     cpu = payload.get("cpu") if isinstance(payload.get("cpu"), dict) else {}
     memory = payload.get("memory") if isinstance(payload.get("memory"), dict) else {}
+    network = payload.get("network") if isinstance(payload.get("network"), dict) else {}
+    docker = payload.get("docker") if isinstance(payload.get("docker"), dict) else {}
     load_average = cpu.get("load_average") if isinstance(cpu.get("load_average"), list) else []
     root_disk = _agent_root_disk(payload.get("disks"))
+    observed_at = _parse_agent_datetime(payload.get("observed_at"))
+    previous = (
+        db.query(models.DeviceStatSnapshot)
+        .filter(models.DeviceStatSnapshot.device_id == device.id)
+        .order_by(models.DeviceStatSnapshot.observed_at.desc(), models.DeviceStatSnapshot.created_at.desc())
+        .first()
+    )
+    cpu_count = _agent_int(cpu.get("count"))
+    load_1 = _agent_float(load_average[0] if len(load_average) > 0 else None)
+    load_5 = _agent_float(load_average[1] if len(load_average) > 1 else None)
+    load_15 = _agent_float(load_average[2] if len(load_average) > 2 else None)
+    load_per_core = round(load_1 / cpu_count, 2) if load_1 is not None and cpu_count and cpu_count > 0 else None
+    network_rx_bytes = _agent_int(network.get("rx_bytes") if network else None)
+    network_tx_bytes = _agent_int(network.get("tx_bytes") if network else None)
+    elapsed = None
+    if previous:
+        elapsed = max(0.0, (observed_at - _utc(previous.observed_at)).total_seconds())
     snapshot = models.DeviceStatSnapshot(
         device_id=device.id,
         source=_agent_string(payload.get("source") or "agent", 80),
@@ -4106,34 +4330,41 @@ async def agent_stats_ingest(request: Request, db: Session = Depends(get_db)) ->
         primary_ip=_agent_string(payload.get("primary_ip"), 80),
         os_name=_agent_string(payload.get("os_name") or payload.get("platform"), 180),
         cpu_percent=_agent_percent(cpu.get("percent") if cpu else payload.get("cpu_percent")),
+        cpu_count=cpu_count,
         memory_percent=_agent_percent(memory.get("percent") if memory else payload.get("memory_percent")),
         memory_used_bytes=_agent_int(memory.get("used_bytes") if memory else payload.get("memory_used_bytes")),
         memory_total_bytes=_agent_int(memory.get("total_bytes") if memory else payload.get("memory_total_bytes")),
+        swap_percent=_agent_percent(memory.get("swap_percent") if memory else payload.get("swap_percent")),
+        swap_used_bytes=_agent_int(memory.get("swap_used_bytes") if memory else payload.get("swap_used_bytes")),
+        swap_total_bytes=_agent_int(memory.get("swap_total_bytes") if memory else payload.get("swap_total_bytes")),
         root_disk_percent=_agent_percent(root_disk.get("percent")),
         root_disk_used_bytes=_agent_int(root_disk.get("used_bytes")),
         root_disk_total_bytes=_agent_int(root_disk.get("total_bytes")),
         uptime_seconds=_agent_float(payload.get("uptime_seconds")),
-        load_1=_agent_float(load_average[0] if len(load_average) > 0 else None),
-        load_5=_agent_float(load_average[1] if len(load_average) > 1 else None),
-        load_15=_agent_float(load_average[2] if len(load_average) > 2 else None),
-        observed_at=_parse_agent_datetime(payload.get("observed_at")),
+        load_1=load_1,
+        load_5=load_5,
+        load_15=load_15,
+        load_per_core=load_per_core,
+        network_rx_bytes=network_rx_bytes,
+        network_tx_bytes=network_tx_bytes,
+        network_rx_bps=_agent_rate_per_second(
+            network_rx_bytes,
+            previous.network_rx_bytes if previous else None,
+            elapsed,
+        ),
+        network_tx_bps=_agent_rate_per_second(
+            network_tx_bytes,
+            previous.network_tx_bytes if previous else None,
+            elapsed,
+        ),
+        docker_running_count=_agent_int(docker.get("running") if docker else None),
+        docker_stopped_count=_agent_int(docker.get("stopped") if docker else None),
+        docker_unhealthy_count=_agent_int(docker.get("unhealthy") if docker else None),
+        docker_total_count=_agent_int(docker.get("total") if docker else None),
+        observed_at=observed_at,
         payload_json=payload,
     )
     db.add(snapshot)
-    db.add(
-        models.AuditLog(
-            action="agent_stats_received",
-            object_type="device",
-            object_id=device.id,
-            details_json={
-                "hostname": snapshot.hostname,
-                "primary_ip": snapshot.primary_ip,
-                "cpu_percent": snapshot.cpu_percent,
-                "memory_percent": snapshot.memory_percent,
-                "root_disk_percent": snapshot.root_disk_percent,
-            },
-        )
-    )
     db.commit()
     db.refresh(snapshot)
     return JSONResponse({"status": "ok", "device_id": device.id, "snapshot_id": snapshot.id})
@@ -4479,19 +4710,24 @@ def stats_page(
     all_devices = _device_order_query(db).all()
     latest_stats = _latest_stats_by_device(db, all_devices)
     devices = [device for device in all_devices if device.id in latest_stats]
+    expected_minutes = _stats_expected_interval_minutes(db)
     stale = [
         device
         for device in devices
-        if _stats_snapshot_state(latest_stats.get(device.id)).get("state") in {"slow", "bad"}
+        if _stats_snapshot_state(latest_stats.get(device.id), expected_minutes=expected_minutes).get("state") in {"slow", "bad"}
     ]
     window_hours = _stats_window_hours(db)
+    overview_metric_keys = _stats_overview_metric_keys(db)
     return render(
         request,
         "stats.html",
         {
             "devices": devices,
             "latest_stats": latest_stats,
-            "stats_states": {device.id: _stats_snapshot_state(latest_stats.get(device.id)) for device in devices},
+            "stats_states": {
+                device.id: _stats_snapshot_state(latest_stats.get(device.id), expected_minutes=expected_minutes)
+                for device in devices
+            },
             "counts": {
                 "devices": len(devices),
                 "reporting": len(devices),
@@ -4499,6 +4735,7 @@ def stats_page(
             },
             "stats_window_hours": window_hours,
             "stats_window_label": f"{window_hours}h",
+            "stats_overview_metric_keys": overview_metric_keys,
         },
         user=user,
     )
@@ -4664,6 +4901,7 @@ def device_detail(
         .all()
     )
     stats_window_hours = _stats_window_hours(db)
+    stats_expected_minutes = _stats_expected_interval_minutes(db)
     grouped_services: dict[str, list[models.Service]] = {}
     for service in sorted(device.services, key=lambda item: (item.docker_project or "Ungrouped", item.name.lower())):
         grouped_services.setdefault(service.docker_project or "Ungrouped", []).append(service)
@@ -4717,10 +4955,14 @@ def device_detail(
             "images": images,
             "stat_snapshots": stat_snapshots,
             "latest_stats": stat_snapshots[0] if stat_snapshots else None,
-            "stats_state": _stats_snapshot_state(stat_snapshots[0] if stat_snapshots else None),
+            "stats_state": _stats_snapshot_state(
+                stat_snapshots[0] if stat_snapshots else None,
+                expected_minutes=stats_expected_minutes,
+            ),
             "agent_enabled": bool(settings.agent_ingest_token.strip()) and not settings.read_only,
             "stats_window_hours": stats_window_hours,
             "stats_window_label": f"{stats_window_hours}h",
+            "stats_detail_metric_keys": STATS_DETAIL_METRICS,
             "image_tags": tag_map(db, "device_image"),
             "tag_list": tags_for(db, "device", device.id),
             "service_groups": service_groups,
@@ -7782,6 +8024,7 @@ def settings_page(
     totp_scope = _totp_scope(db)
     devices = _device_order_query(db).all()
     security_posture = _security_posture(user, db)
+    stats_overview_metric_keys = _stats_overview_metric_keys(db)
     return render(
         request,
         "settings.html",
@@ -7801,6 +8044,8 @@ def settings_page(
             "totp_scope_label": _totp_scope_label(totp_scope),
             "security_posture": security_posture,
             "security_posture_counts": _posture_counts(security_posture),
+            "stats_metric_catalog": _stats_metric_catalog(stats_overview_metric_keys),
+            "stats_overview_metric_keys": stats_overview_metric_keys,
         },
         user=user,
     )
@@ -7817,6 +8062,13 @@ async def settings_save(
     ensure_writable()
     for key in THEME_DEFAULTS:
         if key == "theme_mode":
+            continue
+        if key == "stats_overview_metrics":
+            selected_metrics = _clean_stats_metric_keys(
+                [str(item) for item in form.getlist("stats_overview_metrics")],
+                limit=4,
+            )
+            set_app_setting(db, key, ",".join(selected_metrics))
             continue
         value = str(form.get(key, THEME_DEFAULTS[key])).strip()
         if key in {"compact_forms", "ping_on_login", "validate_services_on_login"}:
@@ -7850,6 +8102,11 @@ async def settings_save(
         if key == "stats_window_hours":
             try:
                 value = str(max(1, min(168, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
+        if key == "stats_expected_interval_minutes":
+            try:
+                value = str(max(1, min(1440, int(value))))
             except ValueError:
                 value = THEME_DEFAULTS[key]
         set_app_setting(db, key, value)
@@ -8774,7 +9031,7 @@ def history_page(
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    query = db.query(models.AuditLog)
+    query = db.query(models.AuditLog).filter(models.AuditLog.action != "agent_stats_received")
     if kind == "ping":
         query = query.filter(
             models.AuditLog.action.in_(

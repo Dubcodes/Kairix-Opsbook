@@ -468,6 +468,20 @@
   function initStatsLive() {
     const roots = document.querySelectorAll("[data-stats-live]");
     if (!roots.length) return;
+    const metricDefinitions = {
+      cpu: {title: "CPU", chart: "cpu_percent"},
+      memory: {title: "Memory", chart: "memory_percent"},
+      disk: {title: "Root disk", chart: "root_disk_percent"},
+      load: {title: "Load 1 min", chart: "load_1"},
+      swap: {title: "Swap", chart: "swap_percent"},
+      load_core: {title: "Load/core", chart: "load_per_core"},
+      network: {title: "Network", chart: "network_bps"},
+      freshness: {title: "Agent", chart: "missed_reports"},
+      docker: {title: "Docker", chart: "docker_unhealthy_count"}
+    };
+    const defaultMetricKeys = ["cpu", "memory", "disk", "load"];
+    const detailMetricKeys = Object.keys(metricDefinitions);
+    const percentMetrics = new Set(["cpu_percent", "memory_percent", "root_disk_percent", "swap_percent"]);
 
     function formatLocalDateTime(value) {
       if (!value) return "";
@@ -500,6 +514,36 @@
       });
     }
 
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (char) => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        "\"": "&quot;",
+        "'": "&#39;"
+      }[char]));
+    }
+
+    function metricKeysForRoot(root, detailMode, payload) {
+      const payloadKeys = detailMode ? payload?.detail_metrics : payload?.overview_metrics;
+      const raw = root.dataset.statsMetrics || (Array.isArray(payloadKeys) ? payloadKeys.join(",") : "");
+      let keys = raw
+        .split(",")
+        .map((item) => item.trim())
+        .filter((item, index, items) => metricDefinitions[item] && items.indexOf(item) === index);
+      if (!keys.length) keys = detailMode ? detailMetricKeys : defaultMetricKeys;
+      return detailMode ? keys : keys.slice(0, 4);
+    }
+
+    function chartMarkup(key) {
+      const metric = metricDefinitions[key] || metricDefinitions.cpu;
+      return `
+          <div class="stat-chart stat-chart-${key}">
+            <div class="stat-chart-label"><strong data-stat-field="${key}_label">n/a</strong><span>${metric.title}</span><small data-stat-field="${key}_detail"></small></div>
+            <svg class="stat-sparkline" data-stat-chart="${metric.chart}" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+          </div>`;
+    }
+
     function drawSparkline(svg, series, metric, startIso, endIso) {
       const line = svg?.querySelector("polyline");
       if (!line) return;
@@ -515,9 +559,9 @@
       const start = new Date(startIso).getTime();
       const end = new Date(endIso).getTime();
       const span = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : 1;
-      const maxValue = metric === "load_1"
-        ? Math.max(1, ...values.map((point) => point.value)) * 1.15
-        : 100;
+      const maxValue = percentMetrics.has(metric)
+        ? 100
+        : Math.max(1, ...values.map((point) => Math.max(0, point.value))) * 1.15;
       const chartBottom = 58;
       const chartHeight = 56;
       const coords = values.map((point) => {
@@ -530,11 +574,12 @@
       line.setAttribute("points", coords.join(" "));
     }
 
-    function createStatsCard(device, detailMode) {
+    function createStatsCard(device, detailMode, metricKeys) {
       const tag = detailMode ? "article" : "a";
       const card = document.createElement(tag);
       card.className = `stats-device-card${detailMode ? " stats-device-card-detail" : ""}`;
       card.dataset.statsDeviceId = String(device.id);
+      card.dataset.statsMetrics = metricKeys.join(",");
       if (!detailMode) card.href = device.href || `/devices/${device.id}?tab=stats`;
       card.innerHTML = `
         <div class="stats-card-head">
@@ -544,24 +589,7 @@
           </div>
           <span class="status-dot status-unknown" data-stat-status-dot></span>
         </div>
-        <div class="stats-chart-grid">
-          <div class="stat-chart stat-chart-cpu">
-            <div class="stat-chart-label"><strong data-stat-field="cpu_label">n/a</strong><span>CPU</span></div>
-            <svg class="stat-sparkline" data-stat-chart="cpu_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
-          </div>
-          <div class="stat-chart stat-chart-memory">
-            <div class="stat-chart-label"><strong data-stat-field="memory_label">n/a</strong><span>Memory</span><small data-stat-field="memory_detail"></small></div>
-            <svg class="stat-sparkline" data-stat-chart="memory_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
-          </div>
-          <div class="stat-chart stat-chart-disk">
-            <div class="stat-chart-label"><strong data-stat-field="disk_label">n/a</strong><span>Root disk</span><small data-stat-field="disk_detail"></small></div>
-            <svg class="stat-sparkline" data-stat-chart="root_disk_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
-          </div>
-          <div class="stat-chart stat-chart-load">
-            <div class="stat-chart-label"><strong data-stat-field="load_label">n/a</strong><span>Load 1 min</span></div>
-            <svg class="stat-sparkline" data-stat-chart="load_1" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
-          </div>
-        </div>
+        <div class="stats-chart-grid">${metricKeys.map(chartMarkup).join("")}</div>
         <div class="stats-card-foot">
           <span data-stat-field="uptime_label"></span>
           <span data-stat-field="agent_label"></span>
@@ -576,12 +604,10 @@
       if (card.tagName === "A") card.href = device.href || `/devices/${device.id}?tab=stats`;
       setText(card, "name", device.name || "Device");
       setText(card, "last_report", latest.created_at ? `Last ${formatLocalDateTime(latest.created_at)}` : "No stats yet");
-      setText(card, "cpu_label", labels.cpu || "n/a");
-      setText(card, "memory_label", labels.memory || "n/a");
-      setText(card, "memory_detail", labels.memory_detail || "");
-      setText(card, "disk_label", labels.disk || "n/a");
-      setText(card, "disk_detail", labels.disk_detail || "");
-      setText(card, "load_label", labels.load || "n/a");
+      Object.keys(metricDefinitions).forEach((key) => {
+        setText(card, `${key}_label`, labels[key] || "n/a");
+        setText(card, `${key}_detail`, labels[`${key}_detail`] || "");
+      });
       setText(card, "uptime_label", labels.uptime ? `Uptime ${labels.uptime}` : "");
       setText(card, "agent_label", latest.agent_version ? `Agent ${latest.agent_version}` : "");
       const dot = card.querySelector("[data-stat-status-dot]");
@@ -593,6 +619,43 @@
       card.querySelectorAll("[data-stat-chart]").forEach((svg) => {
         drawSparkline(svg, device.series || [], svg.getAttribute("data-stat-chart"), payload.window_start, payload.window_end);
       });
+    }
+
+    function renderDetailRows(items, emptyText) {
+      if (!Array.isArray(items) || !items.length) {
+        return `<p class="empty compact-empty">${escapeHtml(emptyText)}</p>`;
+      }
+      return items.map((item) => `
+        <div class="stats-detail-row">
+          <strong>${escapeHtml(item.label || item.name || "Item")}</strong>
+          <span>${escapeHtml(item.percent ? `${item.percent} · ${item.detail || ""}` : item.detail || item.status || "")}</span>
+        </div>`).join("");
+    }
+
+    function renderDockerDetail(docker) {
+      if (!docker?.enabled) {
+        return `<p class="empty compact-empty">Docker health is off. Set OPSBOOK_DOCKER_HEALTH=on and mount the Docker socket read-only to enable it.</p>`;
+      }
+      const containers = Array.isArray(docker.containers) ? docker.containers.slice(0, 12) : [];
+      const summary = `
+        <div class="stats-detail-row">
+          <strong>${escapeHtml(docker.unhealthy || 0)} unhealthy</strong>
+          <span>${escapeHtml(docker.running || 0)} running · ${escapeHtml(docker.stopped || 0)} stopped · ${escapeHtml(docker.total || 0)} total</span>
+        </div>`;
+      return summary + renderDetailRows(containers, "No container details reported.");
+    }
+
+    function renderStatsDetails(root, device) {
+      const detailsPanel = root.querySelector("[data-stats-extra-details]");
+      if (!detailsPanel) return;
+      const details = device?.latest?.details || {};
+      detailsPanel.hidden = !device?.latest;
+      const disks = detailsPanel.querySelector('[data-stats-detail="disks"]');
+      const network = detailsPanel.querySelector('[data-stats-detail="network"]');
+      const docker = detailsPanel.querySelector('[data-stats-detail="docker"]');
+      if (disks) disks.innerHTML = renderDetailRows(details.disks, "No disk details reported.");
+      if (network) network.innerHTML = renderDetailRows(details.network, "No network interface details reported.");
+      if (docker) docker.innerHTML = renderDockerDetail(details.docker);
     }
 
     async function refreshStats(root) {
@@ -616,13 +679,20 @@
       const empty = root.querySelector("[data-stats-empty]");
       if (!grid) return;
       const detailMode = Boolean(deviceId);
+      const metricKeys = metricKeysForRoot(root, detailMode, payload);
+      const metricSignature = metricKeys.join(",");
       const activeIds = new Set();
       devices.forEach((device) => {
         activeIds.add(String(device.id));
         let card = grid.querySelector(`[data-stats-device-id="${device.id}"]`);
-        if (!card) {
-          card = createStatsCard(device, detailMode);
-          grid.appendChild(card);
+        if (!card || card.dataset.statsMetrics !== metricSignature) {
+          const replacement = createStatsCard(device, detailMode, metricKeys);
+          if (card) {
+            card.replaceWith(replacement);
+          } else {
+            grid.appendChild(replacement);
+          }
+          card = replacement;
         }
         updateStatsCard(card, device, payload);
       });
@@ -632,6 +702,7 @@
         });
       }
       if (empty) empty.hidden = devices.length > 0;
+      if (detailMode) renderStatsDetails(root, devices[0]);
       const setup = document.getElementById("agent-setup");
       if (setup && detailMode && devices.length > 0) setup.hidden = true;
     }

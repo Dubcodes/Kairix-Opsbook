@@ -83,6 +83,70 @@ class AgentStatsTest(unittest.TestCase):
             self.assertEqual([item["name"] for item in payload["devices"]], ["Moxxie"])
             self.assertEqual(payload["devices"][0]["latest"]["labels"]["cpu"], "12%")
             self.assertEqual(payload["devices"][0]["latest"]["labels"]["load"], "0.42")
+            self.assertEqual(payload["overview_metrics"], ["cpu", "memory", "disk", "load"])
+            self.assertIn("network", payload["detail_metrics"])
+        finally:
+            session.close()
+
+    def test_stats_payload_includes_extended_metric_labels_and_details(self) -> None:
+        session = self.Session()
+        try:
+            device = models.Device(name="Moxxie", slug="moxxie", primary_ip="192.168.0.238")
+            session.add(device)
+            session.flush()
+            session.add(
+                models.DeviceStatSnapshot(
+                    device_id=device.id,
+                    cpu_percent=12,
+                    cpu_count=4,
+                    memory_percent=34,
+                    memory_used_bytes=4 * 1024**3,
+                    memory_total_bytes=8 * 1024**3,
+                    swap_percent=25,
+                    swap_used_bytes=512 * 1024**2,
+                    swap_total_bytes=2 * 1024**3,
+                    root_disk_percent=56,
+                    root_disk_used_bytes=56 * 1024**3,
+                    root_disk_total_bytes=100 * 1024**3,
+                    load_1=1.0,
+                    load_per_core=0.25,
+                    network_rx_bps=2048,
+                    network_tx_bps=1024,
+                    docker_running_count=2,
+                    docker_stopped_count=1,
+                    docker_unhealthy_count=1,
+                    docker_total_count=3,
+                    created_at=now_utc() - timedelta(minutes=20),
+                    observed_at=now_utc() - timedelta(minutes=20),
+                    payload_json={
+                        "disks": [
+                            {"mountpoint": "/", "used_bytes": 56 * 1024**3, "total_bytes": 100 * 1024**3, "percent": 56},
+                            {"mountpoint": "/data", "used_bytes": 1 * 1024**3, "total_bytes": 2 * 1024**3, "percent": 50},
+                        ],
+                        "network": {"interfaces": [{"name": "eno1", "rx_bytes": 1000, "tx_bytes": 2000}]},
+                        "docker": {
+                            "enabled": True,
+                            "running": 2,
+                            "stopped": 1,
+                            "unhealthy": 1,
+                            "total": 3,
+                            "containers": [{"name": "web", "status": "Up", "image": "example/web:latest"}],
+                        },
+                    },
+                )
+            )
+            session.commit()
+
+            latest = _stats_monitor_payload(session, [device], 8)["devices"][0]["latest"]
+
+            self.assertEqual(latest["labels"]["swap"], "25%")
+            self.assertEqual(latest["labels"]["load_core"], "0.25")
+            self.assertEqual(latest["labels"]["network"], "3.0 KB/s")
+            self.assertEqual(latest["labels"]["freshness_detail"], "3 missed report(s)")
+            self.assertEqual(latest["labels"]["docker"], "1 bad")
+            self.assertEqual(latest["details"]["disks"][1]["label"], "/data")
+            self.assertEqual(latest["details"]["network"][0]["label"], "eno1")
+            self.assertTrue(latest["details"]["docker"]["enabled"])
         finally:
             session.close()
 

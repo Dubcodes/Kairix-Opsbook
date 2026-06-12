@@ -1,6 +1,6 @@
 services:
   opsbook-stats-agent:
-    image: ghcr.io/dubcodes/kairix-opsbook:0.1.19
+    image: ghcr.io/dubcodes/kairix-opsbook:0.1.20
     container_name: opsbook-stats-agent
     restart: unless-stopped
     network_mode: host
@@ -14,5 +14,10 @@ services:
       OPSBOOK_PRIMARY_IP: "192.168.0.238"
       OPSBOOK_HOST_ROOT: "/host"
       OPSBOOK_INTERVAL_SECONDS: "60"
+      OPSBOOK_DOCKER_HEALTH: "off"
+      OPSBOOK_DISK_MOUNTS: ""
+      OPSBOOK_NETWORK_INTERFACES: ""
     volumes:
       - /:/host:ro
+      # Optional Docker health. Set OPSBOOK_DOCKER_HEALTH to "on" and uncomment:
+      # - /var/run/docker.sock:/var/run/docker.sock:ro

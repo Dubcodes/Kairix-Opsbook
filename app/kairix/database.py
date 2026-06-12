@@ -49,6 +49,27 @@ def _ensure_schema() -> None:
             statements.append("ALTER TABLE credentials ADD COLUMN expires_at TIMESTAMP WITH TIME ZONE")
         else:
             statements.append("ALTER TABLE credentials ADD COLUMN expires_at DATETIME")
+    if "device_stat_snapshots" in columns:
+        stat_columns = columns["device_stat_snapshots"]
+        column_specs = {
+            "cpu_count": ("INTEGER", "INTEGER"),
+            "swap_percent": ("DOUBLE PRECISION", "FLOAT"),
+            "swap_used_bytes": ("BIGINT", "BIGINT"),
+            "swap_total_bytes": ("BIGINT", "BIGINT"),
+            "load_per_core": ("DOUBLE PRECISION", "FLOAT"),
+            "network_rx_bytes": ("BIGINT", "BIGINT"),
+            "network_tx_bytes": ("BIGINT", "BIGINT"),
+            "network_rx_bps": ("DOUBLE PRECISION", "FLOAT"),
+            "network_tx_bps": ("DOUBLE PRECISION", "FLOAT"),
+            "docker_running_count": ("INTEGER", "INTEGER"),
+            "docker_stopped_count": ("INTEGER", "INTEGER"),
+            "docker_unhealthy_count": ("INTEGER", "INTEGER"),
+            "docker_total_count": ("INTEGER", "INTEGER"),
+        }
+        for column_name, (postgres_type, default_type) in column_specs.items():
+            if column_name not in stat_columns:
+                column_type = postgres_type if dialect == "postgresql" else default_type
+                statements.append(f"ALTER TABLE device_stat_snapshots ADD COLUMN {column_name} {column_type}")
     if not statements:
         return
     with engine.begin() as connection:

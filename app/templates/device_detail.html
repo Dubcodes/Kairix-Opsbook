@@ -251,7 +251,7 @@
     {% endif %}
   </section>
 {% elif tab == "stats" %}
-  <section class="panel stats-live-panel" data-stats-live data-stats-device-id="{{ device.id }}" data-stats-window-hours="{{ stats_window_hours }}">
+  <section class="panel stats-live-panel" data-stats-live data-stats-device-id="{{ device.id }}" data-stats-window-hours="{{ stats_window_hours }}" data-stats-metrics="{{ stats_detail_metric_keys|join(',') }}">
     <div class="section-title">
       <div>
         <h2>Agent Stats</h2>
@@ -268,10 +268,24 @@
     {% endif %}
     <div class="stats-device-grid detail-stats-grid" data-stats-device-grid>
       {% if latest_stats %}
-        {{ stats_device_card(device, latest_stats, stats_state, detail=True) }}
+        {{ stats_device_card(device, latest_stats, stats_state, detail=True, metrics=stats_detail_metric_keys) }}
       {% endif %}
     </div>
     <p class="empty" data-stats-empty {% if latest_stats %}hidden{% endif %}>No stats received for this device yet.</p>
+    <div class="stats-extra-grid" data-stats-extra-details {% if not latest_stats %}hidden{% endif %}>
+      <section class="stats-extra-panel">
+        <h3>Disks & mounts</h3>
+        <div class="stats-detail-list" data-stats-detail="disks"></div>
+      </section>
+      <section class="stats-extra-panel">
+        <h3>Network</h3>
+        <div class="stats-detail-list" data-stats-detail="network"></div>
+      </section>
+      <section class="stats-extra-panel">
+        <h3>Docker health</h3>
+        <div class="stats-detail-list" data-stats-detail="docker"></div>
+      </section>
+    </div>
   </section>
   <details class="panel collapsible-panel">
     <summary><span><strong>Snapshot History</strong><small>Recent raw samples for this device</small></span></summary>
