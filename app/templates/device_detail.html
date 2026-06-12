@@ -1,5 +1,6 @@
 {% extends "base.html" %}
 {% from "partials/status_macros.html" import device_ping_dot %}
+{% from "partials/stats_macros.html" import stats_device_card %}
 {% block title %}{{ device.name }} · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
@@ -250,41 +251,31 @@
     {% endif %}
   </section>
 {% elif tab == "stats" %}
-  <section class="panel">
+  <section class="panel stats-live-panel" data-stats-live data-stats-device-id="{{ device.id }}" data-stats-window-hours="{{ stats_window_hours }}">
     <div class="section-title">
       <div>
         <h2>Agent Stats</h2>
-        <p class="muted">Read-only system snapshots reported by the Opsbook stats agent.</p>
+        <p class="muted">Read-only system snapshots from the Opsbook stats agent.</p>
       </div>
-      <span class="badge">{{ stats_state.label }}</span>
+      <span class="badge" data-stats-state-label>{{ stats_state.label }}</span>
     </div>
     {% if latest_stats %}
       <dl class="details">
         <dt>Last report</dt><dd><time data-utc="{{ latest_stats.created_at|iso }}">{{ latest_stats.created_at|dt }}</time></dd>
-        {% if latest_stats.hostname %}<dt>Host</dt><dd>{{ latest_stats.hostname }}</dd>{% endif %}
-        {% if latest_stats.primary_ip %}<dt>Agent IP</dt><dd>{{ latest_stats.primary_ip }}</dd>{% endif %}
-        {% if latest_stats.os_name %}<dt>Platform</dt><dd>{{ latest_stats.os_name }}</dd>{% endif %}
         {% if latest_stats.agent_version %}<dt>Agent</dt><dd>{{ latest_stats.agent_version }}</dd>{% endif %}
         <dt>Uptime</dt><dd>{{ latest_stats.uptime_seconds|stat_duration }}</dd>
       </dl>
-    {% else %}
-      <p class="empty">No stats received for this device yet.</p>
     {% endif %}
-  </section>
-  {% if latest_stats %}
-    <section class="stats-grid device-stats-grid">
-      <div class="stat"><strong>{{ latest_stats.cpu_percent|stat_percent }}</strong><span>CPU</span></div>
-      <div class="stat"><strong>{{ latest_stats.memory_percent|stat_percent }}</strong><span>Memory{% if latest_stats.memory_used_bytes and latest_stats.memory_total_bytes %} · {{ latest_stats.memory_used_bytes|stat_bytes }} / {{ latest_stats.memory_total_bytes|stat_bytes }}{% endif %}</span></div>
-      <div class="stat"><strong>{{ latest_stats.root_disk_percent|stat_percent }}</strong><span>Root disk{% if latest_stats.root_disk_used_bytes and latest_stats.root_disk_total_bytes %} · {{ latest_stats.root_disk_used_bytes|stat_bytes }} / {{ latest_stats.root_disk_total_bytes|stat_bytes }}{% endif %}</span></div>
-      <div class="stat"><strong>{% if latest_stats.load_1 is not none %}{{ "%.2f"|format(latest_stats.load_1) }}{% else %}n/a{% endif %}</strong><span>Load 1 min</span></div>
-    </section>
-  {% endif %}
-  <section class="panel">
-    <div class="section-title">
-      <h3>Recent Snapshots</h3>
-      <a class="button secondary small-button" href="/stats">All Stats</a>
+    <div class="stats-device-grid detail-stats-grid" data-stats-device-grid>
+      {% if latest_stats %}
+        {{ stats_device_card(device, latest_stats, stats_state, detail=True) }}
+      {% endif %}
     </div>
-    <div class="list compact">
+    <p class="empty" data-stats-empty {% if latest_stats %}hidden{% endif %}>No stats received for this device yet.</p>
+  </section>
+  <details class="panel collapsible-panel">
+    <summary><span><strong>Snapshot History</strong><small>Recent raw samples for this device</small></span></summary>
+    <div class="list compact stats-history-list">
       {% for snapshot in stat_snapshots %}
         <div class="list-row static">
           <strong>{{ snapshot.created_at|dt }}</strong>
@@ -294,8 +285,9 @@
         <p class="empty">No snapshot history yet.</p>
       {% endfor %}
     </div>
-  </section>
-  <section class="panel">
+  </details>
+  {% if not latest_stats %}
+  <section class="panel" id="agent-setup">
     <h3>Agent Setup</h3>
     {% if agent_enabled %}
       <p class="muted">Set the agent environment variables and run it on this device. Use this device ID when automatic hostname/IP matching is not enough.</p>
@@ -308,6 +300,7 @@ python3 agents/opsbook_stats_agent.py</pre>
       <p class="empty">Stats intake is not active. Set <code>OPSBOOK_AGENT_TOKEN</code> on the Opsbook server, redeploy, then run the agent with the same token.</p>
     {% endif %}
   </section>
+  {% endif %}
 {% elif tab == "network" %}
   <section class="panel">
     <div class="section-title">

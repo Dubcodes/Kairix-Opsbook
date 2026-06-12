@@ -465,6 +465,183 @@
     });
   }
 
+  function initStatsLive() {
+    const roots = document.querySelectorAll("[data-stats-live]");
+    if (!roots.length) return;
+
+    function formatLocalDateTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return new Intl.DateTimeFormat(undefined, {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit"
+      }).format(date);
+    }
+
+    function formatLocalTime(value) {
+      if (!value) return "";
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "";
+      return new Intl.DateTimeFormat(undefined, {hour: "2-digit", minute: "2-digit"}).format(date);
+    }
+
+    function setText(scope, field, value) {
+      const node = scope.querySelector(`[data-stat-field="${field}"]`);
+      if (node) node.textContent = value || "";
+    }
+
+    function setCounter(name, value) {
+      document.querySelectorAll(`[data-stats-count="${name}"]`).forEach((node) => {
+        node.textContent = value ?? "";
+      });
+    }
+
+    function drawSparkline(svg, series, metric, startIso, endIso) {
+      const line = svg?.querySelector("polyline");
+      if (!line) return;
+      const values = (Array.isArray(series) ? series : [])
+        .map((point) => ({time: new Date(point.created_at).getTime(), value: Number(point[metric])}))
+        .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value));
+      if (!values.length) {
+        line.setAttribute("points", "");
+        svg.classList.add("is-empty");
+        return;
+      }
+      svg.classList.remove("is-empty");
+      const start = new Date(startIso).getTime();
+      const end = new Date(endIso).getTime();
+      const span = Number.isFinite(start) && Number.isFinite(end) && end > start ? end - start : 1;
+      const maxValue = metric === "load_1"
+        ? Math.max(1, ...values.map((point) => point.value)) * 1.15
+        : 100;
+      const coords = values.map((point, index) => {
+        const rawX = values.length === 1 ? 100 : ((point.time - start) / span) * 100;
+        const x = Math.max(0, Math.min(100, rawX));
+        const y = 32 - Math.max(0, Math.min(1, point.value / maxValue)) * 30;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      });
+      if (coords.length === 1) coords.unshift("0,32");
+      line.setAttribute("points", coords.join(" "));
+    }
+
+    function createStatsCard(device, detailMode) {
+      const tag = detailMode ? "article" : "a";
+      const card = document.createElement(tag);
+      card.className = `stats-device-card${detailMode ? " stats-device-card-detail" : ""}`;
+      card.dataset.statsDeviceId = String(device.id);
+      if (!detailMode) card.href = device.href || `/devices/${device.id}?tab=stats`;
+      card.innerHTML = `
+        <div class="stats-card-head">
+          <div>
+            <strong data-stat-field="name"></strong>
+            <small data-stat-field="last_report"></small>
+          </div>
+          <span class="status-dot status-unknown" data-stat-status-dot></span>
+        </div>
+        <div class="stats-chart-grid">
+          <div class="stat-chart stat-chart-cpu">
+            <div><strong data-stat-field="cpu_label">n/a</strong><span>CPU</span></div>
+            <svg class="stat-sparkline" data-stat-chart="cpu_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+          </div>
+          <div class="stat-chart stat-chart-memory">
+            <div><strong data-stat-field="memory_label">n/a</strong><span>Memory</span><small data-stat-field="memory_detail"></small></div>
+            <svg class="stat-sparkline" data-stat-chart="memory_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+          </div>
+          <div class="stat-chart stat-chart-disk">
+            <div><strong data-stat-field="disk_label">n/a</strong><span>Root disk</span><small data-stat-field="disk_detail"></small></div>
+            <svg class="stat-sparkline" data-stat-chart="root_disk_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+          </div>
+          <div class="stat-chart stat-chart-load">
+            <div><strong data-stat-field="load_label">n/a</strong><span>Load 1 min</span></div>
+            <svg class="stat-sparkline" data-stat-chart="load_1" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+          </div>
+        </div>
+        <div class="stats-card-foot">
+          <span data-stat-field="uptime_label"></span>
+          <span data-stat-field="agent_label"></span>
+        </div>`;
+      return card;
+    }
+
+    function updateStatsCard(card, device, payload) {
+      const latest = device.latest || {};
+      const labels = latest.labels || {};
+      const state = device.state || {};
+      if (card.tagName === "A") card.href = device.href || `/devices/${device.id}?tab=stats`;
+      setText(card, "name", device.name || "Device");
+      setText(card, "last_report", latest.created_at ? `Last ${formatLocalDateTime(latest.created_at)}` : "No stats yet");
+      setText(card, "cpu_label", labels.cpu || "n/a");
+      setText(card, "memory_label", labels.memory || "n/a");
+      setText(card, "memory_detail", labels.memory_detail || "");
+      setText(card, "disk_label", labels.disk || "n/a");
+      setText(card, "disk_detail", labels.disk_detail || "");
+      setText(card, "load_label", labels.load || "n/a");
+      setText(card, "uptime_label", labels.uptime ? `Uptime ${labels.uptime}` : "");
+      setText(card, "agent_label", latest.agent_version ? `Agent ${latest.agent_version}` : "");
+      const dot = card.querySelector("[data-stat-status-dot]");
+      if (dot) {
+        const status = state.state || "unknown";
+        dot.className = `status-dot status-${status}`;
+        dot.setAttribute("title", state.label || "No agent data yet");
+      }
+      card.querySelectorAll("[data-stat-chart]").forEach((svg) => {
+        drawSparkline(svg, device.series || [], svg.getAttribute("data-stat-chart"), payload.window_start, payload.window_end);
+      });
+    }
+
+    async function refreshStats(root) {
+      const hours = Math.max(1, Math.min(168, Number(root.dataset.statsWindowHours || "8")));
+      const params = new URLSearchParams({hours: String(hours)});
+      const deviceId = root.dataset.statsDeviceId;
+      if (deviceId) params.set("device_id", deviceId);
+      const response = await fetch(`/api/stats?${params}`, {credentials: "same-origin"});
+      if (!response.ok) return;
+      const payload = await response.json();
+      const devices = Array.isArray(payload.devices) ? payload.devices : [];
+      setCounter("reporting", payload.counts?.reporting ?? devices.length);
+      setCounter("stale", payload.counts?.stale ?? 0);
+      setCounter("window", payload.window_label || `${hours}h`);
+      const refreshed = root.querySelector("[data-stats-refreshed]") || document.querySelector("[data-stats-refreshed]");
+      if (refreshed) refreshed.textContent = payload.generated_at ? `Updated ${formatLocalTime(payload.generated_at)}` : "Live";
+      const stateLabel = root.querySelector("[data-stats-state-label]");
+      if (stateLabel && devices[0]?.state?.label) stateLabel.textContent = devices[0].state.label;
+
+      const grid = root.querySelector("[data-stats-device-grid]");
+      const empty = root.querySelector("[data-stats-empty]");
+      if (!grid) return;
+      const detailMode = Boolean(deviceId);
+      const activeIds = new Set();
+      devices.forEach((device) => {
+        activeIds.add(String(device.id));
+        let card = grid.querySelector(`[data-stats-device-id="${device.id}"]`);
+        if (!card) {
+          card = createStatsCard(device, detailMode);
+          grid.appendChild(card);
+        }
+        updateStatsCard(card, device, payload);
+      });
+      if (!detailMode) {
+        grid.querySelectorAll("[data-stats-device-id]").forEach((card) => {
+          if (!activeIds.has(card.dataset.statsDeviceId)) card.remove();
+        });
+      }
+      if (empty) empty.hidden = devices.length > 0;
+      const setup = document.getElementById("agent-setup");
+      if (setup && detailMode && devices.length > 0) setup.hidden = true;
+    }
+
+    roots.forEach((root) => {
+      if (root.dataset.statsLiveReady === "true") return;
+      root.dataset.statsLiveReady = "true";
+      refreshStats(root).catch(() => {});
+      window.setInterval(() => refreshStats(root).catch(() => {}), 30_000);
+    });
+  }
+
   document.addEventListener("click", (event) => {
     const recoveryGenerator = event.target.closest("[data-generate-recovery]");
     if (recoveryGenerator) {
@@ -694,6 +871,7 @@
   initLiveSearch();
   initAutoSubmitFilters();
   initInlineImageViewers();
+  initStatsLive();
 
   const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
   if (timeoutMeta) {

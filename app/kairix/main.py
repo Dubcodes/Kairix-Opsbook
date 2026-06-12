@@ -184,6 +184,7 @@ THEME_DEFAULTS = {
     "ping_green_ms": "3",
     "ping_orange_ms": "10",
     "history_retention_days": "90",
+    "stats_window_hours": "8",
 }
 
 PING_THREAD_STARTED = False
@@ -3810,7 +3811,7 @@ def _match_agent_device(db: Session, payload: dict[str, Any]) -> models.Device |
 def _stats_snapshot_state(snapshot: models.DeviceStatSnapshot | None) -> dict[str, str]:
     if not snapshot:
         return {"state": "unknown", "label": "No agent data yet"}
-    age = now_utc() - snapshot.created_at
+    age = now_utc() - _utc(snapshot.created_at)
     minutes = max(0, int(age.total_seconds() // 60))
     if minutes < 15:
         return {"state": "good", "label": f"Fresh · {minutes} min old"}
@@ -3832,6 +3833,104 @@ def _latest_stats_by_device(db: Session, devices: list[models.Device]) -> dict[i
         if snapshot:
             latest[device.id] = snapshot
     return latest
+
+
+def _stats_window_hours(db: Session) -> int:
+    return int_setting(db, "stats_window_hours", 8, minimum=1, maximum=168)
+
+
+def _stat_float(value: float | int | None) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stat_snapshot_payload(snapshot: models.DeviceStatSnapshot) -> dict[str, Any]:
+    memory_detail = ""
+    if snapshot.memory_used_bytes and snapshot.memory_total_bytes:
+        memory_detail = f"{stat_bytes(snapshot.memory_used_bytes)} / {stat_bytes(snapshot.memory_total_bytes)}"
+    disk_detail = ""
+    if snapshot.root_disk_used_bytes and snapshot.root_disk_total_bytes:
+        disk_detail = f"{stat_bytes(snapshot.root_disk_used_bytes)} / {stat_bytes(snapshot.root_disk_total_bytes)}"
+    return {
+        "id": snapshot.id,
+        "created_at": iso_dt(snapshot.created_at),
+        "observed_at": iso_dt(snapshot.observed_at),
+        "cpu_percent": _stat_float(snapshot.cpu_percent),
+        "memory_percent": _stat_float(snapshot.memory_percent),
+        "memory_used_bytes": snapshot.memory_used_bytes,
+        "memory_total_bytes": snapshot.memory_total_bytes,
+        "root_disk_percent": _stat_float(snapshot.root_disk_percent),
+        "root_disk_used_bytes": snapshot.root_disk_used_bytes,
+        "root_disk_total_bytes": snapshot.root_disk_total_bytes,
+        "load_1": _stat_float(snapshot.load_1),
+        "load_5": _stat_float(snapshot.load_5),
+        "load_15": _stat_float(snapshot.load_15),
+        "uptime_seconds": _stat_float(snapshot.uptime_seconds),
+        "agent_version": snapshot.agent_version,
+        "labels": {
+            "cpu": stat_percent(snapshot.cpu_percent),
+            "memory": stat_percent(snapshot.memory_percent),
+            "memory_detail": memory_detail,
+            "disk": stat_percent(snapshot.root_disk_percent),
+            "disk_detail": disk_detail,
+            "load": f"{snapshot.load_1:.2f}" if snapshot.load_1 is not None else "n/a",
+            "uptime": stat_duration(snapshot.uptime_seconds),
+        },
+    }
+
+
+def _stats_monitor_payload(db: Session, devices: list[models.Device], window_hours: int) -> dict[str, Any]:
+    window_hours = max(1, min(168, int(window_hours or 8)))
+    window_end = now_utc()
+    window_start = window_end - timedelta(hours=window_hours)
+    latest_stats = _latest_stats_by_device(db, devices)
+    reporting_devices = [device for device in devices if device.id in latest_stats]
+    histories: dict[int, list[models.DeviceStatSnapshot]] = {device.id: [] for device in reporting_devices}
+    if reporting_devices:
+        rows = (
+            db.query(models.DeviceStatSnapshot)
+            .filter(
+                models.DeviceStatSnapshot.device_id.in_([device.id for device in reporting_devices]),
+                models.DeviceStatSnapshot.created_at >= window_start,
+            )
+            .order_by(models.DeviceStatSnapshot.created_at.asc())
+            .all()
+        )
+        for row in rows:
+            histories.setdefault(row.device_id, []).append(row)
+    device_payloads: list[dict[str, Any]] = []
+    stale_count = 0
+    for device in reporting_devices:
+        latest = latest_stats[device.id]
+        state = _stats_snapshot_state(latest)
+        if state.get("state") in {"slow", "bad"}:
+            stale_count += 1
+        device_payloads.append(
+            {
+                "id": device.id,
+                "name": device.name,
+                "href": f"/devices/{device.id}?tab=stats",
+                "state": state,
+                "latest": _stat_snapshot_payload(latest),
+                "series": [_stat_snapshot_payload(snapshot) for snapshot in histories.get(device.id, [])],
+            }
+        )
+    return {
+        "window_hours": window_hours,
+        "window_label": f"{window_hours}h",
+        "window_start": iso_dt(window_start),
+        "window_end": iso_dt(window_end),
+        "generated_at": iso_dt(window_end),
+        "counts": {
+            "reporting": len(reporting_devices),
+            "stale": stale_count,
+        },
+        "devices": device_payloads,
+    }
 
 
 def require_user(request: Request, db: Session = Depends(get_db)) -> models.User:
@@ -4038,6 +4137,24 @@ async def agent_stats_ingest(request: Request, db: Session = Depends(get_db)) ->
     db.commit()
     db.refresh(snapshot)
     return JSONResponse({"status": "ok", "device_id": device.id, "snapshot_id": snapshot.id})
+
+
+@app.get("/api/stats")
+def stats_live_api(
+    device_id: int | None = None,
+    hours: int | None = None,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    window_hours = max(1, min(168, int(hours or _stats_window_hours(db))))
+    if device_id:
+        device = db.get(models.Device, device_id)
+        if not device:
+            raise HTTPException(404, "Device not found.")
+        devices = [device]
+    else:
+        devices = _device_order_query(db).all()
+    return JSONResponse(_stats_monitor_payload(db, devices, window_hours))
 
 
 @app.get("/setup", response_class=HTMLResponse)
@@ -4359,14 +4476,15 @@ def stats_page(
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    devices = _device_order_query(db).all()
-    latest_stats = _latest_stats_by_device(db, devices)
-    reporting = [device for device in devices if device.id in latest_stats]
+    all_devices = _device_order_query(db).all()
+    latest_stats = _latest_stats_by_device(db, all_devices)
+    devices = [device for device in all_devices if device.id in latest_stats]
     stale = [
         device
-        for device in reporting
+        for device in devices
         if _stats_snapshot_state(latest_stats.get(device.id)).get("state") in {"slow", "bad"}
     ]
+    window_hours = _stats_window_hours(db)
     return render(
         request,
         "stats.html",
@@ -4376,10 +4494,11 @@ def stats_page(
             "stats_states": {device.id: _stats_snapshot_state(latest_stats.get(device.id)) for device in devices},
             "counts": {
                 "devices": len(devices),
-                "reporting": len(reporting),
+                "reporting": len(devices),
                 "stale": len(stale),
             },
-            "agent_enabled": bool(settings.agent_ingest_token.strip()) and not settings.read_only,
+            "stats_window_hours": window_hours,
+            "stats_window_label": f"{window_hours}h",
         },
         user=user,
     )
@@ -4544,6 +4663,7 @@ def device_detail(
         .limit(24)
         .all()
     )
+    stats_window_hours = _stats_window_hours(db)
     grouped_services: dict[str, list[models.Service]] = {}
     for service in sorted(device.services, key=lambda item: (item.docker_project or "Ungrouped", item.name.lower())):
         grouped_services.setdefault(service.docker_project or "Ungrouped", []).append(service)
@@ -4599,6 +4719,8 @@ def device_detail(
             "latest_stats": stat_snapshots[0] if stat_snapshots else None,
             "stats_state": _stats_snapshot_state(stat_snapshots[0] if stat_snapshots else None),
             "agent_enabled": bool(settings.agent_ingest_token.strip()) and not settings.read_only,
+            "stats_window_hours": stats_window_hours,
+            "stats_window_label": f"{stats_window_hours}h",
             "image_tags": tag_map(db, "device_image"),
             "tag_list": tags_for(db, "device", device.id),
             "service_groups": service_groups,
@@ -7723,6 +7845,11 @@ async def settings_save(
         if key == "history_retention_days":
             try:
                 value = str(max(1, min(99999, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
+        if key == "stats_window_hours":
+            try:
+                value = str(max(1, min(168, int(value))))
             except ValueError:
                 value = THEME_DEFAULTS[key]
         set_app_setting(db, key, value)

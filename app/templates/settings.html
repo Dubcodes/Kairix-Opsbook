@@ -161,6 +161,10 @@
     <input name="history_retention_days" type="number" min="1" max="99999" value="{{ app_settings.history_retention_days or '90' }}">
     <small>History older than this is deleted on startup and when settings are saved.</small>
   </label>
+  <label>Stats graph hours
+    <input name="stats_window_hours" type="number" min="1" max="168" value="{{ app_settings.stats_window_hours or '8' }}">
+    <small>How many hours to show in the compact Stats graphs.</small>
+  </label>
 
   <h3 class="span-2">Light Mode</h3>
   <label>Background <input type="color" name="light_bg" value="{{ app_settings.light_bg }}"></label>

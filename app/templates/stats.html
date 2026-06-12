@@ -1,49 +1,34 @@
 {% extends "base.html" %}
+{% from "partials/stats_macros.html" import stats_device_card %}
 {% block title %}Stats · Kairix Opsbook{% endblock %}
 {% block content %}
 <section class="page-head">
   <div>
-    <p class="eyebrow">Read-only agent telemetry</p>
+    <p class="eyebrow">Monitoring overview</p>
     <h1>Stats</h1>
-    <p>Latest system snapshots from devices running the Opsbook stats agent.</p>
+    <p>Live system snapshots from devices running the Opsbook stats agent.</p>
   </div>
 </section>
 
-<section class="stats-grid">
-  <div class="stat"><strong>{{ counts.devices }}</strong><span>Devices</span></div>
-  <div class="stat"><strong>{{ counts.reporting }}</strong><span>Reporting</span></div>
-  <div class="stat"><strong>{{ counts.stale }}</strong><span>Stale or old</span></div>
-  <div class="stat"><strong>{{ "On" if agent_enabled else "Off" }}</strong><span>Agent intake</span></div>
+<section class="stats-grid stats-summary-grid">
+  <div class="stat"><strong data-stats-count="reporting">{{ counts.reporting }}</strong><span>Reporting devices</span></div>
+  <div class="stat"><strong data-stats-count="stale">{{ counts.stale }}</strong><span>Stale or old</span></div>
+  <div class="stat"><strong data-stats-count="window">{{ stats_window_label }}</strong><span>Graph window</span></div>
 </section>
 
-{% if not agent_enabled %}
-  <section class="panel">
-    <h2>Agent Intake Disabled</h2>
-    <p class="muted">Set <code>OPSBOOK_AGENT_TOKEN</code> on the Opsbook server and redeploy before agents can submit snapshots.</p>
-  </section>
-{% endif %}
-
-<section class="panel">
+<section class="panel stats-live-panel" data-stats-live data-stats-window-hours="{{ stats_window_hours }}">
   <div class="section-title">
-    <h2>Devices</h2>
+    <div>
+      <h2>Monitored Devices</h2>
+      <p class="muted">Updates in place as agents report. Click a device for its focused Stats tab.</p>
+    </div>
+    <span class="badge" data-stats-refreshed>Live</span>
   </div>
-  <div class="list">
+  <div class="stats-device-grid" data-stats-device-grid>
     {% for device in devices %}
-      {% set snapshot = latest_stats.get(device.id) %}
-      {% set state = stats_states.get(device.id, {"state": "unknown", "label": "No agent data yet"}) %}
-      <a class="list-row" href="/devices/{{ device.id }}?tab=stats">
-        <strong>{{ device.name }}<span class="status-dot status-{{ state.state }}" title="{{ state.label }}"></span></strong>
-        <span>
-          {% if snapshot %}
-            CPU {{ snapshot.cpu_percent|stat_percent }} · RAM {{ snapshot.memory_percent|stat_percent }} · Disk {{ snapshot.root_disk_percent|stat_percent }} · last {{ snapshot.created_at|dt }}
-          {% else %}
-            No stats received yet
-          {% endif %}
-        </span>
-      </a>
-    {% else %}
-      <p class="empty">No devices documented yet.</p>
+      {{ stats_device_card(device, latest_stats.get(device.id), stats_states.get(device.id, {"state": "unknown", "label": "No agent data yet"}), href="/devices/" ~ device.id ~ "?tab=stats") }}
     {% endfor %}
   </div>
+  <p class="empty" data-stats-empty {% if devices %}hidden{% endif %}>No devices have reported stats yet.</p>
 </section>
 {% endblock %}
