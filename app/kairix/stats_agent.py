@@ -17,7 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urljoin
 from urllib.request import Request, urlopen
 
-AGENT_VERSION = "0.1.20"
+AGENT_VERSION = "0.1.21"
 
 
 def _host_root() -> str:
@@ -48,6 +48,14 @@ def _run_text(command: list[str], timeout: float = 3.0) -> str:
 
 def _env_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _first_text(paths: list[str]) -> str:
+    for path in paths:
+        value = _read_text(path).replace("\x00", "").strip()
+        if value:
+            return value
+    return ""
 
 
 def _primary_ip() -> str:
@@ -310,6 +318,55 @@ def disk_stats() -> list[dict[str, int | float | str]]:
     return results
 
 
+def _format_bytes(value: int | float | None) -> str:
+    if value is None:
+        return ""
+    amount = float(value)
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    unit = units[0]
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            break
+        amount /= 1024
+    return f"{amount:.1f} {unit}" if unit != "B" else f"{int(amount)} B"
+
+
+def _cpu_model() -> str:
+    cpuinfo = _read_text("/proc/cpuinfo")
+    for label in ("model name", "Hardware", "Processor"):
+        for line in cpuinfo.splitlines():
+            if ":" not in line:
+                continue
+            key, value = line.split(":", 1)
+            if key.strip().lower() == label.lower() and value.strip():
+                return value.strip()
+    return platform.processor() or platform.machine()
+
+
+def hardware_stats(memory: dict[str, int | float] | None, disks: list[dict[str, int | float | str]]) -> dict[str, str]:
+    vendor = _first_text(["/sys/devices/virtual/dmi/id/sys_vendor"])
+    product = _first_text([
+        "/proc/device-tree/model",
+        "/sys/devices/virtual/dmi/id/product_name",
+        "/sys/firmware/devicetree/base/model",
+    ])
+    model = " ".join(part for part in [vendor, product] if part and part.lower() not in {"default string", "to be filled by o.e.m."})
+    storage_lines: list[str] = []
+    for disk in disks[:8]:
+        mount = str(disk.get("mountpoint") or disk.get("mount") or "").strip()
+        total = _format_bytes(disk.get("total_bytes") if isinstance(disk.get("total_bytes"), (int, float)) else None)
+        used = _format_bytes(disk.get("used_bytes") if isinstance(disk.get("used_bytes"), (int, float)) else None)
+        percent = disk.get("percent")
+        if mount and total:
+            storage_lines.append(f"{mount}: {used} / {total} ({percent:.0f}%)" if isinstance(percent, (int, float)) else f"{mount}: {used} / {total}")
+    return {
+        "model": model.strip(),
+        "cpu": _cpu_model(),
+        "ram": _format_bytes(memory.get("total_bytes")) if memory else "",
+        "storage_summary": "\n".join(storage_lines),
+    }
+
+
 def network_stats() -> dict[str, object] | None:
     configured = {part.strip() for part in os.getenv("OPSBOOK_NETWORK_INTERFACES", "").split(",") if part.strip()}
     text = _read_text("/proc/net/dev")
@@ -474,11 +531,14 @@ def uptime_seconds() -> float | None:
 def collect_payload(device_id: str = "") -> dict[str, object]:
     host = os.getenv("OPSBOOK_DEVICE_HOSTNAME", "").strip() or socket.gethostname()
     device_name = os.getenv("OPSBOOK_DEVICE_NAME", "").strip() or host
+    memory = memory_stats()
+    disks = disk_stats()
     payload: dict[str, object] = {
         "agent_version": AGENT_VERSION,
         "source": "opsbook-stats-agent",
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "device_id": int(device_id) if device_id.isdigit() else None,
+        "device_key": device_id.strip() if device_id and not device_id.isdigit() else "",
         "hostname": host,
         "device_name": device_name,
         "primary_ip": _primary_ip(),
@@ -490,8 +550,9 @@ def collect_payload(device_id: str = "") -> dict[str, object]:
             "count": os.cpu_count(),
             "load_average": load_average(),
         },
-        "memory": memory_stats(),
-        "disks": disk_stats(),
+        "memory": memory,
+        "disks": disks,
+        "hardware": hardware_stats(memory, disks),
         "network": network_stats(),
         "docker": docker_health(),
     }
@@ -520,7 +581,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Read-only Kairix Opsbook system stats agent.")
     parser.add_argument("--url", default=os.getenv("OPSBOOK_URL", ""), help="Opsbook base URL, for example http://192.168.0.238:8095")
     parser.add_argument("--token", default=os.getenv("OPSBOOK_AGENT_TOKEN", ""), help="Agent token matching OPSBOOK_AGENT_TOKEN on the Opsbook server")
-    parser.add_argument("--device-id", default=os.getenv("OPSBOOK_DEVICE_ID", ""), help="Optional Opsbook device ID to attach snapshots to")
+    parser.add_argument("--device-id", default=os.getenv("OPSBOOK_DEVICE_ID", ""), help="Optional numeric Opsbook device ID, or a device name/key to match before IP")
     parser.add_argument("--interval", type=int, default=int(os.getenv("OPSBOOK_INTERVAL_SECONDS", "0")), help="Repeat every N seconds; default is one-shot")
     parser.add_argument("--print", action="store_true", help="Print payload instead of posting it")
     args = parser.parse_args()

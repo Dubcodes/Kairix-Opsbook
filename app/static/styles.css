@@ -532,7 +532,18 @@ a.stats-device-card:hover {
   height: 100%;
   border-radius: 4px;
   background:
-    linear-gradient(to bottom, transparent 49%, color-mix(in srgb, var(--line) 55%, transparent) 50%, transparent 51%),
+    linear-gradient(
+      to bottom,
+      transparent 24%,
+      color-mix(in srgb, var(--line) 45%, transparent) 25%,
+      transparent 26%,
+      transparent 49%,
+      color-mix(in srgb, var(--line) 55%, transparent) 50%,
+      transparent 51%,
+      transparent 74%,
+      color-mix(in srgb, var(--line) 45%, transparent) 75%,
+      transparent 76%
+    ),
     linear-gradient(to right, color-mix(in srgb, var(--line) 45%, transparent) 1px, transparent 1px);
   background-size: 100% 100%, 25% 100%;
 }
@@ -544,6 +555,33 @@ a.stats-device-card:hover {
   vector-effect: non-scaling-stroke;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.stat-sparkline-cursor {
+  stroke: color-mix(in srgb, var(--ink) 55%, transparent);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.stat-hover-tooltip {
+  position: absolute;
+  z-index: 2;
+  left: 50%;
+  bottom: 7px;
+  max-width: calc(100% - 12px);
+  transform: translateX(-50%);
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface) 92%, transparent);
+  color: var(--ink);
+  box-shadow: var(--shadow);
+  font-size: 11px;
+  line-height: 1.2;
+  pointer-events: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .stat-chart-memory .stat-sparkline polyline { stroke: #0ea5e9; }
@@ -925,6 +963,30 @@ h3 { margin: 18px 0 8px; font-size: 16px; letter-spacing: 0; }
   align-items: center;
   gap: 7px;
 }
+.dashboard-device-row {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+  justify-content: normal;
+}
+
+.dashboard-device-row > strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.list-row.dashboard-device-row > .dashboard-device-meta {
+  display: block;
+  min-width: 0;
+  margin-top: 0;
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .dashboard-service-row {
   display: grid;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
@@ -2181,12 +2243,20 @@ input[type="color"] {
   .sidebar a { white-space: nowrap; }
   .shell { padding: 18px; }
   .page-head, .list-row, .device-row { align-items: flex-start; flex-direction: column; }
+  .list-row.dashboard-device-row,
   .list-row.dashboard-service-row {
     grid-template-columns: 1fr;
     gap: 4px;
   }
+  .list-row.dashboard-device-row > strong,
   .list-row.dashboard-service-row > strong {
     max-width: 100%;
+  }
+  .list-row.dashboard-device-row > .dashboard-device-meta {
+    width: 100%;
+    text-align: left;
+    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .list-row.dashboard-service-row > .dashboard-service-meta {
     width: 100%;

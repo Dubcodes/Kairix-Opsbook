@@ -66,9 +66,9 @@
     </div>
     <div class="list">
       {% for device in devices %}
-        <a class="list-row" href="/devices/{{ device.id }}">
+        <a class="list-row dashboard-device-row" href="/devices/{{ device.id }}">
           <strong>{{ device_label(device, device_ping_statuses) }}</strong>
-          <span>{{ device.primary_ip or "No IP yet" }} · {{ device.os_name or "OS unknown" }}</span>
+          <span class="dashboard-device-meta">{{ device.primary_ip or "No IP yet" }} · {{ device.os_name or "OS unknown" }}</span>
         </a>
       {% else %}
         <p class="empty">No devices yet. Add your first server, then let the ops memory grow from there.</p>

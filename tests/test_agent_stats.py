@@ -13,7 +13,13 @@ if not (Path.cwd() / "static").exists() and (APP_ROOT / "static").exists():
     os.chdir(APP_ROOT)
 
 from kairix import models
-from kairix.main import _match_agent_device, _stats_monitor_payload, _stats_snapshot_state
+from kairix.main import (
+    _apply_agent_device_metadata,
+    _create_agent_device,
+    _match_agent_device,
+    _stats_monitor_payload,
+    _stats_snapshot_state,
+)
 from kairix.security import now_utc
 
 
@@ -42,8 +48,52 @@ class AgentStatsTest(unittest.TestCase):
             self.assertEqual(_match_agent_device(session, {"device_id": device.id}).id, device.id)
             self.assertEqual(_match_agent_device(session, {"primary_ip": "192.168.1.42"}).id, device.id)
             self.assertEqual(_match_agent_device(session, {"hostname": "win-lab"}).id, device.id)
+            self.assertEqual(_match_agent_device(session, {"device_key": "windows-lab", "primary_ip": "192.168.1.99"}).id, device.id)
             self.assertIsNone(_match_agent_device(session, {"hostname": "new-device"}))
             self.assertEqual(session.query(models.Device).count(), 1)
+        finally:
+            session.close()
+
+    def test_agent_can_create_device_and_fill_blank_hardware(self) -> None:
+        session = self.Session()
+        try:
+            device = _create_agent_device(
+                session,
+                {
+                    "device_name": "Raspberry Pi",
+                    "hostname": "raspi",
+                    "primary_ip": "192.168.1.60",
+                    "os_name": "Linux arm64",
+                },
+            )
+            _apply_agent_device_metadata(
+                session,
+                device,
+                {
+                    "hostname": "raspi",
+                    "primary_ip": "192.168.1.60",
+                    "hardware": {
+                        "model": "Raspberry Pi 5",
+                        "cpu": "ARM Cortex",
+                        "ram": "8.0 GB",
+                        "storage_summary": "/: 2.0 GB / 32.0 GB",
+                    },
+                },
+            )
+            session.commit()
+
+            self.assertEqual(device.name, "Raspberry Pi")
+            self.assertEqual(device.primary_ip, "192.168.1.60")
+            self.assertEqual(device.hardware.model, "Raspberry Pi 5")
+            self.assertEqual(device.hardware.ram, "8.0 GB")
+
+            _apply_agent_device_metadata(
+                session,
+                device,
+                {"hardware": {"model": "Should not replace", "ram": "1.0 GB"}},
+            )
+            self.assertEqual(device.hardware.model, "Raspberry Pi 5")
+            self.assertEqual(device.hardware.ram, "8.0 GB")
         finally:
             session.close()
 

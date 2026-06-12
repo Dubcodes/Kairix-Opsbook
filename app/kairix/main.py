@@ -110,6 +110,16 @@ def public_notes(value: str) -> str:
     return (value or "").replace(NO_CREDENTIALS_MARKER, "").strip()
 
 
+def credential_go_url(credential: models.Credential | None) -> str:
+    if not credential:
+        return ""
+    if credential.login_url:
+        return credential.login_url
+    if credential.service:
+        return credential.service.local_url or credential.service.public_url or ""
+    return ""
+
+
 def stat_percent(value: float | int | None) -> str:
     if value is None:
         return "n/a"
@@ -163,6 +173,7 @@ def stat_duration(seconds: float | int | None) -> str:
 
 templates.env.globals["service_no_credentials_needed"] = service_no_credentials_needed
 templates.env.globals["public_notes"] = public_notes
+templates.env.globals["credential_go_url"] = credential_go_url
 templates.env.filters["stat_percent"] = stat_percent
 templates.env.filters["stat_bytes"] = stat_bytes
 templates.env.filters["stat_rate"] = stat_rate
@@ -3848,29 +3859,90 @@ def _agent_root_disk(disks: Any) -> dict[str, Any]:
     return best
 
 
+def _agent_identity_candidates(payload: dict[str, Any]) -> list[str]:
+    candidates: list[str] = []
+    for key in ("device_key", "device_name", "hostname"):
+        value = _agent_string(payload.get(key), 180)
+        if value and value not in candidates:
+            candidates.append(value)
+    return candidates
+
+
 def _match_agent_device(db: Session, payload: dict[str, Any]) -> models.Device | None:
     device_id = _agent_int(payload.get("device_id"))
     if device_id:
         device = db.get(models.Device, device_id)
         if device:
             return device
-    primary_ip = _agent_string(payload.get("primary_ip"), 80)
-    hostname = _agent_string(payload.get("hostname") or payload.get("device_name"), 180)
-    if primary_ip:
-        device = db.query(models.Device).filter(models.Device.primary_ip == primary_ip).order_by(models.Device.id).first()
-        if device:
-            return device
-    if hostname:
-        lowered = hostname.lower()
+    for candidate in _agent_identity_candidates(payload):
+        lowered = candidate.lower()
+        slug = slugify(candidate)
         device = (
             db.query(models.Device)
-            .filter(or_(func.lower(models.Device.hostname) == lowered, func.lower(models.Device.name) == lowered))
+            .filter(
+                or_(
+                    func.lower(models.Device.hostname) == lowered,
+                    func.lower(models.Device.name) == lowered,
+                    models.Device.slug == slug,
+                )
+            )
             .order_by(models.Device.id)
             .first()
         )
         if device:
             return device
+    primary_ip = _agent_string(payload.get("primary_ip"), 80)
+    if primary_ip:
+        device = db.query(models.Device).filter(models.Device.primary_ip == primary_ip).order_by(models.Device.id).first()
+        if device:
+            return device
     return None
+
+
+def _create_agent_device(db: Session, payload: dict[str, Any]) -> models.Device:
+    name = next(iter(_agent_identity_candidates(payload)), "") or _agent_string(payload.get("primary_ip"), 80) or "Stats Agent Device"
+    hostname = _agent_string(payload.get("hostname"), 180)
+    primary_ip = _agent_string(payload.get("primary_ip"), 80)
+    os_name = _agent_string(payload.get("os_name") or payload.get("platform"), 160)
+    device = models.Device(
+        name=name,
+        slug=unique_slug(db, models.Device, name),
+        type="server",
+        hostname=hostname,
+        primary_ip=primary_ip,
+        os_name=os_name,
+        purpose="Created from Opsbook stats agent.",
+    )
+    db.add(device)
+    db.flush()
+    return device
+
+
+def _apply_agent_device_metadata(db: Session, device: models.Device, payload: dict[str, Any]) -> None:
+    hostname = _agent_string(payload.get("hostname"), 180)
+    primary_ip = _agent_string(payload.get("primary_ip"), 80)
+    os_name = _agent_string(payload.get("os_name") or payload.get("platform"), 160)
+    if hostname and not device.hostname:
+        device.hostname = hostname
+    if primary_ip and not device.primary_ip:
+        device.primary_ip = primary_ip
+    if os_name and not device.os_name:
+        device.os_name = os_name
+
+    hardware_payload = payload.get("hardware") if isinstance(payload.get("hardware"), dict) else {}
+    if not hardware_payload:
+        return
+    hardware = _ensure_device_hardware(db, device)
+    field_map = {
+        "model": "model",
+        "cpu": "cpu",
+        "ram": "ram",
+        "storage_summary": "storage_summary",
+    }
+    for target, source in field_map.items():
+        value = _agent_string(hardware_payload.get(source), 2000)
+        if value and not getattr(hardware, target):
+            setattr(hardware, target, value)
 
 
 def _stats_snapshot_state(snapshot: models.DeviceStatSnapshot | None, *, expected_minutes: int = 5) -> dict[str, str]:
@@ -3978,7 +4050,7 @@ def _stat_network_details(snapshot: models.DeviceStatSnapshot) -> list[dict[str,
         details.append(
             {
                 "label": str(item.get("name") or "interface"),
-                "detail": f"RX {stat_bytes(_stat_int(item.get('rx_bytes')))} · TX {stat_bytes(_stat_int(item.get('tx_bytes')))}",
+                "detail": f"Totals since boot/reset: RX {stat_bytes(_stat_int(item.get('rx_bytes')))} · TX {stat_bytes(_stat_int(item.get('tx_bytes')))}",
             }
         )
     return details
@@ -4298,7 +4370,8 @@ async def agent_stats_ingest(request: Request, db: Session = Depends(get_db)) ->
         raise HTTPException(400, "Stats payload must be a JSON object.")
     device = _match_agent_device(db, payload)
     if not device:
-        raise HTTPException(404, "No matching device found. Add the device first or set OPSBOOK_DEVICE_ID for the agent.")
+        device = _create_agent_device(db, payload)
+    _apply_agent_device_metadata(db, device, payload)
     cpu = payload.get("cpu") if isinstance(payload.get("cpu"), dict) else {}
     memory = payload.get("memory") if isinstance(payload.get("memory"), dict) else {}
     network = payload.get("network") if isinstance(payload.get("network"), dict) else {}
@@ -4386,6 +4459,38 @@ def stats_live_api(
     else:
         devices = _device_order_query(db).all()
     return JSONResponse(_stats_monitor_payload(db, devices, window_hours))
+
+
+@app.post("/devices/{device_id}/stats/clear")
+async def device_stats_clear(
+    device_id: int,
+    request: Request,
+    user: models.User = Depends(require_user),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    form = await request.form()
+    check_csrf(request, str(form.get("csrf", "")))
+    ensure_writable()
+    device = db.get(models.Device, device_id)
+    if not device:
+        raise HTTPException(404, "Device not found.")
+    deleted = (
+        db.query(models.DeviceStatSnapshot)
+        .filter(models.DeviceStatSnapshot.device_id == device.id)
+        .delete(synchronize_session=False)
+    )
+    db.add(
+        models.AuditLog(
+            user_id=user.id,
+            action="device_stats_cleared",
+            object_type="device",
+            object_id=device.id,
+            details_json={"deleted": deleted},
+        )
+    )
+    db.commit()
+    flash(request, f"Cleared {deleted} stats snapshot(s) for {device.name}.", "success")
+    return redirect(f"/devices/{device.id}?tab=stats")
 
 
 @app.get("/setup", response_class=HTMLResponse)

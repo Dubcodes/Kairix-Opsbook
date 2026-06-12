@@ -57,6 +57,7 @@
       </div>
       <div class="list compact">
         {% for credential in quick_credentials %}
+          {% set go_url = credential_go_url(credential) %}
           <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
             <a class="row-main" href="/credentials/{{ credential.id }}">
               <strong>{{ credential.label }}</strong>
@@ -64,8 +65,8 @@
             </a>
             <div class="actions compact-actions">
               <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
-              {% if credential.login_url %}
-                <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
+              {% if go_url %}
+                <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ go_url }}">Copy & Go</button>
               {% endif %}
               {% if favorite_edit %}
               <form method="post" action="/devices/{{ device.id }}/quick-credentials">
@@ -142,14 +143,15 @@
               <h3>Credentials</h3>
               <div class="list compact">
                 {% for credential in service_login_credentials(service) %}
+                  {% set go_url = credential_go_url(credential) %}
                   <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
                     <a class="row-main" href="/credentials/{{ credential.id }}">
                       <strong>{{ credential.label }}</strong>
                       <span>{{ credential.username or "No username" }} · {{ credential.security_level|title }}</span>
                     </a>
                     <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
-                    {% if credential.login_url %}
-                      <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
+                    {% if go_url %}
+                      <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ go_url }}">Copy & Go</button>
                     {% endif %}
                   </div>
                 {% else %}
@@ -158,11 +160,12 @@
                 {% if service_tokens(service) %}
                   <h4>Tokens & APIs</h4>
                   {% for credential in service_tokens(service) %}
+                    {% set go_url = credential_go_url(credential) %}
                     <div class="quick-row clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
                       <a class="row-main" href="/credentials/{{ credential.id }}"><strong>{{ credential.label }}</strong><span>{{ credential.security_level|title }}{% if credential.expires_at %} · expires {{ credential.expires_at|date_input }}{% endif %}</span></a>
                       <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
-                      {% if credential.login_url %}
-                        <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
+                      {% if go_url %}
+                        <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ go_url }}">Copy & Go</button>
                       {% endif %}
                     </div>
                   {% endfor %}
@@ -213,6 +216,7 @@
   <section class="section-title"><h2>Credentials</h2><a class="button" href="/credentials/new?device_id={{ device.id }}&return_to=/devices/{{ device.id }}%3Ftab=credentials">Add Credential</a></section>
   <section class="list">
     {% for credential in device.credentials if credential.secret_type != "API token" %}
+      {% set go_url = credential_go_url(credential) %}
       <div class="list-row static clickable-card" data-credential-row data-card-href="/credentials/{{ credential.id }}">
         <a class="row-main" href="/credentials/{{ credential.id }}">
           <strong>{{ credential.label }}</strong>
@@ -220,8 +224,8 @@
         </a>
         <div class="actions compact-actions">
           <button class="secondary small-button" type="button" data-copy-credential="{{ credential.id }}">Copy</button>
-          {% if credential.login_url %}
-            <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ credential.login_url }}">Copy & Go</button>
+          {% if go_url %}
+            <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ go_url }}">Copy & Go</button>
           {% endif %}
           <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=credentials">Edit</a>
         </div>
@@ -257,7 +261,15 @@
         <h2>Agent Stats</h2>
         <p class="muted">Read-only system snapshots from the Opsbook stats agent.</p>
       </div>
-      <span class="badge" data-stats-state-label>{{ stats_state.label }}</span>
+      <div class="actions compact-actions">
+        <span class="badge" data-stats-state-label>{{ stats_state.label }}</span>
+        {% if latest_stats %}
+          <form method="post" action="/devices/{{ device.id }}/stats/clear" data-confirm-delete="Clear all stored stats history for this device? The next agent report will start a fresh graph.">
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <button class="ghost small-button" type="submit" title="Delete stored stats snapshots for this device only">Clear history</button>
+          </form>
+        {% endif %}
+      </div>
     </div>
     {% if latest_stats %}
       <dl class="details">
@@ -304,12 +316,12 @@
   <section class="panel" id="agent-setup">
     <h3>Agent Setup</h3>
     {% if agent_enabled %}
-      <p class="muted">Set the agent environment variables and run it on this device. Use this device ID when automatic hostname/IP matching is not enough.</p>
+      <p class="muted">Set the Opsbook URL, token, and this device name. Opsbook matches by name/hostname first, then IP.</p>
       <pre class="note-block">OPSBOOK_URL=http://opsbook-host:8095
 OPSBOOK_AGENT_TOKEN=your-configured-token
-OPSBOOK_DEVICE_ID={{ device.id }}
+OPSBOOK_DEVICE_NAME="{{ device.name }}"
 python3 agents/opsbook_stats_agent.py</pre>
-      <p class="muted">For a Portainer agent container, use <code>python -m kairix.stats_agent</code> from the published Opsbook image and mount the host at <code>/host</code> read-only.</p>
+      <p class="muted">For Portainer, use <code>ghcr.io/dubcodes/kairix-opsbook:latest</code>, run <code>python -m kairix.stats_agent</code>, mount the host at <code>/host</code> read-only, and mount the Docker socket read-only when Docker health is wanted.</p>
     {% else %}
       <p class="empty">Stats intake is not active. Set <code>OPSBOOK_AGENT_TOKEN</code> on the Opsbook server, redeploy, then run the agent with the same token.</p>
     {% endif %}

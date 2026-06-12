@@ -1,23 +1,19 @@
 services:
   opsbook-stats-agent:
-    image: ghcr.io/dubcodes/kairix-opsbook:0.1.20
+    image: ghcr.io/dubcodes/kairix-opsbook:latest
     container_name: opsbook-stats-agent
     restart: unless-stopped
     network_mode: host
     command: ["python", "-m", "kairix.stats_agent"]
     environment:
-      OPSBOOK_URL: "http://127.0.0.1:8095"
+      OPSBOOK_URL: "http://opsbook-host-or-ip:8095"
       OPSBOOK_AGENT_TOKEN: "replace-with-the-same-token-used-by-opsbook"
-      OPSBOOK_DEVICE_ID: ""
-      OPSBOOK_DEVICE_NAME: "Moxxie"
-      OPSBOOK_DEVICE_HOSTNAME: "moxxie"
-      OPSBOOK_PRIMARY_IP: "192.168.0.238"
+      OPSBOOK_DEVICE_NAME: "replace-with-this-device-name"
       OPSBOOK_HOST_ROOT: "/host"
-      OPSBOOK_INTERVAL_SECONDS: "60"
-      OPSBOOK_DOCKER_HEALTH: "off"
+      OPSBOOK_INTERVAL_SECONDS: "30"
+      OPSBOOK_DOCKER_HEALTH: "on"
       OPSBOOK_DISK_MOUNTS: ""
       OPSBOOK_NETWORK_INTERFACES: ""
     volumes:
       - /:/host:ro
-      # Optional Docker health. Set OPSBOOK_DOCKER_HEALTH to "on" and uncomment:
-      # - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro

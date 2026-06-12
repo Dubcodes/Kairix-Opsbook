@@ -469,19 +469,20 @@
     const roots = document.querySelectorAll("[data-stats-live]");
     if (!roots.length) return;
     const metricDefinitions = {
-      cpu: {title: "CPU", chart: "cpu_percent"},
-      memory: {title: "Memory", chart: "memory_percent"},
-      disk: {title: "Root disk", chart: "root_disk_percent"},
-      load: {title: "Load 1 min", chart: "load_1"},
-      swap: {title: "Swap", chart: "swap_percent"},
-      load_core: {title: "Load/core", chart: "load_per_core"},
-      network: {title: "Network", chart: "network_bps"},
-      freshness: {title: "Agent", chart: "missed_reports"},
-      docker: {title: "Docker", chart: "docker_unhealthy_count"}
+      cpu: {title: "CPU", chart: "cpu_percent", detail: "CPU use over the selected graph window. Hover for sampled value and time."},
+      memory: {title: "Memory", chart: "memory_percent", detail: "RAM use over the selected graph window. Hover for sampled value and time."},
+      disk: {title: "Root disk", chart: "root_disk_percent", detail: "Root disk usage. Full per-mount details are listed below on the device Stats tab."},
+      load: {title: "Load 1 min", chart: "load_1", detail: "Raw 1-minute system load over the selected graph window."},
+      swap: {title: "Swap", chart: "swap_percent", detail: "Swap or pagefile usage over the selected graph window."},
+      load_core: {title: "Load/core", chart: "load_per_core", detail: "1-minute load divided by CPU core count, which is easier to compare across devices."},
+      network: {title: "Network", chart: "network_bps", detail: "Combined network upload/download rate calculated between agent reports. Interface totals below are since boot or interface reset."},
+      freshness: {title: "Agent", chart: "missed_reports", detail: "Agent freshness and missed report count based on the expected interval in Settings."},
+      docker: {title: "Docker", chart: "docker_unhealthy_count", detail: "Docker container health from the read-only Docker socket mount."}
     };
     const defaultMetricKeys = ["cpu", "memory", "disk", "load"];
     const detailMetricKeys = Object.keys(metricDefinitions);
     const percentMetrics = new Set(["cpu_percent", "memory_percent", "root_disk_percent", "swap_percent"]);
+    const metricByChart = Object.fromEntries(Object.entries(metricDefinitions).map(([key, value]) => [value.chart, {key, ...value}]));
 
     function formatLocalDateTime(value) {
       if (!value) return "";
@@ -524,6 +525,27 @@
       }[char]));
     }
 
+    function formatBytes(value) {
+      if (!Number.isFinite(value)) return "n/a";
+      let amount = Math.max(0, Number(value));
+      const units = ["B", "KB", "MB", "GB", "TB", "PB"];
+      let unit = units[0];
+      for (const candidate of units) {
+        unit = candidate;
+        if (amount < 1024 || unit === units[units.length - 1]) break;
+        amount /= 1024;
+      }
+      return unit === "B" ? `${Math.round(amount)} B` : `${amount.toFixed(1)} ${unit}`;
+    }
+
+    function formatMetricValue(metric, value) {
+      if (!Number.isFinite(value)) return "n/a";
+      if (percentMetrics.has(metric)) return `${Math.round(value)}%`;
+      if (metric === "network_bps") return `${formatBytes(value)}/s`;
+      if (metric === "load_1" || metric === "load_per_core") return value.toFixed(2);
+      return String(Math.round(value));
+    }
+
     function metricKeysForRoot(root, detailMode, payload) {
       const payloadKeys = detailMode ? payload?.detail_metrics : payload?.overview_metrics;
       const raw = root.dataset.statsMetrics || (Array.isArray(payloadKeys) ? payloadKeys.join(",") : "");
@@ -538,23 +560,68 @@
     function chartMarkup(key) {
       const metric = metricDefinitions[key] || metricDefinitions.cpu;
       return `
-          <div class="stat-chart stat-chart-${key}">
+          <div class="stat-chart stat-chart-${key}" title="${escapeHtml(metric.detail)}">
             <div class="stat-chart-label"><strong data-stat-field="${key}_label">n/a</strong><span>${metric.title}</span><small data-stat-field="${key}_detail"></small></div>
-            <svg class="stat-sparkline" data-stat-chart="${metric.chart}" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+            <svg class="stat-sparkline" data-stat-chart="${metric.chart}" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg>
+            <div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
           </div>`;
+    }
+
+    function installSparklineHover(svg, metric) {
+      const chart = svg.closest(".stat-chart");
+      if (!chart || chart.dataset.hoverReady === "true") return;
+      chart.dataset.hoverReady = "true";
+      const tooltip = chart.querySelector("[data-stat-tooltip]");
+      const cursor = svg.querySelector(".stat-sparkline-cursor");
+      const hide = () => {
+        if (tooltip) tooltip.hidden = true;
+        if (cursor) cursor.hidden = true;
+      };
+      chart.addEventListener("pointerleave", hide);
+      chart.addEventListener("pointermove", (event) => {
+        const points = Array.isArray(svg._statsPoints) ? svg._statsPoints : [];
+        if (!points.length || !tooltip) {
+          hide();
+          return;
+        }
+        const rect = svg.getBoundingClientRect();
+        const xPct = Math.max(0, Math.min(100, ((event.clientX - rect.left) / Math.max(1, rect.width)) * 100));
+        let nearest = points[0];
+        for (const point of points) {
+          if (Math.abs(point.x - xPct) < Math.abs(nearest.x - xPct)) nearest = point;
+        }
+        const activeMetric = svg._statsMetric || metric;
+        const title = metricByChart[activeMetric]?.title || "Value";
+        tooltip.textContent = `${title} ${formatMetricValue(activeMetric, nearest.value)} · ${formatLocalDateTime(nearest.created_at)}`;
+        tooltip.hidden = false;
+        tooltip.style.left = `${Math.max(6, Math.min(94, nearest.x))}%`;
+        if (cursor) {
+          cursor.hidden = false;
+          cursor.setAttribute("x1", nearest.x.toFixed(2));
+          cursor.setAttribute("x2", nearest.x.toFixed(2));
+        }
+      });
     }
 
     function drawSparkline(svg, series, metric, startIso, endIso) {
       const line = svg?.querySelector("polyline");
       if (!line) return;
       const values = (Array.isArray(series) ? series : [])
-        .map((point) => ({time: new Date(point.created_at).getTime(), value: Number(point[metric])}))
+        .map((point) => ({time: new Date(point.created_at).getTime(), created_at: point.created_at, value: Number(point[metric])}))
         .filter((point) => Number.isFinite(point.time) && Number.isFinite(point.value));
       if (!values.length) {
         line.setAttribute("points", "");
+        svg._statsPoints = [];
+        svg._statsMetric = metric;
+        const chart = svg.closest(".stat-chart");
+        const tooltip = chart?.querySelector("[data-stat-tooltip]");
+        const cursor = svg.querySelector(".stat-sparkline-cursor");
+        if (tooltip) tooltip.hidden = true;
+        if (cursor) cursor.hidden = true;
         svg.classList.add("is-empty");
         return;
       }
+      installSparklineHover(svg, metric);
       svg.classList.remove("is-empty");
       const start = new Date(startIso).getTime();
       const end = new Date(endIso).getTime();
@@ -564,13 +631,16 @@
         : Math.max(1, ...values.map((point) => Math.max(0, point.value))) * 1.15;
       const chartBottom = 58;
       const chartHeight = 56;
-      const coords = values.map((point) => {
+      const points = values.map((point) => {
         const rawX = values.length === 1 ? 100 : ((point.time - start) / span) * 100;
         const x = Math.max(0, Math.min(100, rawX));
         const y = chartBottom - Math.max(0, Math.min(1, point.value / maxValue)) * chartHeight;
-        return `${x.toFixed(2)},${y.toFixed(2)}`;
+        return {x, y, value: point.value, created_at: point.created_at || point.time};
       });
+      const coords = points.map((point) => `${point.x.toFixed(2)},${point.y.toFixed(2)}`);
       if (coords.length === 1) coords.unshift(`0,${chartBottom}`);
+      svg._statsPoints = points;
+      svg._statsMetric = metric;
       line.setAttribute("points", coords.join(" "));
     }
 

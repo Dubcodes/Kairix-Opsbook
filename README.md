@@ -75,7 +75,7 @@ On first run, create the owner account. Change the database password and all sec
 Important `.env` values:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.20
+OPSBOOK_IMAGE_TAG=0.1.21
 APP_PORT=8095
 INSTANCE_NAME=Opsbook
 INSTANCE_MODE=primary
@@ -196,7 +196,7 @@ Opsbook includes a dependency-free Python agent for reporting basic host stats. 
 ```bash
 OPSBOOK_URL=http://OPSBOOK-IP:8095 \
 OPSBOOK_AGENT_TOKEN=the-same-token \
-OPSBOOK_DEVICE_ID=1 \
+OPSBOOK_DEVICE_NAME=DeviceNameInOpsbook \
 python3 agents/opsbook_stats_agent.py
 ```
 
@@ -205,19 +205,22 @@ Container agent example:
 ```bash
 docker run --rm --network host \
   -v /:/host:ro \
-  -e OPSBOOK_URL=http://127.0.0.1:8095 \
+  -v /var/run/docker.sock:/var/run/docker.sock:ro \
+  -e OPSBOOK_URL=http://OPSBOOK-IP:8095 \
   -e OPSBOOK_AGENT_TOKEN=the-same-token \
-  -e OPSBOOK_DEVICE_ID=1 \
+  -e OPSBOOK_DEVICE_NAME=DeviceNameInOpsbook \
   -e OPSBOOK_HOST_ROOT=/host \
-  ghcr.io/dubcodes/kairix-opsbook:0.1.20 \
+  -e OPSBOOK_INTERVAL_SECONDS=30 \
+  -e OPSBOOK_DOCKER_HEALTH=on \
+  ghcr.io/dubcodes/kairix-opsbook:latest \
   python -m kairix.stats_agent
 ```
 
-Use `OPSBOOK_INTERVAL_SECONDS=300` or `--interval 300` if you want the agent process to keep running and report every five minutes. If `OPSBOOK_DEVICE_ID` is omitted, Opsbook tries to match the device by primary IP, hostname, or device name.
+Use `OPSBOOK_INTERVAL_SECONDS=300` or `--interval 300` if you want the agent process to keep running and report every five minutes. Normally the only device-specific value you need is `OPSBOOK_DEVICE_NAME`; Opsbook matches by exact device name/hostname first, then primary IP. `OPSBOOK_DEVICE_ID` is still supported for advanced pinned setups, but it should be the numeric Opsbook device ID, not a hostname.
 
 The agent reports CPU, RAM, swap/pagefile, load, per-mount disk use, network byte counters, and uptime. Opsbook calculates network throughput from consecutive reports, so the first snapshot after startup may show no upload/download rate until another snapshot arrives. Use `OPSBOOK_DISK_MOUNTS=/,/mnt/share` to restrict noisy mount lists and `OPSBOOK_NETWORK_INTERFACES=eno1,wlan0` to choose exact network interfaces.
 
-Docker health is off by default. To collect running/stopped/unhealthy container counts, set `OPSBOOK_DOCKER_HEALTH=on` and mount the Docker socket read-only into the agent container with `/var/run/docker.sock:/var/run/docker.sock:ro`.
+The supplied Portainer agent stack enables Docker health by default and mounts the Docker socket read-only so Opsbook can count running/stopped/unhealthy containers. If you do not want container health, remove the socket mount and set `OPSBOOK_DOCKER_HEALTH=off`.
 
 ## Portainer Install
 
@@ -231,7 +234,7 @@ Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
 6. Add environment variables before deploying:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.20
+OPSBOOK_IMAGE_TAG=0.1.21
 APP_PORT=8095
 POSTGRES_DB=opsbook
 POSTGRES_USER=opsbook
@@ -263,12 +266,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.20` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.21` on pushes to `main`.
 
 For production, prefer a pinned version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.20
+OPSBOOK_IMAGE_TAG=0.1.21
 ```
 
 To update production safely:

@@ -11,57 +11,57 @@
   </div>
   <div class="stats-chart-grid">
     {% if "cpu" in metric_keys %}
-    <div class="stat-chart stat-chart-cpu">
+    <div class="stat-chart stat-chart-cpu" title="CPU use over the selected graph window. Hover for sampled value and time.">
       <div class="stat-chart-label"><strong data-stat-field="cpu_label">{{ snapshot.cpu_percent|stat_percent if snapshot else "n/a" }}</strong><span>CPU</span></div>
-      <svg class="stat-sparkline" data-stat-chart="cpu_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="cpu_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
     {% if "memory" in metric_keys %}
-    <div class="stat-chart stat-chart-memory">
+    <div class="stat-chart stat-chart-memory" title="RAM use over the selected graph window. Hover for sampled value and time.">
       <div class="stat-chart-label"><strong data-stat-field="memory_label">{{ snapshot.memory_percent|stat_percent if snapshot else "n/a" }}</strong><span>Memory</span><small data-stat-field="memory_detail">{% if snapshot and snapshot.memory_used_bytes and snapshot.memory_total_bytes %}{{ snapshot.memory_used_bytes|stat_bytes }} / {{ snapshot.memory_total_bytes|stat_bytes }}{% endif %}</small></div>
-      <svg class="stat-sparkline" data-stat-chart="memory_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="memory_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
     {% if "disk" in metric_keys %}
-    <div class="stat-chart stat-chart-disk">
+    <div class="stat-chart stat-chart-disk" title="Root disk usage. Full per-mount details are listed below on the device Stats tab.">
       <div class="stat-chart-label"><strong data-stat-field="disk_label">{{ snapshot.root_disk_percent|stat_percent if snapshot else "n/a" }}</strong><span>Root disk</span><small data-stat-field="disk_detail">{% if snapshot and snapshot.root_disk_used_bytes and snapshot.root_disk_total_bytes %}{{ snapshot.root_disk_used_bytes|stat_bytes }} / {{ snapshot.root_disk_total_bytes|stat_bytes }}{% endif %}</small></div>
-      <svg class="stat-sparkline" data-stat-chart="root_disk_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="root_disk_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
     {% if "load" in metric_keys %}
-    <div class="stat-chart stat-chart-load">
+    <div class="stat-chart stat-chart-load" title="Raw 1-minute system load over the selected graph window.">
       <div class="stat-chart-label"><strong data-stat-field="load_label">{% if snapshot and snapshot.load_1 is not none %}{{ "%.2f"|format(snapshot.load_1) }}{% else %}n/a{% endif %}</strong><span>Load 1 min</span></div>
-      <svg class="stat-sparkline" data-stat-chart="load_1" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="load_1" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
     {% if "swap" in metric_keys %}
-    <div class="stat-chart stat-chart-swap">
+    <div class="stat-chart stat-chart-swap" title="Swap or pagefile usage over the selected graph window.">
       <div class="stat-chart-label"><strong data-stat-field="swap_label">{{ snapshot.swap_percent|stat_percent if snapshot else "n/a" }}</strong><span>Swap</span><small data-stat-field="swap_detail">{% if snapshot and snapshot.swap_total_bytes is not none %}{{ snapshot.swap_used_bytes|stat_bytes }} / {{ snapshot.swap_total_bytes|stat_bytes }}{% endif %}</small></div>
-      <svg class="stat-sparkline" data-stat-chart="swap_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="swap_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
     {% if "load_core" in metric_keys %}
-    <div class="stat-chart stat-chart-load_core">
+    <div class="stat-chart stat-chart-load_core" title="1-minute load divided by CPU core count, which is easier to compare across devices.">
       <div class="stat-chart-label"><strong data-stat-field="load_core_label">{% if snapshot and snapshot.load_per_core is not none %}{{ "%.2f"|format(snapshot.load_per_core) }}{% else %}n/a{% endif %}</strong><span>Load/core</span><small data-stat-field="load_core_detail">{% if snapshot and snapshot.cpu_count %}{{ snapshot.cpu_count }} core(s){% endif %}</small></div>
-      <svg class="stat-sparkline" data-stat-chart="load_per_core" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="load_per_core" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
     {% if "network" in metric_keys %}
-    <div class="stat-chart stat-chart-network">
+    <div class="stat-chart stat-chart-network" title="Combined network upload/download rate calculated between agent reports. Interface totals below are since boot or interface reset.">
       <div class="stat-chart-label"><strong data-stat-field="network_label">{% if snapshot and (snapshot.network_rx_bps is not none or snapshot.network_tx_bps is not none) %}{{ ((snapshot.network_rx_bps or 0) + (snapshot.network_tx_bps or 0))|stat_rate }}{% else %}n/a{% endif %}</strong><span>Network</span><small data-stat-field="network_detail">{% if snapshot and (snapshot.network_rx_bps is not none or snapshot.network_tx_bps is not none) %}RX {{ snapshot.network_rx_bps|stat_rate }} · TX {{ snapshot.network_tx_bps|stat_rate }}{% endif %}</small></div>
-      <svg class="stat-sparkline" data-stat-chart="network_bps" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="network_bps" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
     {% if "freshness" in metric_keys %}
-    <div class="stat-chart stat-chart-freshness">
+    <div class="stat-chart stat-chart-freshness" title="Agent freshness and missed report count based on the expected interval in Settings.">
       <div class="stat-chart-label"><strong data-stat-field="freshness_label">{{ state.label if state else "No agent data" }}</strong><span>Agent</span><small data-stat-field="freshness_detail"></small></div>
-      <svg class="stat-sparkline" data-stat-chart="missed_reports" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="missed_reports" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
     {% if "docker" in metric_keys %}
-    <div class="stat-chart stat-chart-docker">
+    <div class="stat-chart stat-chart-docker" title="Docker container health from the read-only Docker socket mount.">
       <div class="stat-chart-label"><strong data-stat-field="docker_label">{% if snapshot and snapshot.docker_total_count is not none %}{{ snapshot.docker_unhealthy_count or 0 }} bad{% else %}n/a{% endif %}</strong><span>Docker</span><small data-stat-field="docker_detail">{% if snapshot and snapshot.docker_total_count is not none %}{{ snapshot.docker_running_count or 0 }} running · {{ snapshot.docker_stopped_count or 0 }} stopped{% endif %}</small></div>
-      <svg class="stat-sparkline" data-stat-chart="docker_unhealthy_count" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <svg class="stat-sparkline" data-stat-chart="docker_unhealthy_count" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline><line class="stat-sparkline-cursor" x1="0" y1="0" x2="0" y2="60" hidden></line></svg><div class="stat-hover-tooltip" data-stat-tooltip hidden></div>
     </div>
     {% endif %}
   </div>
