@@ -10,20 +10,20 @@
   </div>
   <div class="stats-chart-grid">
     <div class="stat-chart stat-chart-cpu">
-      <div><strong data-stat-field="cpu_label">{{ snapshot.cpu_percent|stat_percent if snapshot else "n/a" }}</strong><span>CPU</span></div>
-      <svg class="stat-sparkline" data-stat-chart="cpu_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <div class="stat-chart-label"><strong data-stat-field="cpu_label">{{ snapshot.cpu_percent|stat_percent if snapshot else "n/a" }}</strong><span>CPU</span></div>
+      <svg class="stat-sparkline" data-stat-chart="cpu_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
     </div>
     <div class="stat-chart stat-chart-memory">
-      <div><strong data-stat-field="memory_label">{{ snapshot.memory_percent|stat_percent if snapshot else "n/a" }}</strong><span>Memory</span><small data-stat-field="memory_detail">{% if snapshot and snapshot.memory_used_bytes and snapshot.memory_total_bytes %}{{ snapshot.memory_used_bytes|stat_bytes }} / {{ snapshot.memory_total_bytes|stat_bytes }}{% endif %}</small></div>
-      <svg class="stat-sparkline" data-stat-chart="memory_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <div class="stat-chart-label"><strong data-stat-field="memory_label">{{ snapshot.memory_percent|stat_percent if snapshot else "n/a" }}</strong><span>Memory</span><small data-stat-field="memory_detail">{% if snapshot and snapshot.memory_used_bytes and snapshot.memory_total_bytes %}{{ snapshot.memory_used_bytes|stat_bytes }} / {{ snapshot.memory_total_bytes|stat_bytes }}{% endif %}</small></div>
+      <svg class="stat-sparkline" data-stat-chart="memory_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
     </div>
     <div class="stat-chart stat-chart-disk">
-      <div><strong data-stat-field="disk_label">{{ snapshot.root_disk_percent|stat_percent if snapshot else "n/a" }}</strong><span>Root disk</span><small data-stat-field="disk_detail">{% if snapshot and snapshot.root_disk_used_bytes and snapshot.root_disk_total_bytes %}{{ snapshot.root_disk_used_bytes|stat_bytes }} / {{ snapshot.root_disk_total_bytes|stat_bytes }}{% endif %}</small></div>
-      <svg class="stat-sparkline" data-stat-chart="root_disk_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <div class="stat-chart-label"><strong data-stat-field="disk_label">{{ snapshot.root_disk_percent|stat_percent if snapshot else "n/a" }}</strong><span>Root disk</span><small data-stat-field="disk_detail">{% if snapshot and snapshot.root_disk_used_bytes and snapshot.root_disk_total_bytes %}{{ snapshot.root_disk_used_bytes|stat_bytes }} / {{ snapshot.root_disk_total_bytes|stat_bytes }}{% endif %}</small></div>
+      <svg class="stat-sparkline" data-stat-chart="root_disk_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
     </div>
     <div class="stat-chart stat-chart-load">
-      <div><strong data-stat-field="load_label">{% if snapshot and snapshot.load_1 is not none %}{{ "%.2f"|format(snapshot.load_1) }}{% else %}n/a{% endif %}</strong><span>Load 1 min</span></div>
-      <svg class="stat-sparkline" data-stat-chart="load_1" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+      <div class="stat-chart-label"><strong data-stat-field="load_label">{% if snapshot and snapshot.load_1 is not none %}{{ "%.2f"|format(snapshot.load_1) }}{% else %}n/a{% endif %}</strong><span>Load 1 min</span></div>
+      <svg class="stat-sparkline" data-stat-chart="load_1" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
     </div>
   </div>
   <div class="stats-card-foot">

@@ -418,7 +418,7 @@ eno1 UP 192.168.0.238/24
 
 === DOCKER CONTAINERS ===
 NAMES                 IMAGE                                  STATUS         PORTS
-opsbook-stats-agent   ghcr.io/dubcodes/kairix-opsbook:0.1.18 Up 12 minutes
+opsbook-stats-agent   ghcr.io/dubcodes/kairix-opsbook:0.1.19 Up 12 minutes
 
 === DOCKER COMPOSE PROJECTS ===
 NAME            STATUS              CONFIG FILES
@@ -562,7 +562,7 @@ opsbook-agent   running(1)          /data/compose/18/docker-compose.yml
                     {
                         "name": "Kairix Opsbook App",
                         "container_name": "kairix-opsbook-app",
-                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.18",
+                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.19",
                         "stack_group": "kairix-opsbook",
                         "compose_path": "/srv/storage/projects/kairix-opsbook/portainer-stack.yml",
                         "confidence": "medium",
@@ -612,7 +612,7 @@ opsbook-agent   running(1)          /data/compose/18/docker-compose.yml
                     {
                         "name": "Kairix Opsbook App",
                         "container_name": "kairix-opsbook-app",
-                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.18",
+                        "image": "ghcr.io/dubcodes/kairix-opsbook:0.1.19",
                         "stack_group": "kairix-opsbook",
                         "compose_path": "/data/compose/5/portainer-stack.yml",
                         "confidence": "medium",

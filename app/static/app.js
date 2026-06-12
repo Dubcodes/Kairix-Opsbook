@@ -518,13 +518,15 @@
       const maxValue = metric === "load_1"
         ? Math.max(1, ...values.map((point) => point.value)) * 1.15
         : 100;
-      const coords = values.map((point, index) => {
+      const chartBottom = 58;
+      const chartHeight = 56;
+      const coords = values.map((point) => {
         const rawX = values.length === 1 ? 100 : ((point.time - start) / span) * 100;
         const x = Math.max(0, Math.min(100, rawX));
-        const y = 32 - Math.max(0, Math.min(1, point.value / maxValue)) * 30;
+        const y = chartBottom - Math.max(0, Math.min(1, point.value / maxValue)) * chartHeight;
         return `${x.toFixed(2)},${y.toFixed(2)}`;
       });
-      if (coords.length === 1) coords.unshift("0,32");
+      if (coords.length === 1) coords.unshift(`0,${chartBottom}`);
       line.setAttribute("points", coords.join(" "));
     }
 
@@ -544,20 +546,20 @@
         </div>
         <div class="stats-chart-grid">
           <div class="stat-chart stat-chart-cpu">
-            <div><strong data-stat-field="cpu_label">n/a</strong><span>CPU</span></div>
-            <svg class="stat-sparkline" data-stat-chart="cpu_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+            <div class="stat-chart-label"><strong data-stat-field="cpu_label">n/a</strong><span>CPU</span></div>
+            <svg class="stat-sparkline" data-stat-chart="cpu_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
           </div>
           <div class="stat-chart stat-chart-memory">
-            <div><strong data-stat-field="memory_label">n/a</strong><span>Memory</span><small data-stat-field="memory_detail"></small></div>
-            <svg class="stat-sparkline" data-stat-chart="memory_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+            <div class="stat-chart-label"><strong data-stat-field="memory_label">n/a</strong><span>Memory</span><small data-stat-field="memory_detail"></small></div>
+            <svg class="stat-sparkline" data-stat-chart="memory_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
           </div>
           <div class="stat-chart stat-chart-disk">
-            <div><strong data-stat-field="disk_label">n/a</strong><span>Root disk</span><small data-stat-field="disk_detail"></small></div>
-            <svg class="stat-sparkline" data-stat-chart="root_disk_percent" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+            <div class="stat-chart-label"><strong data-stat-field="disk_label">n/a</strong><span>Root disk</span><small data-stat-field="disk_detail"></small></div>
+            <svg class="stat-sparkline" data-stat-chart="root_disk_percent" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
           </div>
           <div class="stat-chart stat-chart-load">
-            <div><strong data-stat-field="load_label">n/a</strong><span>Load 1 min</span></div>
-            <svg class="stat-sparkline" data-stat-chart="load_1" viewBox="0 0 100 34" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
+            <div class="stat-chart-label"><strong data-stat-field="load_label">n/a</strong><span>Load 1 min</span></div>
+            <svg class="stat-sparkline" data-stat-chart="load_1" viewBox="0 0 100 60" preserveAspectRatio="none" aria-hidden="true"><polyline points=""></polyline></svg>
           </div>
         </div>
         <div class="stats-card-foot">

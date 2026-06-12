@@ -476,19 +476,35 @@ a.stats-device-card:hover {
 }
 
 .stat-chart {
-  display: grid;
-  grid-template-rows: auto 48px;
-  gap: 6px;
+  position: relative;
+  display: block;
   min-width: 0;
+  min-height: 86px;
   border: 1px solid var(--line);
   border-radius: 6px;
-  padding: 8px;
+  padding: 0;
   background: var(--surface-soft);
+  overflow: hidden;
 }
 
-.stat-chart strong,
-.stat-chart span,
-.stat-chart small {
+.stat-chart-label {
+  position: absolute;
+  z-index: 1;
+  top: 8px;
+  left: 8px;
+  right: 8px;
+  pointer-events: none;
+  text-shadow:
+    0 1px 0 var(--surface-soft),
+    0 -1px 0 var(--surface-soft),
+    1px 0 0 var(--surface-soft),
+    -1px 0 0 var(--surface-soft),
+    0 0 8px var(--surface-soft);
+}
+
+.stat-chart-label strong,
+.stat-chart-label span,
+.stat-chart-label small {
   display: block;
   min-width: 0;
   overflow: hidden;
@@ -496,20 +512,21 @@ a.stats-device-card:hover {
   white-space: nowrap;
 }
 
-.stat-chart strong {
+.stat-chart-label strong {
   font-size: 20px;
   line-height: 1.1;
 }
 
-.stat-chart span,
-.stat-chart small {
+.stat-chart-label span,
+.stat-chart-label small {
   color: var(--muted);
   font-size: 11px;
 }
 
 .stat-sparkline {
+  display: block;
   width: 100%;
-  height: 48px;
+  height: 86px;
   border-radius: 4px;
   background:
     linear-gradient(to bottom, transparent 49%, color-mix(in srgb, var(--line) 55%, transparent) 50%, transparent 51%),
