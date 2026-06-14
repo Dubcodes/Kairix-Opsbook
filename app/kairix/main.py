@@ -5338,7 +5338,7 @@ def device_quick_credentials_update(
     device_id: int,
     csrf: str = Form(...),
     credential_id: int = Form(...),
-    action: str = Form(...),
+    action: str = Form("show"),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> Response:

@@ -936,7 +936,11 @@
     if (favoriteForm) {
       event.preventDefault();
       const button = favoriteForm.querySelector(".favorite-star");
+      const submitter = event.submitter;
       const formData = new FormData(favoriteForm);
+      if (submitter?.name && !formData.has(submitter.name)) {
+        formData.append(submitter.name, submitter.value);
+      }
       const nextActive = formData.get("action") === "show";
       fetch(favoriteForm.getAttribute("action"), {
         method: "POST",
