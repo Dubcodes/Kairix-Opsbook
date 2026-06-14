@@ -1228,8 +1228,9 @@ def _github_tokens(text: str) -> list[dict[str, Any]]:
         expiry = ""
         for index in range(len(prefix_lines) - 1, -1, -1):
             line = prefix_lines[index]
-            if line.lower().startswith("expires on "):
-                expiry = _parse_github_expiry(line.removeprefix("Expires on ").strip())
+            expiry_match = re.search(r"\bExpires\s+on\s+(.+)$", line, re.IGNORECASE)
+            if expiry_match:
+                expiry = _parse_github_expiry(expiry_match.group(1).strip())
                 continue
             if line.startswith("@"):
                 owner = line
@@ -1250,6 +1251,7 @@ def _github_tokens(text: str) -> list[dict[str, Any]]:
                 if len(line) <= 80:
                     name = line
                     break
+        name = re.sub(r"\s*(?:[•|.-]\s*)?(?:Never used|Last used).*", "", name, flags=re.IGNORECASE).strip() or "GitHub token"
         tokens.append(
             {
                 "label": name,

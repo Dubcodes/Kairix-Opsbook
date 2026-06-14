@@ -153,6 +153,12 @@
                     {% if go_url %}
                       <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ go_url }}">Copy & Go</button>
                     {% endif %}
+                    {% set is_favorite = credential.id in favorite_ids %}
+                    <form method="post" action="/devices/{{ device.id }}/quick-credentials" data-favorite-form>
+                      <input type="hidden" name="csrf" value="{{ csrf }}">
+                      <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                      <button class="ghost small-button icon-only favorite-star{% if is_favorite %} active{% endif %}" name="action" value="{{ 'hide' if is_favorite else 'show' }}" type="submit" title="{{ 'Remove from favorites' if is_favorite else 'Add to favorites' }}" aria-label="{{ 'Remove from favorites' if is_favorite else 'Add to favorites' }}">★</button>
+                    </form>
                   </div>
                 {% else %}
                   {% if service_no_credentials_needed(service) %}<p class="empty">No saved credentials needed.</p>{% endif %}
@@ -227,6 +233,12 @@
           {% if go_url %}
             <button class="secondary small-button" type="button" data-copy-go-credential="{{ credential.id }}" data-go-url="{{ go_url }}">Copy & Go</button>
           {% endif %}
+          {% set is_favorite = credential.id in favorite_ids %}
+          <form method="post" action="/devices/{{ device.id }}/quick-credentials" data-favorite-form>
+            <input type="hidden" name="csrf" value="{{ csrf }}">
+            <input type="hidden" name="credential_id" value="{{ credential.id }}">
+            <button class="ghost small-button icon-only favorite-star{% if is_favorite %} active{% endif %}" name="action" value="{{ 'hide' if is_favorite else 'show' }}" type="submit" title="{{ 'Remove from favorites' if is_favorite else 'Add to favorites' }}" aria-label="{{ 'Remove from favorites' if is_favorite else 'Add to favorites' }}">★</button>
+          </form>
           <a class="button secondary small-button" href="/credentials/{{ credential.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=credentials">Edit</a>
         </div>
       </div>

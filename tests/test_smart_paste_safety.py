@@ -61,6 +61,21 @@ beszel         henrygd/beszel:latest         Up 7 hours  0.0.0.0:8090->8090/tcp
         self.assertEqual(parsed["device"]["name"], "")
         self.assertIn("Beszel", {item["name"] for item in parsed["services"]})
 
+    def test_github_token_paste_extracts_name_and_expiry(self) -> None:
+        text = """deputy-ai
+Never used •Expires on Mon, Jul 13 2026
+Make sure to copy your personal access token now as you will not be able to see this again.
+github_pat_11EXAMPLE0RVJrPrvsSNHo_dUWI8Jaxx6k4p9XbQMRnBotJmjFXhwD0F3MxMVNzW1OOYSFSF5XLLGVElxW
+"""
+        parsed = parse_smart_paste(text)
+
+        self.assertEqual(len(parsed["tokens"]), 1)
+        token = parsed["tokens"][0]
+        self.assertEqual(token["label"], "deputy-ai")
+        self.assertEqual(token["service_name"], "deputy ai")
+        self.assertEqual(token["security_level"], "high")
+        self.assertTrue(token["expires_at"].startswith("2026-07-13"))
+
     def test_windows_systeminfo_style_host_and_os(self) -> None:
         text = """Host Name:                 WIN-OPS-01
 OS Name:                   Microsoft Windows 11 Pro

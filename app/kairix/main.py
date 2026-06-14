@@ -23,7 +23,7 @@ import pyotp
 import qrcode
 import qrcode.image.svg
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import and_, func, or_
@@ -5072,6 +5072,7 @@ def device_detail(
             "tag_list": tags_for(db, "device", device.id),
             "service_groups": service_groups,
             "quick_credentials": _quick_credentials_for_device(db, device),
+            "favorite_ids": _favorite_credential_ids_for_device(db, device.id),
             "favorite_edit": favorites == "edit",
             "ping_status": _device_ping_status(db, device),
             "status_log": _latest_audit(db, "device", device.id, "device_status_changed"),
@@ -5340,12 +5341,13 @@ def device_quick_credentials_update(
     action: str = Form(...),
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
-) -> RedirectResponse:
+) -> Response:
     check_csrf(request, csrf)
     ensure_writable()
     device = db.get(models.Device, device_id)
     credential = db.get(models.Credential, credential_id)
-    if not device or not credential or credential.device_id != device.id:
+    context_device = _credential_context_device(credential) if credential else None
+    if not device or not credential or not context_device or context_device.id != device.id or credential.secret_type == "API token":
         raise HTTPException(404, "Credential not found on this device.")
     order_key = f"quick_credential_order:{device.id}"
     hidden_key = f"quick_credential_hidden:{device.id}"
@@ -5379,6 +5381,15 @@ def device_quick_credentials_update(
         )
     )
     db.commit()
+    if "application/json" in request.headers.get("accept", ""):
+        return JSONResponse(
+            {
+                "ok": True,
+                "device_id": device.id,
+                "credential_id": credential.id,
+                "favorite": action == "show",
+            }
+        )
     return redirect(request.headers.get("referer") or f"/devices/{device.id}")
 
 
@@ -5809,7 +5820,7 @@ def credentials_page(
     user: models.User = Depends(require_user),
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
-    query = db.query(models.Credential)
+    query = db.query(models.Credential).filter(models.Credential.secret_type != "API token")
     if q:
         like = f"%{q}%"
         query = query.filter(

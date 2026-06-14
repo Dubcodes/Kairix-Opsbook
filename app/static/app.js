@@ -941,6 +941,7 @@
       fetch(favoriteForm.action, {
         method: "POST",
         body: formData,
+        headers: {"Accept": "application/json"},
         credentials: "same-origin"
       })
         .then((response) => {
