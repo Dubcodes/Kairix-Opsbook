@@ -938,7 +938,7 @@
       const button = favoriteForm.querySelector(".favorite-star");
       const formData = new FormData(favoriteForm);
       const nextActive = formData.get("action") === "show";
-      fetch(favoriteForm.action, {
+      fetch(favoriteForm.getAttribute("action"), {
         method: "POST",
         body: formData,
         headers: {"Accept": "application/json"},
