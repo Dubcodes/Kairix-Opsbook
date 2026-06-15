@@ -120,10 +120,10 @@
 
 <form method="post" class="panel form-grid wide">
   <input type="hidden" name="csrf" value="{{ csrf }}">
-  <h2 class="span-2">Color Options</h2>
-  <p class="muted span-2">These colors feed the app theme. The top-bar icon still lets each browser choose Auto, Dark, or Light locally.</p>
+  <h2 class="span-2">Display & Theme</h2>
+  <p class="muted span-2 settings-intro">Layout, theme, monitoring refresh, and retention settings. The top-bar icon still lets each browser choose Auto, Dark, or Light locally.</p>
 
-  <h3 class="span-2">Display</h3>
+  <h3 class="span-2 settings-section-title">Display</h3>
   <label>Dashboard recent items
     <input name="dashboard_recent_limit" type="number" min="3" max="20" value="{{ app_settings.dashboard_recent_limit or '6' }}">
     <small>How many recent devices and services to show on the dashboard.</small>
@@ -182,7 +182,34 @@
     </div>
   </fieldset>
 
-  <h3 class="span-2">Light Mode</h3>
+  <h3 class="span-2 settings-section-title">Theme</h3>
+  <fieldset class="span-2 theme-preset-picker">
+    <legend>Theme preset</legend>
+    <p class="muted">Pick a named palette, or choose Custom to use the color controls below.</p>
+    {% for group in theme_preset_groups %}
+      <div class="theme-preset-group">
+        <strong>{{ group.label }}</strong>
+        <div class="theme-choice-grid">
+          {% for theme in group.choices %}
+            <label class="theme-choice{% if theme.selected %} selected{% endif %}" title="{{ theme.description }}">
+              <input type="radio" name="theme_preset" value="{{ theme.key }}" {% if theme.selected %}checked{% endif %}>
+              <span>
+                <strong>{{ theme.label }}</strong>
+                <small>{{ theme.description }}</small>
+              </span>
+              <span class="theme-swatches" aria-hidden="true">
+                {% for swatch in theme.swatches %}
+                  <i style="background: {{ swatch }}"></i>
+                {% endfor %}
+              </span>
+            </label>
+          {% endfor %}
+        </div>
+      </div>
+    {% endfor %}
+  </fieldset>
+
+  <h3 class="span-2 settings-section-title">Custom Light Mode</h3>
   <label>Background <input type="color" name="light_bg" value="{{ app_settings.light_bg }}"></label>
   <label>Surface <input type="color" name="light_surface" value="{{ app_settings.light_surface }}"></label>
   <label>Text <input type="color" name="light_text" value="{{ app_settings.light_text }}"></label>
@@ -191,7 +218,7 @@
   <label>Button/accent <input type="color" name="light_accent" value="{{ app_settings.light_accent }}"></label>
   <label>Button text <input type="color" name="light_accent_text" value="{{ app_settings.light_accent_text }}"></label>
 
-  <h3 class="span-2">Dark Mode</h3>
+  <h3 class="span-2 settings-section-title">Custom Dark Mode</h3>
   <label>Background <input type="color" name="dark_bg" value="{{ app_settings.dark_bg }}"></label>
   <label>Surface <input type="color" name="dark_surface" value="{{ app_settings.dark_surface }}"></label>
   <label>Text <input type="color" name="dark_text" value="{{ app_settings.dark_text }}"></label>

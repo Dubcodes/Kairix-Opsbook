@@ -181,6 +181,7 @@ templates.env.filters["stat_duration"] = stat_duration
 
 THEME_DEFAULTS = {
     "theme_mode": "auto",
+    "theme_preset": "custom",
     "light_bg": "#f5f7f8",
     "light_surface": "#ffffff",
     "light_text": "#17212b",
@@ -209,6 +210,127 @@ THEME_DEFAULTS = {
     "stats_expected_interval_minutes": "5",
     "stats_overview_metrics": "cpu,memory,disk,load",
 }
+
+THEME_PRESETS = {
+    "custom": {
+        "label": "Custom",
+        "description": "Use the light and dark color controls below.",
+        "swatches": ("#f5f7f8", "#ffffff", "#0f766e", "#17212b"),
+    },
+    "opsbook": {
+        "label": "Opsbook",
+        "description": "The calm default palette.",
+        "swatches": ("#f5f7f8", "#151c22", "#0f766e", "#5eead4"),
+        "light": {
+            "bg": "#f5f7f8",
+            "surface": "#ffffff",
+            "ink": "#17212b",
+            "muted": "#687786",
+            "line": "#d8e0e5",
+            "accent": "#0f766e",
+            "accent_ink": "#ffffff",
+        },
+        "dark": {
+            "bg": "#0f1419",
+            "surface": "#151c22",
+            "ink": "#e7edf2",
+            "muted": "#a8b4bf",
+            "line": "#33424f",
+            "accent": "#5eead4",
+            "accent_ink": "#06201d",
+        },
+    },
+    "steel": {
+        "label": "Steel",
+        "description": "Cool, quiet operations UI.",
+        "swatches": ("#111827", "#1f2937", "#38bdf8", "#e5eef7"),
+        "dark": {
+            "bg": "#111827",
+            "surface": "#1f2937",
+            "ink": "#e5eef7",
+            "muted": "#a8b3c1",
+            "line": "#334155",
+            "accent": "#38bdf8",
+            "accent_ink": "#082f49",
+        },
+    },
+    "jade": {
+        "label": "Jade",
+        "description": "Dark green with high-visibility actions.",
+        "swatches": ("#071512", "#10241f", "#34d399", "#e6fff6"),
+        "dark": {
+            "bg": "#071512",
+            "surface": "#10241f",
+            "ink": "#e6fff6",
+            "muted": "#9bc7bb",
+            "line": "#1f4a3e",
+            "accent": "#34d399",
+            "accent_ink": "#052e25",
+        },
+    },
+    "daylight": {
+        "label": "Daylight",
+        "description": "Clean bright theme for daytime use.",
+        "swatches": ("#f8fafc", "#ffffff", "#2563eb", "#0f172a"),
+        "light": {
+            "bg": "#f8fafc",
+            "surface": "#ffffff",
+            "ink": "#0f172a",
+            "muted": "#64748b",
+            "line": "#dbe3ec",
+            "accent": "#2563eb",
+            "accent_ink": "#ffffff",
+        },
+    },
+    "paper": {
+        "label": "Paper",
+        "description": "Soft light theme with warm surfaces.",
+        "swatches": ("#f7f4ef", "#fffdf8", "#8b5cf6", "#1f2937"),
+        "light": {
+            "bg": "#f7f4ef",
+            "surface": "#fffdf8",
+            "ink": "#1f2937",
+            "muted": "#6b7280",
+            "line": "#ddd6c8",
+            "accent": "#8b5cf6",
+            "accent_ink": "#ffffff",
+        },
+    },
+    "high-contrast": {
+        "label": "High Contrast",
+        "description": "Maximum contrast for readability.",
+        "swatches": ("#000000", "#111111", "#facc15", "#ffffff"),
+        "dark": {
+            "bg": "#000000",
+            "surface": "#111111",
+            "ink": "#ffffff",
+            "muted": "#d4d4d8",
+            "line": "#52525b",
+            "accent": "#facc15",
+            "accent_ink": "#111111",
+        },
+    },
+    "ocean": {
+        "label": "Ocean",
+        "description": "Blue-green monitoring palette.",
+        "swatches": ("#061826", "#0f2a3a", "#22d3ee", "#e0f7ff"),
+        "dark": {
+            "bg": "#061826",
+            "surface": "#0f2a3a",
+            "ink": "#e0f7ff",
+            "muted": "#91b6c9",
+            "line": "#1e4a5f",
+            "accent": "#22d3ee",
+            "accent_ink": "#083344",
+        },
+    },
+}
+
+THEME_PRESET_GROUPS = (
+    ("Opsbook", ("custom", "opsbook")),
+    ("Dark", ("steel", "jade", "ocean", "high-contrast")),
+    ("Light", ("daylight", "paper")),
+)
 
 PING_THREAD_STARTED = False
 WEBHOOK_URL_SETTING = "ping_webhook_url_encrypted"
@@ -4281,53 +4403,102 @@ def render(
     return templates.TemplateResponse(request, template_name, payload)
 
 
+def _theme_preset_groups(selected_key: str) -> list[dict[str, Any]]:
+    selected = selected_key if selected_key in THEME_PRESETS else THEME_DEFAULTS["theme_preset"]
+    groups: list[dict[str, Any]] = []
+    for label, keys in THEME_PRESET_GROUPS:
+        choices = []
+        for key in keys:
+            preset = THEME_PRESETS[key]
+            choices.append(
+                {
+                    "key": key,
+                    "label": preset["label"],
+                    "description": preset["description"],
+                    "swatches": preset["swatches"],
+                    "selected": key == selected,
+                }
+            )
+        groups.append({"label": label, "choices": choices})
+    return groups
+
+
+def _theme_block(selector: str, tokens: dict[str, str], *, dark: bool = False) -> str:
+    bg = css_color(tokens.get("bg", ""), THEME_DEFAULTS["dark_bg" if dark else "light_bg"])
+    surface = css_color(tokens.get("surface", ""), THEME_DEFAULTS["dark_surface" if dark else "light_surface"])
+    ink = css_color(tokens.get("ink", ""), THEME_DEFAULTS["dark_text" if dark else "light_text"])
+    muted = css_color(tokens.get("muted", ""), THEME_DEFAULTS["dark_muted" if dark else "light_muted"])
+    line = css_color(tokens.get("line", ""), THEME_DEFAULTS["dark_line" if dark else "light_line"])
+    accent = css_color(tokens.get("accent", ""), THEME_DEFAULTS["dark_accent" if dark else "light_accent"])
+    accent_ink = css_color(
+        tokens.get("accent_ink", ""),
+        THEME_DEFAULTS["dark_accent_text" if dark else "light_accent_text"],
+    )
+    surface_soft = "color-mix(in srgb, var(--surface) 78%, #000000)" if dark else "color-mix(in srgb, var(--surface) 92%, var(--bg))"
+    accent_dark = tokens.get("accent_dark") or (
+        "color-mix(in srgb, var(--accent) 78%, #ffffff)" if dark else "color-mix(in srgb, var(--accent) 78%, #000000)"
+    )
+    shadow = "none" if dark else "0 8px 24px rgba(23, 33, 43, 0.08)"
+    return f"""
+{selector} {{
+  --bg: {bg};
+  --surface: {surface};
+  --surface-raised: {surface};
+  --surface-soft: {surface_soft};
+  --header-bg: {surface};
+  --input-bg: {surface};
+  --ink: {ink};
+  --text: var(--ink);
+  --muted: {muted};
+  --line: {line};
+  --accent: {accent};
+  --accent-ink: {accent_ink};
+  --accent-text: var(--accent-ink);
+  --accent-dark: {accent_dark};
+  --accent-strong: var(--accent-dark);
+  --blue: {"#60a5fa" if dark else "#2563eb"};
+  --amber: {"#f59e0b" if dark else "#b45309"};
+  --red: {"#f87171" if dark else "#b91c1c"};
+  --green: {"#34d399" if dark else "#047857"};
+  --shadow: {shadow};
+}}
+"""
+
+
+def _settings_theme_tokens(values: dict[str, str], prefix: str) -> dict[str, str]:
+    return {
+        "bg": values.get(f"{prefix}_bg", ""),
+        "surface": values.get(f"{prefix}_surface", ""),
+        "ink": values.get(f"{prefix}_text", ""),
+        "muted": values.get(f"{prefix}_muted", ""),
+        "line": values.get(f"{prefix}_line", ""),
+        "accent": values.get(f"{prefix}_accent", ""),
+        "accent_ink": values.get(f"{prefix}_accent_text", ""),
+    }
+
+
 @app.get("/theme.css")
 def theme_css(db: Session = Depends(get_db)) -> PlainTextResponse:
     values = get_app_settings(db)
-    css = f"""
-:root:not([data-theme]) {{
-  --bg: {css_color(values.get("light_bg", ""), THEME_DEFAULTS["light_bg"])};
-  --surface: {css_color(values.get("light_surface", ""), THEME_DEFAULTS["light_surface"])};
-  --surface-soft: color-mix(in srgb, var(--surface) 92%, var(--bg));
-  --ink: {css_color(values.get("light_text", ""), THEME_DEFAULTS["light_text"])};
-  --muted: {css_color(values.get("light_muted", ""), THEME_DEFAULTS["light_muted"])};
-  --line: {css_color(values.get("light_line", ""), THEME_DEFAULTS["light_line"])};
-  --accent: {css_color(values.get("light_accent", ""), THEME_DEFAULTS["light_accent"])};
-  --accent-ink: {css_color(values.get("light_accent_text", ""), THEME_DEFAULTS["light_accent_text"])};
-}}
+    preset_key = values.get("theme_preset", THEME_DEFAULTS["theme_preset"])
+    preset = THEME_PRESETS.get(preset_key, THEME_PRESETS[THEME_DEFAULTS["theme_preset"]])
+    light_tokens = _settings_theme_tokens(values, "light")
+    dark_tokens = _settings_theme_tokens(values, "dark")
+    light_block_is_dark = False
+    dark_block_is_dark = True
+    if preset_key != "custom":
+        light_tokens = dict(preset.get("light") or preset.get("dark") or light_tokens)
+        dark_tokens = dict(preset.get("dark") or preset.get("light") or dark_tokens)
+        light_block_is_dark = "dark" in preset and "light" not in preset
+        dark_block_is_dark = "dark" in preset
+    css = _theme_block(":root:not([data-theme])", light_tokens, dark=light_block_is_dark)
+    css += f"""
 @media (prefers-color-scheme: dark) {{
-  :root:not([data-theme]) {{
-    --bg: {css_color(values.get("dark_bg", ""), THEME_DEFAULTS["dark_bg"])};
-    --surface: {css_color(values.get("dark_surface", ""), THEME_DEFAULTS["dark_surface"])};
-    --surface-soft: color-mix(in srgb, var(--surface) 78%, #000000);
-    --ink: {css_color(values.get("dark_text", ""), THEME_DEFAULTS["dark_text"])};
-    --muted: {css_color(values.get("dark_muted", ""), THEME_DEFAULTS["dark_muted"])};
-    --line: {css_color(values.get("dark_line", ""), THEME_DEFAULTS["dark_line"])};
-    --accent: {css_color(values.get("dark_accent", ""), THEME_DEFAULTS["dark_accent"])};
-    --accent-ink: {css_color(values.get("dark_accent_text", ""), THEME_DEFAULTS["dark_accent_text"])};
-  }}
-}}
-:root[data-theme="light"] {{
-  --bg: {css_color(values.get("light_bg", ""), THEME_DEFAULTS["light_bg"])};
-  --surface: {css_color(values.get("light_surface", ""), THEME_DEFAULTS["light_surface"])};
-  --surface-soft: color-mix(in srgb, var(--surface) 92%, var(--bg));
-  --ink: {css_color(values.get("light_text", ""), THEME_DEFAULTS["light_text"])};
-  --muted: {css_color(values.get("light_muted", ""), THEME_DEFAULTS["light_muted"])};
-  --line: {css_color(values.get("light_line", ""), THEME_DEFAULTS["light_line"])};
-  --accent: {css_color(values.get("light_accent", ""), THEME_DEFAULTS["light_accent"])};
-  --accent-ink: {css_color(values.get("light_accent_text", ""), THEME_DEFAULTS["light_accent_text"])};
-}}
-:root[data-theme="dark"] {{
-  --bg: {css_color(values.get("dark_bg", ""), THEME_DEFAULTS["dark_bg"])};
-  --surface: {css_color(values.get("dark_surface", ""), THEME_DEFAULTS["dark_surface"])};
-  --surface-soft: color-mix(in srgb, var(--surface) 78%, #000000);
-  --ink: {css_color(values.get("dark_text", ""), THEME_DEFAULTS["dark_text"])};
-  --muted: {css_color(values.get("dark_muted", ""), THEME_DEFAULTS["dark_muted"])};
-  --line: {css_color(values.get("dark_line", ""), THEME_DEFAULTS["dark_line"])};
-  --accent: {css_color(values.get("dark_accent", ""), THEME_DEFAULTS["dark_accent"])};
-  --accent-ink: {css_color(values.get("dark_accent_text", ""), THEME_DEFAULTS["dark_accent_text"])};
+  {_theme_block(":root:not([data-theme])", dark_tokens, dark=dark_block_is_dark)}
 }}
 """
+    css += _theme_block(':root[data-theme="light"]', light_tokens, dark=light_block_is_dark)
+    css += _theme_block(':root[data-theme="dark"]', dark_tokens, dark=dark_block_is_dark)
     if values.get("compact_forms", "on") != "off":
         css += """
 .panel { padding: 16px; }
@@ -8160,6 +8331,7 @@ def settings_page(
             "totp_scope_label": _totp_scope_label(totp_scope),
             "security_posture": security_posture,
             "security_posture_counts": _posture_counts(security_posture),
+            "theme_preset_groups": _theme_preset_groups(get_app_settings(db).get("theme_preset", THEME_DEFAULTS["theme_preset"])),
             "stats_metric_catalog": _stats_metric_catalog(stats_overview_metric_keys),
             "stats_overview_metric_keys": stats_overview_metric_keys,
         },
@@ -8187,6 +8359,8 @@ async def settings_save(
             set_app_setting(db, key, ",".join(selected_metrics))
             continue
         value = str(form.get(key, THEME_DEFAULTS[key])).strip()
+        if key == "theme_preset":
+            value = value if value in THEME_PRESETS else THEME_DEFAULTS[key]
         if key in {"compact_forms", "ping_on_login", "validate_services_on_login"}:
             value = "on" if form.get(key) == "on" else "off"
         if key == "dashboard_recent_limit":

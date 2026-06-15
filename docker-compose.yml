@@ -6,7 +6,7 @@ services:
       context: ./app
     environment:
       APP_NAME: ${APP_NAME:-Kairix Opsbook}
-      APP_VERSION: ${APP_VERSION:-0.1.24}
+      APP_VERSION: ${APP_VERSION:-0.1.25}
       INSTANCE_NAME: ${INSTANCE_NAME:-Opsbook}
       INSTANCE_MODE: ${INSTANCE_MODE:-primary}
       DATABASE_URL: ${DATABASE_URL:-postgresql+psycopg://opsbook:change-me@db:5432/opsbook}
