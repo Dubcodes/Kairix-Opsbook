@@ -363,8 +363,10 @@ python3 agents/opsbook_stats_agent.py</pre>
     <div class="list compact">
       {% for port in device.ports %}
         {% set port_status = port_validation_statuses.get(port.id, {"state": "unknown", "title": "Port not checked"}) %}
-        <div class="list-row static clickable-card" data-card-href="/ports/{{ port.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">
-          <a class="row-main" href="/ports/{{ port.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">
+        {% set open_url = port_open_url(port) %}
+        {% set edit_url = "/ports/" ~ port.id ~ "/edit?return_to=/devices/" ~ device.id ~ "%3Ftab=network" %}
+        <div class="list-row static clickable-card" data-card-href="{{ open_url or edit_url }}" {% if open_url %}data-card-target="_blank"{% endif %}>
+          <a class="row-main" href="{{ open_url or edit_url }}" {% if open_url %}target="_blank"{% endif %}>
             <strong>{{ port.host_port }}/{{ port.protocol }}<span class="status-dot status-{{ port_status.state }}" title="{{ port_status.title or port_status.label }}"></span></strong>
             <span>{% if port.service %}{{ port.service.name }} · {% endif %}{{ port.purpose or port.notes or "No purpose documented" }}</span>
           </a>
@@ -396,7 +398,7 @@ python3 agents/opsbook_stats_agent.py</pre>
     </div>
     <div class="list compact">
       {% for url in device.urls %}
-        <div class="list-row static clickable-card" data-card-href="/urls/{{ url.id }}/edit?return_to=/devices/{{ device.id }}%3Ftab=network">
+        <div class="list-row static clickable-card" data-card-href="{{ url.url }}" data-card-target="_blank">
           <a class="row-main" href="{{ url.url }}" target="_blank"><strong>{{ url.label or url.url_type }}</strong><span>{{ url.url }}</span></a>
           <div class="actions compact-actions">
             <a class="button secondary small-button" href="{{ url.url }}" target="_blank">Open</a>

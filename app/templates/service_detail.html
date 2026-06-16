@@ -185,8 +185,10 @@
     </div>
     <div class="list compact">
       {% for port in service.ports %}
-        <div class="list-row static clickable-card" data-card-href="/ports/{{ port.id }}/edit?return_to=/services/{{ service.id }}%3Ftab=ports">
-          <a class="row-main" href="/ports/{{ port.id }}/edit?return_to=/services/{{ service.id }}%3Ftab=ports">
+        {% set open_url = port_open_url(port) %}
+        {% set edit_url = "/ports/" ~ port.id ~ "/edit?return_to=/services/" ~ service.id ~ "%3Ftab=ports" %}
+        <div class="list-row static clickable-card" data-card-href="{{ open_url or edit_url }}" {% if open_url %}data-card-target="_blank"{% endif %}>
+          <a class="row-main" href="{{ open_url or edit_url }}" {% if open_url %}target="_blank"{% endif %}>
             {% set port_status = port_validation_statuses.get(port.id, {"state": "unknown", "title": "Port not checked"}) %}
             <strong>{{ port.host_port }}/{{ port.protocol }}<span class="status-dot status-{{ port_status.state }}" title="{{ port_status.title or port_status.label }}"></span></strong>
             <span>{% if port.internal_port %}internal {{ port.internal_port }} · {% endif %}{{ port.purpose or port.notes or "No purpose documented" }}</span>
@@ -207,7 +209,7 @@
     </div>
     <div class="list compact">
       {% for url in service.urls %}
-        <div class="list-row static clickable-card" data-card-href="/urls/{{ url.id }}/edit?return_to=/services/{{ service.id }}%3Ftab=ports">
+        <div class="list-row static clickable-card" data-card-href="{{ url.url }}" data-card-target="_blank">
           <a class="row-main" href="{{ url.url }}" target="_blank">
             <strong>{{ url.label or url.url_type }}</strong>
             <span>{{ url.url }}</span>

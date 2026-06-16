@@ -14,6 +14,37 @@ class StaticRegressionTest(unittest.TestCase):
         self.assertIn("formData.append(submitter.name, submitter.value)", app_js)
         self.assertIn('favoriteForm.getAttribute("action")', app_js)
 
+    def test_clickable_network_cards_open_endpoints_not_edit_by_default(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        templates_root = root / "app" / "templates"
+        if not templates_root.exists():
+            templates_root = root / "templates"
+
+        for template_name in ["device_detail.html", "ports.html", "service_detail.html"]:
+            with self.subTest(template=template_name):
+                template = (templates_root / template_name).read_text()
+                self.assertIn("port_open_url(port)", template)
+                self.assertIn('data-card-target="_blank"', template)
+
+    def test_clickable_card_supports_new_tab_targets(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        app_js_path = root / "app" / "static" / "app.js"
+        if not app_js_path.exists():
+            app_js_path = root / "static" / "app.js"
+        app_js = app_js_path.read_text()
+
+        self.assertIn('data-card-target', app_js)
+        self.assertIn('window.open(cardHref, "_blank", "noopener")', app_js)
+
+    def test_smart_paste_preserves_existing_device_name_casing(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        main_py_path = root / "app" / "kairix" / "main.py"
+        if not main_py_path.exists():
+            main_py_path = root / "kairix" / "main.py"
+        main_py = main_py_path.read_text()
+
+        self.assertIn("new_device_name.lower() != device.name.lower()", main_py)
+
 
 if __name__ == "__main__":
     unittest.main()

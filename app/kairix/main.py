@@ -120,6 +120,41 @@ def credential_go_url(credential: models.Credential | None) -> str:
     return ""
 
 
+def _url_matches_port(raw_url: str, port_number: int) -> bool:
+    try:
+        parsed = urlparse(raw_url)
+    except ValueError:
+        return False
+    if not parsed.scheme or not parsed.hostname:
+        return False
+    try:
+        parsed_port = parsed.port
+    except ValueError:
+        return False
+    if parsed_port is None:
+        parsed_port = 443 if parsed.scheme == "https" else 80
+    return parsed_port == port_number
+
+
+def port_open_url(port: models.Port | None) -> str:
+    if not port or str(port.protocol or "tcp").lower() != "tcp":
+        return ""
+    for raw_url in (
+        getattr(port.service, "local_url", "") if port.service else "",
+        getattr(port.service, "public_url", "") if port.service else "",
+    ):
+        if raw_url and _url_matches_port(raw_url, port.host_port):
+            return raw_url
+    for url_record in list(getattr(port.service, "urls", []) if port.service else []) + list(getattr(port.device, "urls", []) or []):
+        if url_record.url and _url_matches_port(url_record.url, port.host_port):
+            return url_record.url
+    host = (getattr(port.device, "primary_ip", "") or getattr(port.device, "hostname", "") or "").strip()
+    if not host:
+        return ""
+    scheme = "https" if port.host_port in {443, 8443, 9443} else "http"
+    return f"{scheme}://{host}:{port.host_port}/"
+
+
 def stat_percent(value: float | int | None) -> str:
     if value is None:
         return "n/a"
@@ -174,6 +209,7 @@ def stat_duration(seconds: float | int | None) -> str:
 templates.env.globals["service_no_credentials_needed"] = service_no_credentials_needed
 templates.env.globals["public_notes"] = public_notes
 templates.env.globals["credential_go_url"] = credential_go_url
+templates.env.globals["port_open_url"] = port_open_url
 templates.env.filters["stat_percent"] = stat_percent
 templates.env.filters["stat_bytes"] = stat_bytes
 templates.env.filters["stat_rate"] = stat_rate
@@ -5201,21 +5237,23 @@ def device_detail(
                 }
             )
         for port in sorted(service.ports, key=lambda item: (item.host_port, item.protocol)):
+            open_url = port_open_url(port)
             quick_network_items.append(
                 {
                     "title": service.name,
                     "subtitle": f"{port.host_port}/{port.protocol} · {port.purpose or 'service port'}",
-                    "href": f"/ports/{port.id}/edit?return_to=/devices/{device.id}",
-                    "external": "",
+                    "href": open_url or f"/ports/{port.id}/edit?return_to=/devices/{device.id}",
+                    "external": "true" if open_url else "",
                 }
             )
     for port in sorted((port for port in device.ports if not port.service), key=lambda item: (item.host_port, item.protocol)):
+        open_url = port_open_url(port)
         quick_network_items.append(
             {
                 "title": f"{port.host_port}/{port.protocol}",
                 "subtitle": port.purpose or port.notes or "device port",
-                "href": f"/ports/{port.id}/edit?return_to=/devices/{device.id}",
-                "external": "",
+                "href": open_url or f"/ports/{port.id}/edit?return_to=/devices/{device.id}",
+                "external": "true" if open_url else "",
             }
         )
     return render(
@@ -7648,8 +7686,10 @@ async def smart_paste_apply(
     else:
         overwrite_identity = form.get("update_device_identity") == "on"
         if apply_device and overwrite_identity and form.get("device_name"):
-            device.name = str(form.get("device_name")).strip()
-            device.slug = unique_slug(db, models.Device, device.name, existing_id=device.id)
+            new_device_name = str(form.get("device_name")).strip()
+            if new_device_name and new_device_name.lower() != device.name.lower():
+                device.name = new_device_name
+                device.slug = unique_slug(db, models.Device, device.name, existing_id=device.id)
         if apply_device and form.get("device_ip") and (overwrite_identity or not device.primary_ip):
             device.primary_ip = str(form.get("device_ip")).strip()
         if apply_device and form.get("device_os") and (overwrite_identity or not device.os_name):

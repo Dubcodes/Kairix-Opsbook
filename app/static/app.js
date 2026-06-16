@@ -826,7 +826,12 @@
 
     const clickableCard = event.target.closest("[data-card-href]");
     if (clickableCard && !event.target.closest("a, button, input, select, textarea, label, form")) {
-      window.location.href = clickableCard.getAttribute("data-card-href");
+      const cardHref = clickableCard.getAttribute("data-card-href");
+      if (clickableCard.getAttribute("data-card-target") === "_blank") {
+        window.open(cardHref, "_blank", "noopener");
+      } else {
+        window.location.href = cardHref;
+      }
       return;
     }
 

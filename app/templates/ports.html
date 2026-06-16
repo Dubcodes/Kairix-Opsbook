@@ -49,8 +49,10 @@
     <div class="list">
       {% for port in ports %}
         {% set port_status = port_validation_statuses.get(port.id, {"state": "unknown", "title": "Port not checked"}) %}
-        <div class="list-row static clickable-card" data-card-href="/ports/{{ port.id }}/edit?return_to=/ports">
-          <a class="row-main" href="/ports/{{ port.id }}/edit?return_to=/ports">
+        {% set open_url = port_open_url(port) %}
+        {% set edit_url = "/ports/" ~ port.id ~ "/edit?return_to=/ports" %}
+        <div class="list-row static clickable-card" data-card-href="{{ open_url or edit_url }}" {% if open_url %}data-card-target="_blank"{% endif %}>
+          <a class="row-main" href="{{ open_url or edit_url }}" {% if open_url %}target="_blank"{% endif %}>
             <strong>{{ port.host_port }}/{{ port.protocol }}<span class="status-dot status-{{ port_status.state }}" title="{{ port_status.title or port_status.label }}"></span></strong>
             <span>{{ device_label(port.device, device_ping_statuses) }}{% if port.service %} · {{ port.service.name }}{% endif %}{% if port.purpose or port.notes %} · {{ port.purpose or port.notes }}{% endif %}</span>
           </a>
@@ -70,8 +72,8 @@
     <div class="list">
       {% for url in urls %}
         {% set context_device = url.service.device if url.service and url.service.device else url.device %}
-        <div class="list-row static clickable-card" data-card-href="/urls/{{ url.id }}/edit?return_to=/ports">
-          <a class="row-main" href="/urls/{{ url.id }}/edit?return_to=/ports">
+        <div class="list-row static clickable-card" data-card-href="{{ url.url }}" data-card-target="_blank">
+          <a class="row-main" href="{{ url.url }}" target="_blank">
             <strong>{{ url.label or url.url_type }}</strong>
             <span>{{ url.url }}{% if context_device %} · {{ device_label(context_device, device_ping_statuses) }}{% endif %}{% if url.service %} · {{ url.service.name }}{% endif %}</span>
           </a>

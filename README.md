@@ -75,7 +75,7 @@ On first run, create the owner account. Change the database password and all sec
 Important `.env` values:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.24
+OPSBOOK_IMAGE_TAG=latest
 APP_PORT=8095
 INSTANCE_NAME=Opsbook
 INSTANCE_MODE=primary
@@ -91,7 +91,7 @@ Set `SESSION_COOKIE_SECURE=true` when serving Kairix Opsbook behind HTTPS.
 
 `OPSBOOK_AGENT_TOKEN` enables the read-only stats agent intake at `/api/agent/stats`. Leave it blank to disable agent submissions.
 
-Do not normally set `APP_VERSION` yourself in Portainer. The Docker image supplies the runtime version. Use `OPSBOOK_IMAGE_TAG` to choose which image is deployed.
+Do not normally set `APP_VERSION` yourself in Portainer. The Docker image supplies the runtime version. Leave `OPSBOOK_IMAGE_TAG` unset, or set it to `latest`, to pull the newest published image on redeploy. Set `OPSBOOK_IMAGE_TAG` to a version only when you intentionally want to pin a tested build.
 
 To generate strong first-run values for Portainer or `.env`:
 
@@ -234,7 +234,7 @@ Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
 6. Add environment variables before deploying:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.24
+OPSBOOK_IMAGE_TAG=latest
 APP_PORT=8095
 POSTGRES_DB=opsbook
 POSTGRES_USER=opsbook
@@ -266,12 +266,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.24` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.26` on pushes to `main`.
 
-For production, prefer a pinned version:
+For production, you can pin a tested version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.24
+OPSBOOK_IMAGE_TAG=0.1.26
 ```
 
 To update production safely:
@@ -279,14 +279,14 @@ To update production safely:
 1. Make and test changes away from the production container.
 2. Push or merge changes to `main` only after checks pass.
 3. Wait for the **Build and publish Docker image** action to pass.
-4. Set `OPSBOOK_IMAGE_TAG` in Portainer to the tested version.
+4. Either leave `OPSBOOK_IMAGE_TAG` unset/`latest` for the newest image, or set it to the tested version if you want a deliberate pin.
 5. Pull/redeploy the stack.
 
-Avoid using `latest` for production unless you intentionally want every redeploy to pull the newest image.
+Use `latest` when you want Portainer redeploys to pick up the newest completed GitHub Actions build. Use a versioned tag when you want to hold production on a known build until you choose to move.
 
 If Portainer cannot pull the image, check that the GitHub Container Registry package is public or configure registry authentication in Portainer.
 
-If Settings shows `configured ...` after the version, Portainer has an `APP_VERSION` environment value that differs from the image itself. Remove `APP_VERSION` from Portainer unless you are deliberately testing version-label behavior, then set `OPSBOOK_IMAGE_TAG` to the image you actually want and redeploy.
+If Settings shows `configured ...` after the version, the running image version and configured label differ. In Portainer, check the container image tag first. If it is an old tag like `0.1.24`, remove or update `OPSBOOK_IMAGE_TAG` and redeploy. Do not normally set `APP_VERSION` yourself unless you are deliberately testing version-label behavior.
 
 ## Primary And Mirror
 
