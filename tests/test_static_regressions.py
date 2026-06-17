@@ -61,8 +61,19 @@ class StaticRegressionTest(unittest.TestCase):
 
         self.assertIn("opsbook-generated-token", app_js)
         self.assertIn("sessionStorage.setItem", app_js)
+        self.assertIn("tokenGeneratorOpen", app_js)
         self.assertIn("data-token-generator-modal", tokens_template)
         self.assertIn("data-credential-secret-input", credential_form)
+
+    def test_static_assets_are_versioned_for_browser_cache_busting(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        base_path = root / "app" / "templates" / "base.html"
+        if not base_path.exists():
+            base_path = root / "templates" / "base.html"
+        base_template = base_path.read_text()
+
+        self.assertIn("/static/app.js?v={{ settings.app_version|urlencode }}", base_template)
+        self.assertIn("/static/styles.css?v={{ settings.app_version|urlencode }}", base_template)
 
 
 if __name__ == "__main__":

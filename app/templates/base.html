@@ -7,8 +7,8 @@
   {% if user %}<meta name="session-timeout-minutes" content="{{ request.session.get('session_timeout_minutes', settings.session_timeout_minutes) }}">{% endif %}
   <title>{% block title %}{{ settings.app_name }}{% endblock %}</title>
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/static/styles.css">
-  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/static/styles.css?v={{ settings.app_version|urlencode }}">
+  <link rel="stylesheet" href="/theme.css?v={{ settings.app_version|urlencode }}">
 </head>
 <body>
   <header class="topbar">
@@ -96,6 +96,6 @@
       </form>
     </div>
   {% endif %}
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v={{ settings.app_version|urlencode }}"></script>
 </body>
 </html>

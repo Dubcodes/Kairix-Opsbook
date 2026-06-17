@@ -852,13 +852,17 @@
       modal.hidden = true;
     }
 
-    openButton?.addEventListener("click", () => {
+    function openModal() {
       modal.hidden = false;
       refreshToken();
       output?.focus({preventScroll: true});
       output?.select();
-    });
+    }
+
+    openButton?.addEventListener("click", openModal);
     closeButton?.addEventListener("click", closeModal);
+    modal.tokenGeneratorOpen = openModal;
+    modal.tokenGeneratorClose = closeModal;
     modal.addEventListener("click", (event) => {
       if (event.target === modal) closeModal();
     });
@@ -880,6 +884,20 @@
   }
 
   document.addEventListener("click", (event) => {
+    const tokenGeneratorOpen = event.target.closest("[data-token-generator-open]");
+    if (tokenGeneratorOpen) {
+      const modal = document.querySelector("[data-token-generator-modal]");
+      if (modal?.tokenGeneratorOpen) modal.tokenGeneratorOpen();
+      return;
+    }
+
+    const tokenGeneratorClose = event.target.closest("[data-token-generator-close]");
+    if (tokenGeneratorClose) {
+      const modal = tokenGeneratorClose.closest("[data-token-generator-modal]");
+      if (modal?.tokenGeneratorClose) modal.tokenGeneratorClose();
+      return;
+    }
+
     const recoveryGenerator = event.target.closest("[data-generate-recovery]");
     if (recoveryGenerator) {
       const phrase = generateRecoveryPhrase();
