@@ -7,7 +7,10 @@
     <p class="eyebrow">Encrypted at rest</p>
     <h1>Tokens & APIs</h1>
   </div>
-  <a class="button" href="/credentials/new?secret_type=API%20token&return_to=/tokens" title="Add a saved API token or temporary access token">Add Token</a>
+  <div class="actions compact-actions">
+    <button class="secondary" type="button" data-token-generator-open title="Generate a random token locally in this browser">Generate Token</button>
+    <a class="button" href="/credentials/new?secret_type=API%20token&return_to=/tokens" title="Add a saved API token or temporary access token">Add Token</a>
+  </div>
 </section>
 <form class="filter-bar" method="get">
   <input type="search" name="q" value="{{ q }}" placeholder="Search token name, service, account, notes..." spellcheck="true">
@@ -37,4 +40,34 @@
     <p class="empty">No tokens or API keys stored yet.</p>
   {% endfor %}
 </section>
+<div class="modal-backdrop" data-token-generator-modal hidden>
+  <section class="modal-panel compact-modal token-generator-modal" role="dialog" aria-modal="true" aria-labelledby="token-generator-title">
+    <div class="section-title">
+      <div>
+        <p class="eyebrow">Local browser tool</p>
+        <h2 id="token-generator-title">Token generator</h2>
+      </div>
+      <button class="ghost small-button" type="button" data-token-generator-close aria-label="Close token generator">Close</button>
+    </div>
+    <p class="muted">Generate a random string with the characters you want. Nothing is saved until you choose Save Token.</p>
+    <div class="token-output-row">
+      <input data-token-generator-output readonly autocomplete="off" spellcheck="false">
+      <button class="secondary small-button" type="button" data-token-generator-refresh title="Generate a new token">Refresh</button>
+    </div>
+    <fieldset class="token-generator-options">
+      <legend>Characters</legend>
+      <label class="check-row"><input type="checkbox" data-token-generator-set="upper" checked> Uppercase (ABC...)</label>
+      <label class="check-row"><input type="checkbox" data-token-generator-set="lower" checked> Lowercase (abc...)</label>
+      <label class="check-row"><input type="checkbox" data-token-generator-set="numbers" checked> Numbers (123...)</label>
+      <label class="check-row"><input type="checkbox" data-token-generator-set="symbols"> Symbols (!-;...)</label>
+    </fieldset>
+    <label>Length <span data-token-generator-length-label>48</span>
+      <input type="range" min="16" max="128" step="1" value="48" data-token-generator-length>
+    </label>
+    <div class="form-actions">
+      <button type="button" data-token-generator-copy>Copy</button>
+      <button class="secondary" type="button" data-token-generator-save data-token-add-url="/credentials/new?secret_type=API%20token&return_to=/tokens">Save Token</button>
+    </div>
+  </section>
+</div>
 {% endblock %}

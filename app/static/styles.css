@@ -1922,6 +1922,32 @@ code {
   display: grid;
   gap: 12px;
 }
+.token-generator-modal {
+  display: grid;
+  gap: 12px;
+}
+.token-output-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+.token-output-row input {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+.token-generator-options {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin: 0;
+  padding: 12px;
+}
+.token-generator-options legend {
+  padding: 0 6px;
+  font-weight: 700;
+}
 
 input[type="color"] {
   min-height: 42px;
@@ -2338,7 +2364,7 @@ input[type="color"] {
     text-align: left;
     overflow-wrap: anywhere;
   }
-  .stats-grid, .two-col, .form-grid, .quick-grid, .summary-grid, .posture-grid, .stats-extra-grid, .check-grid { grid-template-columns: 1fr; }
+  .stats-grid, .two-col, .form-grid, .quick-grid, .summary-grid, .posture-grid, .stats-extra-grid, .check-grid, .token-generator-options, .token-output-row { grid-template-columns: 1fr; }
   .stats-device-grid {
     grid-template-columns: 1fr;
   }

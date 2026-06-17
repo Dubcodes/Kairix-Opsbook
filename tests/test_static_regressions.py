@@ -45,6 +45,25 @@ class StaticRegressionTest(unittest.TestCase):
 
         self.assertIn("new_device_name.lower() != device.name.lower()", main_py)
 
+    def test_token_generator_uses_session_storage_not_query_string(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        app_js_path = root / "app" / "static" / "app.js"
+        tokens_path = root / "app" / "templates" / "tokens.html"
+        credential_form_path = root / "app" / "templates" / "credential_form.html"
+        if not app_js_path.exists():
+            app_js_path = root / "static" / "app.js"
+            tokens_path = root / "templates" / "tokens.html"
+            credential_form_path = root / "templates" / "credential_form.html"
+
+        app_js = app_js_path.read_text()
+        tokens_template = tokens_path.read_text()
+        credential_form = credential_form_path.read_text()
+
+        self.assertIn("opsbook-generated-token", app_js)
+        self.assertIn("sessionStorage.setItem", app_js)
+        self.assertIn("data-token-generator-modal", tokens_template)
+        self.assertIn("data-credential-secret-input", credential_form)
+
 
 if __name__ == "__main__":
     unittest.main()

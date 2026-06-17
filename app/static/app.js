@@ -785,6 +785,100 @@
     });
   }
 
+  function randomTokenFromCharset(charset, length) {
+    if (!charset || length <= 0) return "";
+    const output = [];
+    const randomValues = new Uint32Array(length);
+    if (window.crypto?.getRandomValues) {
+      window.crypto.getRandomValues(randomValues);
+      for (let index = 0; index < length; index += 1) {
+        output.push(charset[randomValues[index] % charset.length]);
+      }
+      return output.join("");
+    }
+    for (let index = 0; index < length; index += 1) {
+      output.push(charset[Math.floor(Math.random() * charset.length)]);
+    }
+    return output.join("");
+  }
+
+  function initTokenGenerator() {
+    const pendingToken = sessionStorage.getItem("opsbook-generated-token");
+    const secretInput = document.querySelector("[data-credential-secret-input]");
+    const secretType = document.querySelector('select[name="secret_type"]');
+    if (pendingToken && secretInput && (!secretType || secretType.value === "API token")) {
+      secretInput.value = pendingToken;
+      sessionStorage.removeItem("opsbook-generated-token");
+      secretInput.focus({preventScroll: true});
+    }
+
+    const modal = document.querySelector("[data-token-generator-modal]");
+    if (!modal) return;
+    const openButton = document.querySelector("[data-token-generator-open]");
+    const closeButton = modal.querySelector("[data-token-generator-close]");
+    const output = modal.querySelector("[data-token-generator-output]");
+    const lengthInput = modal.querySelector("[data-token-generator-length]");
+    const lengthLabel = modal.querySelector("[data-token-generator-length-label]");
+    const refreshButton = modal.querySelector("[data-token-generator-refresh]");
+    const copyButton = modal.querySelector("[data-token-generator-copy]");
+    const saveButton = modal.querySelector("[data-token-generator-save]");
+    const sets = {
+      upper: "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      lower: "abcdefghijklmnopqrstuvwxyz",
+      numbers: "0123456789",
+      symbols: "!#$%&()*+,-./:;<=>?@[]^_{|}~",
+    };
+
+    function charset() {
+      let value = "";
+      modal.querySelectorAll("[data-token-generator-set]").forEach((checkbox) => {
+        if (checkbox.checked) value += sets[checkbox.getAttribute("data-token-generator-set")] || "";
+      });
+      if (!value) {
+        const lower = modal.querySelector('[data-token-generator-set="lower"]');
+        if (lower) lower.checked = true;
+        value = sets.lower;
+      }
+      return value;
+    }
+
+    function refreshToken() {
+      const length = Math.max(16, Math.min(128, Number(lengthInput?.value || 48)));
+      if (lengthLabel) lengthLabel.textContent = String(length);
+      if (output) output.value = randomTokenFromCharset(charset(), length);
+    }
+
+    function closeModal() {
+      modal.hidden = true;
+    }
+
+    openButton?.addEventListener("click", () => {
+      modal.hidden = false;
+      refreshToken();
+      output?.focus({preventScroll: true});
+      output?.select();
+    });
+    closeButton?.addEventListener("click", closeModal);
+    modal.addEventListener("click", (event) => {
+      if (event.target === modal) closeModal();
+    });
+    modal.querySelectorAll("[data-token-generator-set]").forEach((checkbox) => {
+      checkbox.addEventListener("change", refreshToken);
+    });
+    lengthInput?.addEventListener("input", refreshToken);
+    refreshButton?.addEventListener("click", refreshToken);
+    copyButton?.addEventListener("click", () => copyText(output?.value || "", copyButton));
+    saveButton?.addEventListener("click", () => {
+      if (!output?.value) refreshToken();
+      sessionStorage.setItem("opsbook-generated-token", output?.value || "");
+      window.location.href = saveButton.getAttribute("data-token-add-url") || "/credentials/new?secret_type=API%20token&return_to=/tokens";
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && !modal.hidden) closeModal();
+    });
+    refreshToken();
+  }
+
   document.addEventListener("click", (event) => {
     const recoveryGenerator = event.target.closest("[data-generate-recovery]");
     if (recoveryGenerator) {
@@ -1025,6 +1119,7 @@
   initAutoSubmitFilters();
   initInlineImageViewers();
   initStatsLive();
+  initTokenGenerator();
 
   const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
   if (timeoutMeta) {
