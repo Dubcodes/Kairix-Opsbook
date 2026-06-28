@@ -99,7 +99,16 @@ templates.env.globals["render_vars"] = render_template_vars
 templates.env.globals["settings"] = settings
 
 NO_CREDENTIALS_MARKER = "[opsbook:no-credentials-needed]"
-GITHUB_TOKEN_RE = re.compile(r"\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b")
+ACCESS_TOKEN_RE = re.compile(
+    r"\b(?:"
+    r"github_pat_[A-Za-z0-9_]+|"
+    r"gh[pousr]_[A-Za-z0-9_.-]+|"
+    r"(?:glpat|gloas|gldt|glrt|glrtr|glcbt|glptt|glft|glimt|glagent|glwt|glsoat|glffct)-[A-Za-z0-9_.-]{12,}|"
+    r"x(?:ox[abprs]|app)-[A-Za-z0-9-]{10,}|"
+    r"cfut_[A-Za-z0-9_-]{20,}|"
+    r"sk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}"
+    r")\b"
+)
 
 
 def service_no_credentials_needed(service: models.Service) -> bool:
@@ -2181,7 +2190,7 @@ def _redact_sensitive_text(raw_text: str, parsed: dict[str, Any]) -> tuple[str, 
         if len(value) >= 3 and value in redacted:
             redacted = redacted.replace(value, "[redacted imported secret]")
             changed = True
-    redacted = GITHUB_TOKEN_RE.sub("[redacted github token]", redacted)
+    redacted = ACCESS_TOKEN_RE.sub("[redacted access token]", redacted)
     if redacted != raw_text:
         changed = True
     return redacted, changed

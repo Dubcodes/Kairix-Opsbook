@@ -37,7 +37,30 @@ COMMAND_RE = re.compile(
 )
 USERNAME_RE = re.compile(r"\b(?:user(?:name)?|login|account)\s*(?:is|:)?\s*([a-z_][a-z0-9_-]{1,31})\b", re.IGNORECASE)
 PASSWORD_STYLE_USER_RE = re.compile(r"\b([a-z_][a-z0-9_-]{1,31})\s+password\b", re.IGNORECASE)
-GITHUB_TOKEN_RE = re.compile(r"\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_]+)\b")
+GITHUB_TOKEN_RE = re.compile(r"\b(?:github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9_.-]+)\b")
+GITLAB_TOKEN_RE = re.compile(r"\b(?:glpat|gloas|gldt|glrt|glrtr|glcbt|glptt|glft|glimt|glagent|glwt|glsoat|glffct)-[A-Za-z0-9_.-]{12,}\b")
+SLACK_TOKEN_RE = re.compile(r"\bx(?:ox[abprs]|app)-[A-Za-z0-9-]{10,}\b")
+CLOUDFLARE_TOKEN_RE = re.compile(r"\bcfut_[A-Za-z0-9_-]{20,}\b")
+OPENAI_TOKEN_RE = re.compile(r"\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}\b")
+ACCESS_TOKEN_RE = re.compile(
+    "|".join(
+        f"(?:{pattern.pattern})"
+        for pattern in (
+            GITHUB_TOKEN_RE,
+            GITLAB_TOKEN_RE,
+            SLACK_TOKEN_RE,
+            CLOUDFLARE_TOKEN_RE,
+            OPENAI_TOKEN_RE,
+        )
+    )
+)
+TOKEN_PROVIDER_SPECS = (
+    ("GitHub", GITHUB_TOKEN_RE, "Imported GitHub access token."),
+    ("GitLab", GITLAB_TOKEN_RE, "Imported GitLab access token."),
+    ("Slack", SLACK_TOKEN_RE, "Imported Slack access token."),
+    ("Cloudflare", CLOUDFLARE_TOKEN_RE, "Imported Cloudflare API token."),
+    ("OpenAI", OPENAI_TOKEN_RE, "Imported OpenAI API key."),
+)
 USERNAME_NOISE_WORDS = {
     "as",
     "last",
@@ -198,12 +221,14 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
     listening_ports = _section(effective_text, "LISTENING PORTS")
     is_cloudflare_output_only = bool(cloudflare_tunnels) and not docker_containers and not is_inventory
     has_runtime_inventory = bool(docker_containers or docker_compose or cloudflare_tunnels or listening_ports)
+    token_items = _access_tokens(raw_text)
+    token_focused = _is_token_focused_paste(effective_text, token_items, is_inventory, has_runtime_inventory)
 
     ips = _unique(IP_RE.findall(ip_section or effective_text))
     urls = _normalized_urls_from_text(effective_text if not is_inventory else "")
     paths = _unique(_clean_paths(PATH_RE.findall(effective_text)))
-    ports = _unique([match.group(1) for match in PORT_RE.finditer(effective_text)])
-    if not is_inventory:
+    ports = [] if token_focused else _unique([match.group(1) for match in PORT_RE.finditer(effective_text)])
+    if not is_inventory and not token_focused:
         ports.extend(
             line.strip()
             for line in effective_text.splitlines()
@@ -218,10 +243,11 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         if parsed.port:
             ports.append(str(parsed.port))
     docker_port_map = _docker_port_map(docker_containers)
-    ports.extend(_listening_tcp_ports(listening_ports))
+    if not token_focused:
+        ports.extend(_listening_tcp_ports(listening_ports))
     ports = _unique(ports)
 
-    command_lines = [] if is_inventory or is_cloudflare_output_only else lines
+    command_lines = [] if is_inventory or is_cloudflare_output_only or token_focused else lines
     commands: list[dict[str, str]] = []
     previous_label = ""
     for line in command_lines:
@@ -287,11 +313,10 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
             )
     _attach_cloudflare_urls(service_items, cloudflare_tunnel_entries)
     service_items = [item for item in service_items if not _is_detached_cloudflared_placeholder(item)]
-    if not is_inventory:
+    if not is_inventory and not token_focused:
         service_items.extend(_note_services(raw_text))
         service_items.extend(_inline_service_entries(raw_text))
     service_items = _unique_services(service_items)
-    token_items = _github_tokens(raw_text)
     grouped_urls = {
         url["url"]
         for service in service_items
@@ -340,7 +365,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         )
     ):
         final_device_name = ""
-    if token_items and not primary_ip and not service_items and not urls and not ports:
+    if token_focused or (token_items and not primary_ip and not service_items and not urls and not ports):
         final_device_name = ""
     likely_device = {
         "name": final_device_name,
@@ -368,7 +393,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         for entry in cloudflare_tunnel_entries
         for url in (entry.get("history_urls") or [entry["url"]])
     }
-    suggested_urls = [
+    suggested_urls = [] if token_focused else [
         {"url": url, "url_type": "public" if not _is_private_url(url) else "local", "confidence": "high"}
         for url in urls
         if url not in grouped_urls and url not in grouped_cloudflare_urls
@@ -392,7 +417,7 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         }
         for command in commands
     ]
-    suggested_credentials = [
+    suggested_credentials = [] if token_focused else [
         credential
         for credential in _note_credentials(raw_text)
         if (
@@ -408,19 +433,20 @@ def parse_smart_paste(raw_text: str) -> dict[str, Any]:
         for service in service_items
         for credential in service.get("credentials", [])
     )
-    suggested_credentials.extend(
-        [
-        {
-            "label": f"{username} login",
-            "username": username,
-            "security_level": "medium" if username in {"root", "admin", "serveruser"} else "low",
-            "secret_detected": False,
-            "confidence": "low",
-        }
-        for username in usernames
-        if username not in existing_users
-        ]
-    )
+    if not token_focused:
+        suggested_credentials.extend(
+            [
+            {
+                "label": f"{username} login",
+                "username": username,
+                "security_level": "medium" if username in {"root", "admin", "serveruser"} else "low",
+                "secret_detected": False,
+                "confidence": "low",
+            }
+            for username in usernames
+            if username not in existing_users
+            ]
+        )
 
     extras: dict[str, Any] = {
         "paths": paths,
@@ -1218,52 +1244,48 @@ def _note_credentials(text: str) -> list[dict[str, Any]]:
     return deduped
 
 
-def _github_tokens(text: str) -> list[dict[str, Any]]:
+def _is_token_focused_paste(text: str, token_items: list[dict[str, Any]], is_inventory: bool, has_runtime_inventory: bool) -> bool:
+    if not token_items or is_inventory or has_runtime_inventory:
+        return False
+    if "=== " in text:
+        return False
+    meaningful_lines = [
+        line.strip()
+        for line in text.splitlines()
+        if line.strip() and not line.strip().lower().startswith(("make sure to copy", "never used", "last used"))
+    ]
+    if len(meaningful_lines) <= 8:
+        return True
+    token_lines = sum(1 for line in meaningful_lines if ACCESS_TOKEN_RE.search(line))
+    expiry_lines = sum(1 for line in meaningful_lines if _token_expiry_from_line(line))
+    return token_lines > 0 and token_lines + expiry_lines >= max(2, len(meaningful_lines) // 2)
+
+
+def _access_tokens(text: str) -> list[dict[str, Any]]:
     tokens: list[dict[str, Any]] = []
-    for match in GITHUB_TOKEN_RE.finditer(text):
-        token = match.group(0)
-        prefix_lines = [line.strip() for line in text[: match.start()].splitlines() if line.strip()]
-        owner = ""
-        name = "GitHub token"
-        expiry = ""
-        for index in range(len(prefix_lines) - 1, -1, -1):
-            line = prefix_lines[index]
-            expiry_match = re.search(r"\bExpires\s+on\s+(.+)$", line, re.IGNORECASE)
-            if expiry_match:
-                expiry = _parse_github_expiry(expiry_match.group(1).strip())
-                continue
-            if line.startswith("@"):
-                owner = line
-                if index + 1 < len(prefix_lines):
-                    candidate = prefix_lines[index + 1]
-                    if not candidate.lower().startswith(("never used", "expires on", "make sure")):
-                        name = candidate
-                break
-        if name == "GitHub token":
-            for line in reversed(prefix_lines):
-                lower = line.lower()
-                if (
-                    line.startswith("@")
-                    or GITHUB_TOKEN_RE.search(line)
-                    or lower.startswith(("never used", "expires on", "make sure", "copied", "skip to content", "settings"))
-                ):
-                    continue
-                if len(line) <= 80:
-                    name = line
-                    break
-        name = re.sub(r"\s*(?:[•|.-]\s*)?(?:Never used|Last used).*", "", name, flags=re.IGNORECASE).strip() or "GitHub token"
-        tokens.append(
-            {
-                "label": name,
-                "username": owner,
-                "token": token,
-                "service_name": _token_service_name(name),
-                "expires_at": expiry,
-                "notes": "Imported GitHub personal access token.",
-                "security_level": "high",
-                "confidence": "high",
-            }
-        )
+    for provider, pattern, notes in TOKEN_PROVIDER_SPECS:
+        for match in pattern.finditer(text):
+            token = match.group(0)
+            prefix_lines = [line.strip() for line in text[: match.start()].splitlines() if line.strip()]
+            suffix_lines = [line.strip() for line in text[match.end() :].splitlines() if line.strip()]
+            owner, name, expiry = _token_context_from_prefix(prefix_lines, provider, pattern)
+            if not expiry:
+                for line in suffix_lines[:6]:
+                    expiry = _token_expiry_from_line(line)
+                    if expiry:
+                        break
+            tokens.append(
+                {
+                    "label": name,
+                    "username": owner,
+                    "token": token,
+                    "service_name": _token_service_name(name),
+                    "expires_at": expiry,
+                    "notes": notes,
+                    "security_level": "high",
+                    "confidence": "high",
+                }
+            )
     deduped: list[dict[str, Any]] = []
     seen: set[str] = set()
     for item in tokens:
@@ -1271,6 +1293,57 @@ def _github_tokens(text: str) -> list[dict[str, Any]]:
             seen.add(item["token"])
             deduped.append(item)
     return deduped
+
+
+def _token_context_from_prefix(prefix_lines: list[str], provider: str, token_pattern: re.Pattern[str]) -> tuple[str, str, str]:
+    owner = ""
+    name = f"{provider} token"
+    expiry = ""
+    for index in range(len(prefix_lines) - 1, -1, -1):
+        line = prefix_lines[index]
+        line_expiry = _token_expiry_from_line(line)
+        if line_expiry:
+            expiry = line_expiry
+            continue
+        if line.startswith("@"):
+            owner = line
+            for candidate in prefix_lines[index + 1 :]:
+                if _looks_like_token_label(candidate, token_pattern):
+                    name = candidate
+                    break
+            break
+    if name == f"{provider} token":
+        for line in reversed(prefix_lines):
+            if _looks_like_token_label(line, token_pattern):
+                name = line
+                break
+    name = re.sub(r"\s*(?:[•|.-]\s*)?(?:Never used|Last used).*", "", name, flags=re.IGNORECASE).strip()
+    return owner, name or f"{provider} token", expiry
+
+
+def _looks_like_token_label(line: str, token_pattern: re.Pattern[str]) -> bool:
+    clean = line.strip()
+    lower = clean.lower()
+    if (
+        not clean
+        or len(clean) > 80
+        or clean.startswith("@")
+        or token_pattern.search(clean)
+        or ACCESS_TOKEN_RE.search(clean)
+        or _token_expiry_from_line(clean)
+        or lower.startswith(("never used", "last used", "make sure", "copied", "skip to content", "settings", "token created"))
+    ):
+        return False
+    return bool(re.search(r"[A-Za-z0-9]", clean))
+
+
+def _token_expiry_from_line(line: str) -> str:
+    expiry_match = re.search(r"\bExpires(?:\s+on)?\s*(?::|-)?\s+(.+)$", line, re.IGNORECASE)
+    if not expiry_match:
+        expiry_match = re.search(r"\bExpiration(?:\s+date)?\s*(?::|-)?\s+(.+)$", line, re.IGNORECASE)
+    if not expiry_match:
+        return ""
+    return _parse_github_expiry(expiry_match.group(1).strip())
 
 
 def _token_service_name(label: str) -> str:
@@ -1513,7 +1586,7 @@ def _looks_like_note_service_name(value: str) -> bool:
         or len(clean) > 60
         or lower in {"root", "user", "main ip", "ssh", "hostname", "os", "admin", "serveruser"}
         or re.match(r"^\d{4}-\d{2}-\d{2}[t\s]\d{2}:", lower)
-        or lower.startswith(("inf ", "err ", "wrn "))
+        or lower.startswith(("inf ", "err ", "wrn ", "expires ", "expires on ", "expiration ", "never used", "last used", "make sure to copy"))
         or any(word in lower for word in ["folder", "folders", "rules", "shares", "by ip", "check ", "restart ", "start/stop", "recommended", "update system"])
         or COMMAND_RE.search(clean)
         or IP_RE.search(clean)

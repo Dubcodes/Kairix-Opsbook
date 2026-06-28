@@ -70,11 +70,59 @@ github_pat_11EXAMPLE0RVJrPrvsSNHo_dUWI8Jaxx6k4p9XbQMRnBotJmjFXhwD0F3MxMVNzW1OOYS
         parsed = parse_smart_paste(text)
 
         self.assertEqual(len(parsed["tokens"]), 1)
+        self.assertEqual(parsed["device"]["name"], "")
+        self.assertEqual(parsed["services"], [])
+        self.assertEqual(parsed["ports"], [])
+        self.assertEqual(parsed["credentials"], [])
         token = parsed["tokens"][0]
         self.assertEqual(token["label"], "deputy-ai")
         self.assertEqual(token["service_name"], "deputy ai")
         self.assertEqual(token["security_level"], "high")
         self.assertTrue(token["expires_at"].startswith("2026-07-13"))
+
+    def test_github_token_page_with_account_does_not_create_fake_records(self) -> None:
+        text = """@Dubcodes
+forcodex
+github_pat_11EXAMPLE0RVJrPrvsSNHo_dUWI8Jaxx6k4p9XbQMRnBotJmjFXhwD0F3MxMVNzW1OOYSFSF5XLLGVElxW
+Expires on Tue, Jul 28 2026
+Make sure to copy your personal access token now as you will not be able to see this again.
+
+github_pat_11EXAMPLE0RVJrPrvsSNHo_dUWI8Jaxx6k4p9XbQMRnBotJmjFXhwD0F3MxMVNzW1OOYSFSF5XLLGVElxW
+"""
+        parsed = parse_smart_paste(text)
+
+        self.assertEqual(parsed["device"]["name"], "")
+        self.assertEqual(parsed["services"], [])
+        self.assertEqual(parsed["ports"], [])
+        self.assertEqual(parsed["urls"], [])
+        self.assertEqual(parsed["credentials"], [])
+        self.assertEqual(len(parsed["tokens"]), 1)
+        token = parsed["tokens"][0]
+        self.assertEqual(token["label"], "forcodex")
+        self.assertEqual(token["username"], "@Dubcodes")
+        self.assertTrue(token["expires_at"].startswith("2026-07-28"))
+
+    def test_common_provider_tokens_are_detected_without_fake_services(self) -> None:
+        text = """GitLab deploy token
+Expires: 2026-08-01
+glpat-1234567890abcdef1234
+
+Cloudflare DNS automation
+cfut_1234567890abcdefghijklmnopqrstuvwxyzABCD
+
+OpenAI batch processor
+sk-proj-1234567890abcdefghijklmnopqrstuvwxyzABCDE
+"""
+        parsed = parse_smart_paste(text)
+
+        self.assertEqual(parsed["device"]["name"], "")
+        self.assertEqual(parsed["services"], [])
+        self.assertEqual(parsed["ports"], [])
+        self.assertEqual(parsed["credentials"], [])
+        labels = {item["label"] for item in parsed["tokens"]}
+        self.assertIn("GitLab deploy token", labels)
+        self.assertIn("Cloudflare DNS automation", labels)
+        self.assertIn("OpenAI batch processor", labels)
 
     def test_windows_systeminfo_style_host_and_os(self) -> None:
         text = """Host Name:                 WIN-OPS-01

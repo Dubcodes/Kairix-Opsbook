@@ -128,7 +128,7 @@ example-password
 
 is reviewed as one service/login suggestion with the URL, port, username, password, and service relationship kept together. Nothing is applied until you review and select it.
 
-Smart Paste also recognizes GitHub personal access tokens and stores them as high-security encrypted Tokens & APIs. Token-only imports do not create fake devices, and the review screen lets you uncheck device creation when pasted text is only a command, token, or loose note.
+Smart Paste also recognizes common access-token pastes and stores them as high-security encrypted Tokens & APIs. Token-focused imports do not create fake devices, services, ports, or login credentials. Current prefix-aware detections include GitHub (`github_pat_`, `ghp_`, `gho_`, `ghu_`, `ghs_`, `ghr_`), GitLab (`glpat-` and related GitLab token prefixes), Slack (`xox...` / `xapp-`), Cloudflare (`cfut_`), and common OpenAI API key prefixes. It also reads nearby account/name/expiry lines when services show a one-time-copy token page.
 
 If you paste Cloudflare or TryCloudflare logs, any detected URLs are reviewed like normal URLs. Live log scraping or Docker socket access is intentionally not part of the default install; a future read-only agent is the safer path for automatic discovery.
 
@@ -222,6 +222,8 @@ The agent reports CPU, RAM, swap/pagefile, load, per-mount disk use, network byt
 
 The supplied Portainer agent stack enables Docker health by default and mounts the Docker socket read-only so Opsbook can count running/stopped/unhealthy containers. If you do not want container health, remove the socket mount and set `OPSBOOK_DOCKER_HEALTH=off`.
 
+The published Opsbook image is multi-architecture for `linux/amd64` and `linux/arm64`, so the container agent can run on 64-bit Raspberry Pi OS. Use `ghcr.io/dubcodes/kairix-opsbook:latest` for the agent image unless you intentionally pin a known version. A 32-bit Raspberry Pi OS install may fail with a manifest/platform error; switch that Pi to a 64-bit OS or run the copied Python agent directly.
+
 ## Portainer Install
 
 Kairix Opsbook can be deployed from Git in Portainer with `portainer-stack.yml`.
@@ -266,12 +268,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.28` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.29` on pushes to `main`.
 
 For production, you can pin a tested version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.28
+OPSBOOK_IMAGE_TAG=0.1.29
 ```
 
 To update production safely:
