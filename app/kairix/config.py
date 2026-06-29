@@ -14,7 +14,7 @@ def _bool_env(name: str, default: bool = False) -> bool:
 @dataclass(frozen=True)
 class Settings:
     app_name: str = os.getenv("APP_NAME", "Kairix Opsbook")
-    app_version: str = os.getenv("APP_VERSION", "0.1.29")
+    app_version: str = os.getenv("APP_VERSION", "0.1.30")
     app_build: str = os.getenv("APP_BUILD", "")
     app_build_iteration: str = os.getenv("APP_BUILD_ITERATION", "")
     app_revision: str = os.getenv("APP_REVISION", "")

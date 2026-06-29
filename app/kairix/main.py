@@ -253,6 +253,8 @@ THEME_DEFAULTS = {
     "history_retention_days": "90",
     "stats_window_hours": "8",
     "stats_expected_interval_minutes": "5",
+    "stats_storage_interval_minutes": "5",
+    "stats_retention_days": "30",
     "stats_overview_metrics": "cpu,memory,disk,load",
 }
 
@@ -378,6 +380,17 @@ THEME_PRESET_GROUPS = (
 )
 
 PING_THREAD_STARTED = False
+EXPORT_JOB_RUN_LOCK = threading.Lock()
+EXPORT_JOB_STATE_LOCK = threading.Lock()
+EXPORT_JOB_STATE: dict[str, Any] = {
+    "status": "idle",
+    "started_at": "",
+    "finished_at": "",
+    "files": [],
+    "error": "",
+}
+STATS_PRUNE_LOCK = threading.Lock()
+LAST_STATS_PRUNE_MONOTONIC = 0.0
 WEBHOOK_URL_SETTING = "ping_webhook_url_encrypted"
 WEBHOOK_SCOPE_SETTING = "ping_webhook_scope"
 WEBHOOK_RECOVERY_SETTING = "ping_webhook_send_recovery"
@@ -415,6 +428,7 @@ def startup() -> None:
         seed_initial_data(db)
         _normalize_unknown_states(db)
         _prune_history(db)
+        _prune_stats(db)
         db.commit()
     if not PING_THREAD_STARTED and not settings.read_only:
         PING_THREAD_STARTED = True
@@ -517,6 +531,14 @@ def _stats_overview_metric_keys(db: Session) -> list[str]:
 
 def _stats_expected_interval_minutes(db: Session) -> int:
     return int_setting(db, "stats_expected_interval_minutes", 5, minimum=1, maximum=1440)
+
+
+def _stats_storage_interval_minutes(db: Session) -> int:
+    return int_setting(db, "stats_storage_interval_minutes", 5, minimum=1, maximum=1440)
+
+
+def _stats_retention_days(db: Session) -> int:
+    return int_setting(db, "stats_retention_days", 30, minimum=1, maximum=3650)
 
 
 def _stats_metric_catalog(selected: list[str] | None = None) -> list[dict[str, str]]:
@@ -1344,6 +1366,35 @@ def _prune_history(db: Session, days: int | None = None) -> int:
         .delete(synchronize_session=False)
     )
     return int(deleted or 0)
+
+
+def _prune_stats(db: Session, days: int | None = None) -> int:
+    keep_days = days if days is not None else _stats_retention_days(db)
+    cutoff = now_utc() - timedelta(days=max(1, keep_days))
+    deleted = (
+        db.query(models.DeviceStatSnapshot)
+        .filter(models.DeviceStatSnapshot.observed_at < cutoff)
+        .delete(synchronize_session=False)
+    )
+    return int(deleted or 0)
+
+
+def _maybe_prune_stats(db: Session) -> int:
+    global LAST_STATS_PRUNE_MONOTONIC
+    current = time.monotonic()
+    if current - LAST_STATS_PRUNE_MONOTONIC < 3600:
+        return 0
+    if not STATS_PRUNE_LOCK.acquire(blocking=False):
+        return 0
+    try:
+        current = time.monotonic()
+        if current - LAST_STATS_PRUNE_MONOTONIC < 3600:
+            return 0
+        deleted = _prune_stats(db)
+        LAST_STATS_PRUNE_MONOTONIC = current
+        return deleted
+    finally:
+        STATS_PRUNE_LOCK.release()
 
 
 def _infer_tags_for_service(service: models.Service) -> str:
@@ -4611,7 +4662,7 @@ async def agent_stats_ingest(request: Request, db: Session = Depends(get_db)) ->
     elapsed = None
     if previous:
         elapsed = max(0.0, (observed_at - _utc(previous.observed_at)).total_seconds())
-    snapshot = models.DeviceStatSnapshot(
+    candidate = models.DeviceStatSnapshot(
         device_id=device.id,
         source=_agent_string(payload.get("source") or "agent", 80),
         agent_version=_agent_string(payload.get("agent_version"), 80),
@@ -4653,7 +4704,23 @@ async def agent_stats_ingest(request: Request, db: Session = Depends(get_db)) ->
         observed_at=observed_at,
         payload_json=payload,
     )
+    storage_seconds = _stats_storage_interval_minutes(db) * 60
+    reuse_previous = (
+        previous is not None
+        and observed_at >= _utc(previous.observed_at)
+        and elapsed is not None
+        and elapsed < storage_seconds
+    )
+    if reuse_previous:
+        snapshot = previous
+        for column in models.DeviceStatSnapshot.__table__.columns:
+            if column.name in {"id", "created_at"}:
+                continue
+            setattr(snapshot, column.name, getattr(candidate, column.name))
+    else:
+        snapshot = candidate
     db.add(snapshot)
+    _maybe_prune_stats(db)
     db.commit()
     db.refresh(snapshot)
     return JSONResponse({"status": "ok", "device_id": device.id, "snapshot_id": snapshot.id})
@@ -8448,18 +8515,34 @@ async def settings_save(
                 value = str(max(1, min(1440, int(value))))
             except ValueError:
                 value = THEME_DEFAULTS[key]
+        if key == "stats_storage_interval_minutes":
+            try:
+                value = str(max(1, min(1440, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
+        if key == "stats_retention_days":
+            try:
+                value = str(max(1, min(3650, int(value))))
+            except ValueError:
+                value = THEME_DEFAULTS[key]
         set_app_setting(db, key, value)
-    removed = _prune_history(db)
+    history_removed = _prune_history(db)
+    stats_removed = _prune_stats(db)
     db.add(
         models.AuditLog(
             user_id=user.id,
             action="settings_updated",
             object_type="app_settings",
-            details_json={"section": "theme", "history_pruned": removed},
+            details_json={"section": "theme", "history_pruned": history_removed, "stats_pruned": stats_removed},
         )
     )
     db.commit()
-    flash(request, f"Settings saved.{f' Deleted {removed} old history item(s).' if removed else ''}", "success")
+    message = "Settings saved."
+    if history_removed:
+        message += f" Deleted {history_removed} old history item(s)."
+    if stats_removed:
+        message += f" Deleted {stats_removed} expired stats snapshot(s)."
+    flash(request, message, "success")
     return redirect("/settings")
 
 
@@ -9195,6 +9278,53 @@ def search_page(
     )
 
 
+
+def _export_job_snapshot() -> dict[str, Any]:
+    with EXPORT_JOB_STATE_LOCK:
+        return copy.deepcopy(EXPORT_JOB_STATE)
+
+
+def _set_export_job_state(**values: Any) -> None:
+    with EXPORT_JOB_STATE_LOCK:
+        EXPORT_JOB_STATE.update(values)
+
+
+def _run_emergency_export_job(user_id: int, include_secrets: bool) -> None:
+    try:
+        with SessionLocal() as db:
+            created = create_emergency_export(db, include_credentials=include_secrets)
+            db.add(
+                models.AuditLog(
+                    user_id=user_id,
+                    action="emergency_export_created",
+                    object_type="backup_export",
+                    details_json={"files": [item.filename for item in created], "included_credentials": include_secrets},
+                )
+            )
+            db.commit()
+            _set_export_job_state(
+                status="completed",
+                finished_at=now_utc().isoformat(),
+                files=[item.filename for item in created],
+                error="",
+            )
+    except Exception:
+        logger.exception("Emergency export job failed")
+        _set_export_job_state(
+            status="failed",
+            finished_at=now_utc().isoformat(),
+            files=[],
+            error="The emergency export failed. Check the Opsbook logs before retrying.",
+        )
+    finally:
+        EXPORT_JOB_RUN_LOCK.release()
+
+
+@app.get("/exports/status")
+def exports_status(user: models.User = Depends(require_user)) -> JSONResponse:
+    return JSONResponse(_export_job_snapshot())
+
+
 @app.get("/exports", response_class=HTMLResponse)
 def exports_page(
     request: Request,
@@ -9202,7 +9332,7 @@ def exports_page(
     db: Session = Depends(get_db),
 ) -> HTMLResponse:
     exports = db.query(models.BackupExport).order_by(models.BackupExport.created_at.desc()).all()
-    return render(request, "exports.html", {"exports": exports}, user=user)
+    return render(request, "exports.html", {"exports": exports, "export_job": _export_job_snapshot()}, user=user)
 
 
 @app.post("/exports")
@@ -9220,17 +9350,32 @@ def exports_create(
     if include_secrets and not _challenge_ok_and_upgrade(db, user, challenge):
         flash(request, "Credential export requires your account password or reveal password.", "danger")
         return redirect("/exports")
-    created = create_emergency_export(db, include_credentials=include_secrets)
-    db.add(
-        models.AuditLog(
-            user_id=user.id,
-            action="emergency_export_created",
-            object_type="backup_export",
-            details_json={"files": [item.filename for item in created], "included_credentials": include_secrets},
-        )
+    if include_secrets:
+        db.commit()
+    if not EXPORT_JOB_RUN_LOCK.acquire(blocking=False):
+        flash(request, "An emergency export is already running. You can keep using Opsbook while it finishes.", "warning")
+        return redirect("/exports")
+    _set_export_job_state(
+        status="running",
+        started_at=now_utc().isoformat(),
+        finished_at="",
+        files=[],
+        error="",
     )
-    db.commit()
-    flash(request, f"Emergency export created with {len(created)} file(s).", "success")
+    worker = threading.Thread(
+        target=_run_emergency_export_job,
+        args=(user.id, include_secrets),
+        name="kairix-emergency-export",
+        daemon=True,
+    )
+    try:
+        worker.start()
+    except RuntimeError:
+        EXPORT_JOB_RUN_LOCK.release()
+        _set_export_job_state(status="failed", finished_at=now_utc().isoformat(), error="The export worker could not start.")
+        flash(request, "Emergency export could not start. Check the Opsbook logs.", "danger")
+        return redirect("/exports")
+    flash(request, "Emergency export started. You can navigate elsewhere while it runs.", "success")
     return redirect("/exports")
 
 

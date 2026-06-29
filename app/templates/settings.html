@@ -169,6 +169,14 @@
     <input name="stats_expected_interval_minutes" type="number" min="1" max="1440" value="{{ app_settings.stats_expected_interval_minutes or '5' }}">
     <small>Used for stale-agent warnings and missed report counts.</small>
   </label>
+  <label>Stored stats interval minutes
+    <input name="stats_storage_interval_minutes" type="number" min="1" max="1440" value="{{ app_settings.stats_storage_interval_minutes or '5' }}">
+    <small>Reports inside this interval update the latest point instead of creating another database row.</small>
+  </label>
+  <label>Stats retention days
+    <input name="stats_retention_days" type="number" min="1" max="3650" value="{{ app_settings.stats_retention_days or '30' }}">
+    <small>Older telemetry is deleted hourly, on startup, and when settings are saved.</small>
+  </label>
   <fieldset class="span-2 stats-metric-picker">
     <legend>Stats overview tiles</legend>
     <p class="muted">Choose up to four metrics for the Stats landing page. Device Stats still shows every metric.</p>

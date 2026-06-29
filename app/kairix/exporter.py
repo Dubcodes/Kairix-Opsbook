@@ -39,6 +39,8 @@ def build_backup_payload(db: Session) -> dict[str, Any]:
             "app_version": settings.app_version,
             "database_version": "schema-create-all-v1",
             "encrypted": True,
+            "excluded_tables": ["device_stat_snapshots"],
+            "exclusion_notes": "High-frequency agent telemetry is excluded from emergency recovery backups.",
         },
         "tables": {
             "users": table_dump(db, models.User),
@@ -55,7 +57,6 @@ def build_backup_payload(db: Session) -> dict[str, Any]:
             "tag_links": table_dump(db, models.TagLink),
             "notes": table_dump(db, models.Note),
             "device_images": table_dump(db, models.DeviceImage),
-            "device_stat_snapshots": table_dump(db, models.DeviceStatSnapshot),
             "user_suggestions": table_dump(db, models.UserSuggestion),
             "imports": table_dump(db, models.ImportRecord),
             "audit_log": table_dump(db, models.AuditLog),
@@ -151,21 +152,25 @@ def build_runbook_html(db: Session) -> str:
 
 def _write(path: Path, content: str | bytes) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
-    if isinstance(content, bytes):
-        path.write_bytes(content)
-        data = content
-    else:
-        path.write_text(content, encoding="utf-8")
-        data = content.encode("utf-8")
+    data = content if isinstance(content, bytes) else content.encode("utf-8")
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        with temporary.open("wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
     return hashlib.sha256(data).hexdigest()
 
 
 def create_emergency_export(db: Session, *, include_credentials: bool = False) -> list[models.BackupExport]:
     export_dir = Path(settings.export_dir)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M")
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     created: list[models.BackupExport] = []
 
-    payload = json.dumps(build_backup_payload(db), default=str, indent=2)
+    payload = json.dumps(build_backup_payload(db), default=str, separators=(",", ":"))
     encrypted_backup = encrypt_text(payload, export=True)
     backup_name = f"kairix-opsbook-backup-{stamp}.enc"
     checksum = _write(export_dir / backup_name, encrypted_backup)
@@ -175,7 +180,7 @@ def create_emergency_export(db: Session, *, include_credentials: bool = False) -
             export_type="database",
             encrypted=True,
             checksum=checksum,
-            notes="Full encrypted database backup.",
+            notes="Full encrypted recovery backup. High-frequency stats telemetry excluded.",
         )
     )
 
@@ -192,7 +197,7 @@ def create_emergency_export(db: Session, *, include_credentials: bool = False) -
     )
 
     if include_credentials:
-        secret_payload = json.dumps(build_secrets_payload(db), default=str, indent=2)
+        secret_payload = json.dumps(build_secrets_payload(db), default=str, separators=(",", ":"))
         encrypted_secrets = encrypt_text(secret_payload, export=True)
         secret_name = f"kairix-opsbook-secrets-{stamp}.enc"
         checksum = _write(export_dir / secret_name, encrypted_secrets)

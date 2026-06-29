@@ -883,6 +883,53 @@
     refreshToken();
   }
 
+  function initExportJobStatus() {
+    const root = document.querySelector("[data-export-job-status]");
+    if (!root) return;
+    const chip = root.querySelector("[data-export-job-chip]");
+    const message = root.querySelector("[data-export-job-message]");
+    const files = root.querySelector("[data-export-job-files]");
+    const refreshLink = root.querySelector("[data-export-refresh]");
+    const submitButton = document.querySelector("[data-export-submit]");
+
+    function render(job) {
+      const current = job?.status || "idle";
+      root.dataset.status = current;
+      if (chip) chip.textContent = current.charAt(0).toUpperCase() + current.slice(1);
+      if (submitButton) submitButton.disabled = current === "running";
+      if (refreshLink) refreshLink.hidden = current !== "completed";
+      if (files) {
+        files.replaceChildren();
+        (job?.files || []).forEach((filename) => {
+          const item = document.createElement("span");
+          item.textContent = filename;
+          files.appendChild(item);
+        });
+      }
+      if (!message) return;
+      if (current === "running") {
+        message.textContent = "Creating encrypted recovery files in the background. You can navigate elsewhere.";
+      } else if (current === "completed") {
+        message.textContent = "Export completed. Refresh the list below to show the new files.";
+      } else if (current === "failed") {
+        message.textContent = job?.error || "The emergency export failed. Check the Opsbook logs before retrying.";
+      } else {
+        message.textContent = "No emergency export is currently running.";
+      }
+    }
+
+    async function poll() {
+      const response = await fetch("/exports/status", {headers: {"Accept": "application/json"}, cache: "no-store"});
+      if (!response.ok) return;
+      const job = await response.json();
+      render(job);
+      if (job.status === "running") window.setTimeout(() => poll().catch(() => {}), 2000);
+    }
+
+    poll().catch(() => {});
+  }
+
+
   document.addEventListener("click", (event) => {
     const tokenGeneratorOpen = event.target.closest("[data-token-generator-open]");
     if (tokenGeneratorOpen) {
@@ -1138,6 +1185,7 @@
   initInlineImageViewers();
   initStatsLive();
   initTokenGenerator();
+  initExportJobStatus();
 
   const timeoutMeta = document.querySelector("meta[name='session-timeout-minutes']");
   if (timeoutMeta) {

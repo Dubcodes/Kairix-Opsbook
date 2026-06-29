@@ -1080,6 +1080,37 @@ h1 > .ping-dot {
   font-size: 12px;
   font-weight: 650;
 }
+.export-job-panel {
+  border-left: 3px solid var(--line);
+}
+.export-job-panel[data-status="running"] {
+  border-left-color: var(--amber);
+}
+.export-job-panel[data-status="completed"] {
+  border-left-color: var(--green);
+}
+.export-job-panel[data-status="failed"] {
+  border-left-color: var(--red);
+}
+.status-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+.export-job-panel[data-status="running"] .status-chip { color: var(--amber); }
+.export-job-panel[data-status="completed"] .status-chip { color: var(--green); }
+.export-job-panel[data-status="failed"] .status-chip { color: var(--red); }
+.export-job-panel [data-export-job-files] {
+  justify-content: flex-start;
+  margin-bottom: 10px;
+}
+
 
 .filter-bar {
   display: flex;

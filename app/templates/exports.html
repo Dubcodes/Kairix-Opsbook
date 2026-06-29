@@ -7,6 +7,27 @@
     <h1>Emergency Export</h1>
   </div>
 </section>
+<section class="panel export-job-panel" data-export-job-status data-status="{{ export_job.status or 'idle' }}">
+  <div class="section-title">
+    <h2>Export status</h2>
+    <span class="status-chip" data-export-job-chip>{{ (export_job.status or "idle")|title }}</span>
+  </div>
+  <p class="muted" data-export-job-message>
+    {% if export_job.status == "running" %}
+      Creating encrypted recovery files in the background. You can navigate elsewhere.
+    {% elif export_job.status == "completed" %}
+      Export completed. Refresh the list below to show the new files.
+    {% elif export_job.status == "failed" %}
+      {{ export_job.error or "The emergency export failed. Check the Opsbook logs before retrying." }}
+    {% else %}
+      No emergency export is currently running.
+    {% endif %}
+  </p>
+  <div class="tags" data-export-job-files>
+    {% for filename in export_job.files or [] %}<span>{{ filename }}</span>{% endfor %}
+  </div>
+  <a class="button secondary small-button" href="/exports" data-export-refresh {% if export_job.status != "completed" %}hidden{% endif %}>Refresh export list</a>
+</section>
 <section class="panel">
   <h2>Import Encrypted Backup</h2>
   <p class="muted">Imports a Kairix encrypted database backup into this instance. Use this for standby restore or recovery. Secrets require the same Opsbook secret key to decrypt after import.</p>
@@ -17,12 +38,12 @@
   </form>
 </section>
 <section class="panel">
-  <p>Exports include a full encrypted database backup and a human-readable HTML runbook. Credential exports are encrypted separately and require a password challenge.</p>
+  <p>Exports include encrypted recovery data and a human-readable HTML runbook. High-frequency stats telemetry is excluded because it is not required to restore Opsbook. Credential exports are encrypted separately and require a password challenge.</p>
   <form method="post" class="form-grid">
     <input type="hidden" name="csrf" value="{{ csrf }}">
     <label class="check-row span-2"><input type="checkbox" name="include_credentials"> Include separate encrypted credentials export</label>
     <label class="span-2">Password or reveal PIN <input name="challenge" type="password" autocomplete="current-password"></label>
-    <button type="submit">Create Emergency Export</button>
+    <button type="submit" data-export-submit {% if export_job.status == "running" %}disabled{% endif %}>Create Emergency Export</button>
   </form>
 </section>
 <section class="panel">

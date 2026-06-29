@@ -10,7 +10,7 @@ services:
       OPSBOOK_AGENT_TOKEN: "replace-with-the-same-token-used-by-opsbook"
       OPSBOOK_DEVICE_NAME: "replace-with-this-device-name"
       OPSBOOK_HOST_ROOT: "/host"
-      OPSBOOK_INTERVAL_SECONDS: "30"
+      OPSBOOK_INTERVAL_SECONDS: "300"
       OPSBOOK_DOCKER_HEALTH: "on"
       OPSBOOK_DISK_MOUNTS: ""
       OPSBOOK_NETWORK_INTERFACES: ""
