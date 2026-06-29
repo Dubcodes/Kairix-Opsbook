@@ -18,6 +18,7 @@ from kairix.main import (
     _create_agent_device,
     _match_agent_device,
     _stats_monitor_payload,
+    _stats_snapshot_can_coalesce,
     _stats_snapshot_state,
 )
 from kairix.security import now_utc
@@ -96,6 +97,34 @@ class AgentStatsTest(unittest.TestCase):
             self.assertEqual(device.hardware.ram, "8.0 GB")
         finally:
             session.close()
+
+    def test_stats_coalescing_uses_fixed_bucket_start(self) -> None:
+        current = now_utc()
+        previous = models.DeviceStatSnapshot(
+            device_id=1,
+            created_at=current - timedelta(minutes=4),
+            observed_at=current - timedelta(seconds=30),
+        )
+
+        self.assertTrue(_stats_snapshot_can_coalesce(previous, current, current, 5))
+
+        previous.observed_at = current
+        self.assertFalse(
+            _stats_snapshot_can_coalesce(
+                previous,
+                current + timedelta(minutes=2),
+                current + timedelta(minutes=2),
+                5,
+            )
+        )
+        self.assertFalse(
+            _stats_snapshot_can_coalesce(
+                previous,
+                current - timedelta(minutes=1),
+                current,
+                5,
+            )
+        )
 
     def test_stats_snapshot_state_ages_cleanly(self) -> None:
         fresh = models.DeviceStatSnapshot(device_id=1, created_at=now_utc() - timedelta(minutes=4))

@@ -541,6 +541,19 @@ def _stats_retention_days(db: Session) -> int:
     return int_setting(db, "stats_retention_days", 30, minimum=1, maximum=3650)
 
 
+def _stats_snapshot_can_coalesce(
+    previous: models.DeviceStatSnapshot | None,
+    observed_at: datetime,
+    received_at: datetime,
+    interval_minutes: int,
+) -> bool:
+    if previous is None or observed_at < _utc(previous.observed_at):
+        return False
+    bucket_started_at = _utc(previous.created_at or previous.observed_at)
+    age_seconds = (received_at - bucket_started_at).total_seconds()
+    return 0 <= age_seconds < max(1, interval_minutes) * 60
+
+
 def _stats_metric_catalog(selected: list[str] | None = None) -> list[dict[str, str]]:
     selected_set = set(selected or [])
     return [{**item, "selected": "true" if item["key"] in selected_set else ""} for item in STATS_METRIC_CATALOG]
@@ -4704,12 +4717,11 @@ async def agent_stats_ingest(request: Request, db: Session = Depends(get_db)) ->
         observed_at=observed_at,
         payload_json=payload,
     )
-    storage_seconds = _stats_storage_interval_minutes(db) * 60
-    reuse_previous = (
-        previous is not None
-        and observed_at >= _utc(previous.observed_at)
-        and elapsed is not None
-        and elapsed < storage_seconds
+    reuse_previous = _stats_snapshot_can_coalesce(
+        previous,
+        observed_at,
+        now_utc(),
+        _stats_storage_interval_minutes(db),
     )
     if reuse_previous:
         snapshot = previous

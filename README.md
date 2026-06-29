@@ -268,12 +268,12 @@ Do not delete `kairix-opsbook-postgres` unless you intentionally want to wipe th
 
 ## Updating A Portainer Install
 
-The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.30` on pushes to `main`.
+The GitHub Actions workflow publishes both `ghcr.io/dubcodes/kairix-opsbook:latest` and a versioned tag such as `ghcr.io/dubcodes/kairix-opsbook:0.1.31` on pushes to `main`.
 
 For production, you can pin a tested version:
 
 ```text
-OPSBOOK_IMAGE_TAG=0.1.30
+OPSBOOK_IMAGE_TAG=0.1.31
 ```
 
 To update production safely:
